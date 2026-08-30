@@ -6,6 +6,7 @@ from dataclasses import dataclass
 class Tool:
     name: str
     description: str
+    parameters: dict[str, object]
     function: Callable[..., object]
 
     def execute(self, arguments: dict[str, object]) -> object:
@@ -25,9 +26,16 @@ class ToolRegistry:
 
         return self._tools[name]
 
-    def execute(self, name: str, arguments: dict[str, object]) -> object:
+    def execute(
+        self,
+        name: str,
+        arguments: dict[str, object],
+    ) -> object:
         tool = self.get(name)
         return tool.execute(arguments)
+
+    def list_tools(self) -> list[Tool]:
+        return list(self._tools.values())
 
 
 def add(a: int, b: int) -> int:
@@ -36,6 +44,20 @@ def add(a: int, b: int) -> int:
 
 ADD_TOOL = Tool(
     name="add",
-    description="Add two integers.",
+    description="Add two integers and return the result.",
+    parameters={
+        "type": "object",
+        "properties": {
+            "a": {
+                "type": "integer",
+                "description": "The first integer.",
+            },
+            "b": {
+                "type": "integer",
+                "description": "The second integer.",
+            },
+        },
+        "required": ["a", "b"],
+    },
     function=add,
 )

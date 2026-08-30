@@ -7,6 +7,13 @@ name = "miniharness"
 version = "0.1.0"
 description = "A minimal, inspectable agent harness built from first principles."
 requires-python = ">=3.11"
+dependencies = [
+    "openai",
+    "python-dotenv",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

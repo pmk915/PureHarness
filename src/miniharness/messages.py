@@ -11,3 +11,14 @@ class Message:
 class ToolCall:
     name: str
     arguments: dict[str, object]
+    call_id: str | None = None
+
+
+@dataclass
+class ToolResult:
+    name: str
+    content: str
+    call_id: str | None = None
+
+
+AgentItem = Message | ToolCall | ToolResult

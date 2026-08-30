@@ -1,0 +1,16 @@
+README.md
+pyproject.toml
+src/miniharness/__init__.py
+src/miniharness/agent.py
+src/miniharness/deepseek_model.py
+src/miniharness/messages.py
+src/miniharness/model.py
+src/miniharness/tools.py
+src/miniharness.egg-info/PKG-INFO
+src/miniharness.egg-info/SOURCES.txt
+src/miniharness.egg-info/dependency_links.txt
+src/miniharness.egg-info/requires.txt
+src/miniharness.egg-info/top_level.txt
+tests/test_agent.py
+tests/test_smoke.py
+tests/test_tools.py
