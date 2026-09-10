@@ -19,6 +19,7 @@ class ToolResult:
     name: str
     content: str
     call_id: str | None = None
+    is_error: bool = False
 
 
 AgentItem = Message | ToolCall | ToolResult

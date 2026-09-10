@@ -36,15 +36,25 @@ class Agent:
             if isinstance(output, ToolCall):
                 self.messages.append(output)
 
-                result = self.tools.execute(
-                    output.name,
-                    output.arguments,
-                )
+                try:
+                    result = self.tools.execute(
+                        output.name,
+                        output.arguments,
+                    )
+                    content = str(result)
+                    is_error = False
+                except Exception as exc:
+                    content = (
+                        f"Tool error: "
+                        f"{type(exc).__name__}: {exc}"
+                    )
+                    is_error = True
 
                 tool_result = ToolResult(
                     name=output.name,
-                    content=str(result),
+                    content=content,
                     call_id=output.call_id,
+                    is_error=is_error,
                 )
 
                 self.messages.append(tool_result)

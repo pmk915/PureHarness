@@ -3,7 +3,11 @@ import pytest
 from miniharness.agent import Agent
 from miniharness.messages import Message, ToolCall, ToolResult
 from miniharness.model import AddModel, EchoModel
-from miniharness.tools import ADD_TOOL, ToolRegistry
+from miniharness.tools import ADD_TOOL, Tool, ToolRegistry
+
+
+def failing_add(a: int, b: int) -> int:
+    raise ValueError("simulated tool failure")
 
 
 def test_agent_returns_model_response():
@@ -60,6 +64,7 @@ def test_agent_executes_tool_loop():
 
     assert agent.messages[2].name == "add"
     assert agent.messages[2].content == "29"
+    assert agent.messages[2].is_error is False
 
     assert agent.messages[3].role == "assistant"
     assert agent.messages[3].content == "The result is 29"
@@ -86,3 +91,37 @@ def test_agent_stops_after_max_steps():
     assert isinstance(agent.messages[0], Message)
     assert isinstance(agent.messages[1], ToolCall)
     assert isinstance(agent.messages[2], ToolResult)
+
+
+def test_agent_converts_tool_error_to_observation():
+    registry = ToolRegistry()
+
+    failing_tool = Tool(
+        name="add",
+        description="A failing add tool for testing.",
+        parameters=ADD_TOOL.parameters,
+        function=failing_add,
+    )
+
+    registry.register(failing_tool)
+
+    agent = Agent(
+        model=AddModel(),
+        tools=registry,
+        max_steps=2,
+    )
+
+    result = agent.run("calculate")
+
+    assert result == (
+        "The result is "
+        "Tool error: ValueError: simulated tool failure"
+    )
+
+    assert len(agent.messages) == 4
+
+    assert isinstance(agent.messages[2], ToolResult)
+    assert agent.messages[2].is_error is True
+    assert agent.messages[2].content == (
+        "Tool error: ValueError: simulated tool failure"
+    )
