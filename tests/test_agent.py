@@ -1,3 +1,5 @@
+import pytest
+
 from miniharness.agent import Agent
 from miniharness.messages import Message, ToolCall, ToolResult
 from miniharness.model import AddModel, EchoModel
@@ -33,6 +35,7 @@ def test_agent_executes_tool_loop():
     agent = Agent(
         model=AddModel(),
         tools=registry,
+        max_steps=2,
     )
 
     result = agent.run("calculate")
@@ -60,3 +63,26 @@ def test_agent_executes_tool_loop():
 
     assert agent.messages[3].role == "assistant"
     assert agent.messages[3].content == "The result is 29"
+
+
+def test_agent_stops_after_max_steps():
+    registry = ToolRegistry()
+    registry.register(ADD_TOOL)
+
+    agent = Agent(
+        model=AddModel(),
+        tools=registry,
+        max_steps=1,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="Agent exceeded max steps",
+    ):
+        agent.run("calculate")
+
+    assert len(agent.messages) == 3
+
+    assert isinstance(agent.messages[0], Message)
+    assert isinstance(agent.messages[1], ToolCall)
+    assert isinstance(agent.messages[2], ToolResult)

@@ -8,10 +8,12 @@ class Agent:
         self,
         model: Model,
         tools: ToolRegistry | None = None,
+        max_steps: int = 10,
     ):
         self.model = model
         self.tools = tools or ToolRegistry()
         self.messages: list[AgentItem] = []
+        self.max_steps = max_steps
 
     def run(self, user_input: str) -> str:
         user_message = Message(
@@ -21,7 +23,7 @@ class Agent:
 
         self.messages.append(user_message)
 
-        while True:
+        for step in range(self.max_steps):
             output = self.model.generate(
                 self.messages,
                 self.tools.list_tools(),
@@ -46,3 +48,5 @@ class Agent:
                 )
 
                 self.messages.append(tool_result)
+
+        raise RuntimeError("Agent exceeded max steps")
