@@ -125,3 +125,47 @@ def test_agent_converts_tool_error_to_observation():
     assert agent.messages[2].content == (
         "Tool error: ValueError: simulated tool failure"
     )
+
+
+def test_agent_records_execution_trace():
+    registry = ToolRegistry()
+    registry.register(ADD_TOOL)
+
+    agent = Agent(
+        model=AddModel(),
+        tools=registry,
+        max_steps=2,
+    )
+
+    agent.run("calculate")
+
+    assert len(agent.trace.steps) == 2
+
+    first_step = agent.trace.steps[0]
+    second_step = agent.trace.steps[1]
+
+    assert first_step.index == 0
+    assert isinstance(first_step.output, ToolCall)
+    assert isinstance(first_step.tool_result, ToolResult)
+    assert first_step.tool_result.content == "29"
+    assert first_step.tool_result.is_error is False
+
+    assert second_step.index == 1
+    assert isinstance(second_step.output, Message)
+    assert second_step.output.content == "The result is 29"
+    assert second_step.tool_result is None
+
+
+def test_agent_resets_trace_for_each_run():
+    agent = Agent(model=EchoModel())
+
+    agent.run("hello")
+    agent.run("world")
+
+    assert len(agent.trace.steps) == 1
+
+    step = agent.trace.steps[0]
+
+    assert step.index == 0
+    assert isinstance(step.output, Message)
+    assert step.output.content == "Echo: world"

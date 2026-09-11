@@ -1,6 +1,7 @@
 from miniharness.messages import AgentItem, Message, ToolCall, ToolResult
 from miniharness.model import Model
 from miniharness.tools import ToolRegistry
+from miniharness.trace import RunTrace, StepTrace
 
 
 class Agent:
@@ -14,8 +15,11 @@ class Agent:
         self.tools = tools or ToolRegistry()
         self.messages: list[AgentItem] = []
         self.max_steps = max_steps
+        self.trace = RunTrace()
 
     def run(self, user_input: str) -> str:
+        self.trace = RunTrace()
+
         user_message = Message(
             role="user",
             content=user_input,
@@ -31,6 +35,14 @@ class Agent:
 
             if isinstance(output, Message):
                 self.messages.append(output)
+
+                self.trace.steps.append(
+                    StepTrace(
+                        index=step,
+                        output=output,
+                    )
+                )
+
                 return output.content
 
             if isinstance(output, ToolCall):
@@ -58,5 +70,13 @@ class Agent:
                 )
 
                 self.messages.append(tool_result)
+
+                self.trace.steps.append(
+                    StepTrace(
+                        index=step,
+                        output=output,
+                        tool_result=tool_result,
+                    )
+                )
 
         raise RuntimeError("Agent exceeded max steps")
