@@ -86,6 +86,8 @@ def test_agent_stops_after_max_steps():
     ):
         agent.run("calculate")
 
+    assert agent.trace.end_reason == "max_steps_exceeded"
+
     assert len(agent.messages) == 3
 
     assert isinstance(agent.messages[0], Message)
@@ -154,6 +156,7 @@ def test_agent_records_execution_trace():
     assert isinstance(second_step.output, Message)
     assert second_step.output.content == "The result is 29"
     assert second_step.tool_result is None
+    assert agent.trace.end_reason == "completed"
 
 
 def test_agent_resets_trace_for_each_run():

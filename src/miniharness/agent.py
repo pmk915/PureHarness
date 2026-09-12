@@ -43,6 +43,8 @@ class Agent:
                     )
                 )
 
+                self.trace.end_reason = "completed"
+
                 return output.content
 
             if isinstance(output, ToolCall):
@@ -78,5 +80,7 @@ class Agent:
                         tool_result=tool_result,
                     )
                 )
+        self.trace.end_reason = "max_steps_exceeded"
 
         raise RuntimeError("Agent exceeded max steps")
+        
