@@ -1,10 +1,11 @@
 import json
 import os
 
+import openai
 from openai import OpenAI
 
 from miniharness.messages import AgentItem, Message, ToolCall, ToolResult
-from miniharness.model import ModelOutput
+from miniharness.model import ModelError, ModelOutput
 from miniharness.tools import Tool
 
 
@@ -40,15 +41,20 @@ class DeepSeekModel:
             for tool in tools
         ]
 
-        response = self.client.responses.create(
-            model=self.model,
-            input=input_items,
-            tools=tool_schemas,
-            tool_choice="auto",
-            reasoning={
-                "effort": "none",
-            },
-        )
+        try:
+            response = self.client.responses.create(
+                model=self.model,
+                input=input_items,
+                tools=tool_schemas,
+                tool_choice="auto",
+                reasoning={
+                    "effort": "none",
+                },
+            )
+        except openai.APIError as exc:
+            raise ModelError(
+                f"DeepSeek request failed: {exc}"
+            ) from exc
 
         for item in response.output:
             if item.type == "function_call":

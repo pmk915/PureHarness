@@ -7,6 +7,7 @@ from miniharness.messages import Message, ToolCall, ToolResult
 RunEndReason = Literal[
     "completed",
     "max_steps_exceeded",
+    "model_error",
 ]
 
 @dataclass
@@ -19,3 +20,4 @@ class StepTrace:
 @dataclass
 class RunTrace:
     steps: list[StepTrace] = field(default_factory=list)
+    end_reason: RunEndReason | None = None

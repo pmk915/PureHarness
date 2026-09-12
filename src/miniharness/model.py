@@ -6,6 +6,8 @@ from miniharness.tools import Tool
 
 ModelOutput = Message | ToolCall
 
+class ModelError(RuntimeError):
+    pass
 
 class Model(Protocol):
     def generate(

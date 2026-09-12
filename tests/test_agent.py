@@ -2,8 +2,12 @@ import pytest
 
 from miniharness.agent import Agent
 from miniharness.messages import Message, ToolCall, ToolResult
-from miniharness.model import AddModel, EchoModel
+from miniharness.model import AddModel, EchoModel, ModelError
 from miniharness.tools import ADD_TOOL, Tool, ToolRegistry
+
+class FailingModel:
+    def generate(self, messages, tools):
+        raise ModelError("simulated model failure")
 
 
 def failing_add(a: int, b: int) -> int:
@@ -12,6 +16,8 @@ def failing_add(a: int, b: int) -> int:
 
 def test_agent_returns_model_response():
     agent = Agent(model=EchoModel())
+
+    assert agent.trace.end_reason is None
 
     result = agent.run("hello")
 
@@ -172,3 +178,16 @@ def test_agent_resets_trace_for_each_run():
     assert step.index == 0
     assert isinstance(step.output, Message)
     assert step.output.content == "Echo: world"
+
+
+def test_agent_records_model_error_end_reason():
+    agent = Agent(model=FailingModel())
+
+    with pytest.raises(
+        ModelError,
+        match="simulated model failure",
+    ):
+        agent.run("hello")
+
+    assert agent.trace.end_reason == "model_error"
+    assert agent.trace.steps == []
