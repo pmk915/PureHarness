@@ -4,7 +4,7 @@ from miniharness.messages import AgentItem, Message, ToolCall, ToolResult
 from miniharness.tools import Tool
 
 
-ModelOutput = Message | ToolCall
+ModelOutput = Message | list[ToolCall]
 
 class ModelError(RuntimeError):
     pass
@@ -49,10 +49,13 @@ class AddModel:
                 content=f"The result is {last_message.content}",
             )
 
-        return ToolCall(
-            name="add",
-            arguments={
-                "a": 12,
-                "b": 17,
-            },
-        )
+        return [
+            ToolCall(
+                name="add",
+                arguments={
+                    "a":12,
+                    "b":17,
+                },
+                call_id="1",
+            )
+        ]

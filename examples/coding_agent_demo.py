@@ -74,33 +74,27 @@ def main() -> None:
 
         print("\n=== TRACE ===")
 
+
         for step in agent.trace.steps:
-            print(f"\nStep {step.index}")
 
-            if isinstance(step.output, ToolCall):
+            print(f"Step {step.index}")
+
+            if step.tool_result:
+
+                for result in step.tool_result:
+
+                    print(
+                        f"ToolResult "
+                        f"(error={result.is_error}):"
+                    )
+
+                    print(result.content)
+
+            else:
+
                 print(
-                    f"ToolCall: "
-                    f"{step.output.name}"
-                    f"({step.output.arguments})"
+                    f"Message: {step.output.content}"
                 )
-
-            elif isinstance(step.output, Message):
-                print(
-                    f"Message: "
-                    f"{step.output.content}"
-                )
-
-            if step.tool_result is not None:
-                print(
-                    f"ToolResult "
-                    f"(error={step.tool_result.is_error}):"
-                )
-                print(step.tool_result.content)
-
-        print(
-            "\nEnd reason:",
-            agent.trace.end_reason,
-        )
 
 
 if __name__ == "__main__":

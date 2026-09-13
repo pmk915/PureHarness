@@ -56,18 +56,31 @@ class DeepSeekModel:
                 f"DeepSeek request failed: {exc}"
             ) from exc
 
+
+        tool_calls = []
+
         for item in response.output:
+
             if item.type == "function_call":
-                return ToolCall(
-                    name=item.name,
-                    arguments=json.loads(item.arguments),
-                    call_id=item.call_id,
+
+                tool_calls.append(
+                    ToolCall(
+                        name=item.name,
+                        arguments=json.loads(
+                            item.arguments
+                        ),
+                        call_id=item.call_id,
+                    )
                 )
+
+        if tool_calls:
+            return tool_calls
 
         return Message(
             role="assistant",
             content=response.output_text,
         )
+
 
     def _convert_input_item(
         self,

@@ -9,6 +9,40 @@ class FailingModel:
     def generate(self, messages, tools):
         raise ModelError("simulated model failure")
 
+class MultiToolModel:
+
+    def generate(
+        self,
+        messages,
+        tools,
+    ):
+
+        if len(messages) == 1:
+
+            return [
+                ToolCall(
+                    name="add",
+                    arguments={
+                        "a":1,
+                        "b":2,
+                    },
+                    call_id="1",
+                ),
+                ToolCall(
+                    name="add",
+                    arguments={
+                        "a":3,
+                        "b":4,
+                    },
+                    call_id="2",
+                ),
+            ]
+
+        return Message(
+            role="assistant",
+            content="done",
+        )
+
 
 def failing_add(a: int, b: int) -> int:
     raise ValueError("simulated tool failure")
@@ -153,10 +187,14 @@ def test_agent_records_execution_trace():
     second_step = agent.trace.steps[1]
 
     assert first_step.index == 0
-    assert isinstance(first_step.output, ToolCall)
-    assert isinstance(first_step.tool_result, ToolResult)
-    assert first_step.tool_result.content == "29"
-    assert first_step.tool_result.is_error is False
+    assert isinstance(first_step.output, list)
+    assert isinstance(first_step.output[0], ToolCall)
+
+    assert isinstance(first_step.tool_result, list)
+    assert isinstance(first_step.tool_result[0], ToolResult)
+
+    assert first_step.tool_result[0].content == "29"
+    assert first_step.tool_result[0].is_error is False
 
     assert second_step.index == 1
     assert isinstance(second_step.output, Message)
@@ -191,3 +229,28 @@ def test_agent_records_model_error_end_reason():
 
     assert agent.trace.end_reason == "model_error"
     assert agent.trace.steps == []
+
+
+def test_agent_executes_multiple_tools():
+    registry = ToolRegistry()
+
+    registry.register(ADD_TOOL)
+
+    agent = Agent(
+        model=MultiToolModel(),
+        tools=registry,
+    )
+
+    result = agent.run(
+        "calculate"
+    )
+
+    assert result == "done"
+
+    tool_results = [
+        item
+        for item in agent.messages
+        if isinstance(item, ToolResult)
+    ]
+
+    assert len(tool_results) == 2

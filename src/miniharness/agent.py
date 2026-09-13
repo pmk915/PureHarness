@@ -28,22 +28,28 @@ class Agent:
         self.messages.append(user_message)
 
         for step in range(self.max_steps):
+
             try:
                 output = self.model.generate(
                     self.messages,
                     self.tools.list_tools(),
                 )
+
             except ModelError:
                 self.trace.end_reason = "model_error"
                 raise
 
+
+            # 情况1：模型直接回答
             if isinstance(output, Message):
+
                 self.messages.append(output)
 
                 self.trace.steps.append(
                     StepTrace(
                         index=step,
                         output=output,
+                        tool_result=None,
                     )
                 )
 
@@ -51,39 +57,57 @@ class Agent:
 
                 return output.content
 
-            if isinstance(output, ToolCall):
-                self.messages.append(output)
 
-                try:
-                    result = self.tools.execute(
-                        output.name,
-                        output.arguments,
+            # 情况2：模型调用工具
+            if isinstance(output, list):
+
+                tool_results = []
+
+
+                for tool_call in output:
+                    self.messages.append(tool_call)
+
+                    try:
+                        result = self.tools.execute(
+                            tool_call.name,
+                            tool_call.arguments,
+                        )
+
+                        content = str(result)
+                        is_error = False
+
+                    except Exception as exc:
+
+                        content = (
+                            f"Tool error: "
+                            f"{type(exc).__name__}: {exc}"
+                        )
+
+                        is_error = True
+
+
+                    tool_result = ToolResult(
+                        name=tool_call.name,
+                        content=content,
+                        call_id=tool_call.call_id,
+                        is_error=is_error,
                     )
-                    content = str(result)
-                    is_error = False
-                except Exception as exc:
-                    content = (
-                        f"Tool error: "
-                        f"{type(exc).__name__}: {exc}"
-                    )
-                    is_error = True
 
-                tool_result = ToolResult(
-                    name=output.name,
-                    content=content,
-                    call_id=output.call_id,
-                    is_error=is_error,
-                )
+                    self.messages.append(tool_result)
 
-                self.messages.append(tool_result)
+                    tool_results.append(tool_result)
+
 
                 self.trace.steps.append(
                     StepTrace(
                         index=step,
                         output=output,
-                        tool_result=tool_result,
+                        tool_result=tool_results,
                     )
                 )
+
+
+                continue
         self.trace.end_reason = "max_steps_exceeded"
 
         raise RuntimeError("Agent exceeded max steps")
