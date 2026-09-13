@@ -2,6 +2,7 @@ from miniharness.messages import AgentItem, Message, ToolCall, ToolResult
 from miniharness.model import Model, ModelError
 from miniharness.tools import ToolRegistry
 from miniharness.trace import RunTrace, StepTrace
+from miniharness.events import AgentEvent
 
 
 class Agent:
@@ -16,9 +17,17 @@ class Agent:
         self.messages: list[AgentItem] = []
         self.max_steps = max_steps
         self.trace = RunTrace()
+        self.events: list[AgentEvent] = []
 
     def run(self, user_input: str) -> str:
         self.trace = RunTrace()
+
+        self.events = [
+            AgentEvent(
+                type="agent_started",
+                data={},
+            )
+        ]
 
         user_message = Message(
             role="user",
@@ -37,6 +46,16 @@ class Agent:
 
             except ModelError:
                 self.trace.end_reason = "model_error"
+
+                self.events.append(
+                    AgentEvent(
+                        type="agent_failed",
+                        data={
+                            "reason": "model_error",
+                        },
+                    )
+                )
+
                 raise
 
 
@@ -54,7 +73,14 @@ class Agent:
                 )
 
                 self.trace.end_reason = "completed"
-
+                self.events.append(
+                    AgentEvent(
+                        type="agent_completed",
+                        data={
+                            "reason": "completed",
+                        },
+                    )
+                )
                 return output.content
 
 
@@ -109,5 +135,14 @@ class Agent:
 
                 continue
         self.trace.end_reason = "max_steps_exceeded"
+
+        self.events.append(
+            AgentEvent(
+                type="agent_failed",
+                data={
+                    "reason": "max_steps_exceeded",
+                },
+            )
+        )
 
         raise RuntimeError("Agent exceeded max steps")

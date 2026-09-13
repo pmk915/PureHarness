@@ -57,6 +57,26 @@ def test_agent_returns_model_response():
 
     assert result == "Echo: hello"
 
+def test_agent_records_lifecycle_events():
+    registry = ToolRegistry()
+
+    agent = Agent(
+        model=EchoModel(),
+        tools=registry,
+    )
+
+    agent.run("hello")
+
+    assert [
+        event.type
+        for event in agent.events
+    ] == [
+        "agent_started",
+        "agent_completed",
+    ]
+
+    assert agent.events[-1].data["reason"] == "completed"
+
 
 def test_agent_keeps_conversation_history():
     agent = Agent(model=EchoModel())
@@ -127,12 +147,24 @@ def test_agent_stops_after_max_steps():
         agent.run("calculate")
 
     assert agent.trace.end_reason == "max_steps_exceeded"
-
     assert len(agent.messages) == 3
-
     assert isinstance(agent.messages[0], Message)
     assert isinstance(agent.messages[1], ToolCall)
     assert isinstance(agent.messages[2], ToolResult)
+
+    assert [
+        event.type
+        for event in agent.events
+    ] == [
+        "agent_started",
+        "agent_failed",
+    ]
+
+    assert (
+        agent.events[-1].data["reason"]
+        == "max_steps_exceeded"
+    )
+
 
 
 def test_agent_converts_tool_error_to_observation():
@@ -229,6 +261,19 @@ def test_agent_records_model_error_end_reason():
 
     assert agent.trace.end_reason == "model_error"
     assert agent.trace.steps == []
+    
+    assert [
+        event.type
+        for event in agent.events
+    ] == [
+        "agent_started",
+        "agent_failed",
+    ]
+
+    assert (
+        agent.events[-1].data["reason"]
+        == "model_error"
+    )
 
 
 def test_agent_executes_multiple_tools():
