@@ -72,6 +72,7 @@ def test_agent_records_lifecycle_events():
         for event in agent.events
     ] == [
         "agent_started",
+        "model_completed",
         "agent_completed",
     ]
 
@@ -157,6 +158,9 @@ def test_agent_stops_after_max_steps():
         for event in agent.events
     ] == [
         "agent_started",
+        "model_completed",
+        "tool_started",
+        "tool_completed",
         "agent_failed",
     ]
 
@@ -299,3 +303,133 @@ def test_agent_executes_multiple_tools():
     ]
 
     assert len(tool_results) == 2
+
+
+def test_agent_records_tool_lifecycle_events():
+    registry = ToolRegistry()
+    registry.register(ADD_TOOL)
+
+    agent = Agent(
+        model=AddModel(),
+        tools=registry,
+        max_steps=2,
+    )
+
+    agent.run("calculate")
+
+    assert [
+        event.type
+        for event in agent.events
+    ] == [
+        "agent_started",
+        "model_completed",
+        "tool_started",
+        "tool_completed",
+        "model_completed",
+        "agent_completed",
+    ]
+
+    tool_started = agent.events[2]
+    tool_completed = agent.events[3]
+
+    assert tool_started.data["step"] == 0
+    assert tool_started.data["name"] == "add"
+    assert tool_started.data["call_id"] == "1"
+
+    assert tool_completed.data["step"] == 0
+    assert tool_completed.data["name"] == "add"
+    assert tool_completed.data["call_id"] == "1"
+    assert tool_completed.data["is_error"] is False
+
+
+def test_agent_notifies_event_listener():
+    registry = ToolRegistry()
+
+    received_events = []
+
+    def listener(event):
+        received_events.append(event)
+
+    agent = Agent(
+        model=EchoModel(),
+        tools=registry,
+        listeners=[listener],
+    )
+
+    agent.run("hello")
+
+    assert [
+        event.type
+        for event in received_events
+    ] == [
+        "agent_started",
+        "model_completed",
+        "agent_completed",
+    ]
+
+    assert received_events == agent.events
+
+
+def test_listener_error_does_not_stop_agent():
+    registry = ToolRegistry()
+
+    def broken_listener(event):
+        raise ValueError("listener failed")
+
+    agent = Agent(
+        model=EchoModel(),
+        tools=registry,
+        listeners=[broken_listener],
+    )
+
+    result = agent.run("hello")
+
+    assert result == "Echo: hello"
+
+    assert [
+        event.type
+        for event in agent.events
+    ] == [
+        "agent_started",
+        "model_completed",
+        "agent_completed",
+    ]
+
+    assert len(agent.listener_errors) == 3
+
+    assert all(
+        isinstance(error, ValueError)
+        for error in agent.listener_errors
+    )
+
+
+def test_listener_error_does_not_block_other_listeners():
+    registry = ToolRegistry()
+
+    received_events = []
+
+    def broken_listener(event):
+        raise ValueError("listener failed")
+
+    def working_listener(event):
+        received_events.append(event)
+
+    agent = Agent(
+        model=EchoModel(),
+        tools=registry,
+        listeners=[
+            broken_listener,
+            working_listener,
+        ],
+    )
+
+    agent.run("hello")
+
+    assert [
+        event.type
+        for event in received_events
+    ] == [
+        "agent_started",
+        "model_completed",
+        "agent_completed",
+    ]

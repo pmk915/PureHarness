@@ -4,6 +4,8 @@ from miniharness.tools import ToolRegistry
 from miniharness.trace import RunTrace, StepTrace
 from miniharness.events import AgentEvent
 
+from collections.abc import Callable
+
 
 class Agent:
     def __init__(
@@ -11,6 +13,7 @@ class Agent:
         model: Model,
         tools: ToolRegistry | None = None,
         max_steps: int = 10,
+        listeners: list[Callable[[AgentEvent], None]] | None = None,
     ):
         self.model = model
         self.tools = tools or ToolRegistry()
@@ -18,16 +21,31 @@ class Agent:
         self.max_steps = max_steps
         self.trace = RunTrace()
         self.events: list[AgentEvent] = []
+        self.listeners = listeners or []
+        self.listener_errors: list[Exception] = []
+
+
+    def _emit(self, event: AgentEvent) -> None:
+        self.events.append(event)
+
+        for listener in self.listeners:
+            try:
+                listener(event)
+            except Exception as exc:
+                self.listener_errors.append(exc)
+
 
     def run(self, user_input: str) -> str:
         self.trace = RunTrace()
-
-        self.events = [
+        self.events = []
+        self.listener_errors = []
+        
+        self._emit(
             AgentEvent(
                 type="agent_started",
                 data={},
             )
-        ]
+        )
 
         user_message = Message(
             role="user",
@@ -47,7 +65,7 @@ class Agent:
             except ModelError:
                 self.trace.end_reason = "model_error"
 
-                self.events.append(
+                self._emit(
                     AgentEvent(
                         type="agent_failed",
                         data={
@@ -58,6 +76,14 @@ class Agent:
 
                 raise
 
+            self._emit(
+                AgentEvent(
+                    type="model_completed",
+                    data={
+                        "step": step,
+                    },
+                )
+            )
 
             # 情况1：模型直接回答
             if isinstance(output, Message):
@@ -73,7 +99,7 @@ class Agent:
                 )
 
                 self.trace.end_reason = "completed"
-                self.events.append(
+                self._emit(
                     AgentEvent(
                         type="agent_completed",
                         data={
@@ -89,9 +115,20 @@ class Agent:
 
                 tool_results = []
 
-
                 for tool_call in output:
+
                     self.messages.append(tool_call)
+
+                    self._emit(
+                        AgentEvent(
+                            type="tool_started",
+                            data={
+                                "step": step,
+                                "name": tool_call.name,
+                                "call_id": tool_call.call_id,
+                            },
+                        )
+                    )
 
                     try:
                         result = self.tools.execute(
@@ -123,6 +160,17 @@ class Agent:
 
                     tool_results.append(tool_result)
 
+                    self._emit(
+                        AgentEvent(
+                            type="tool_completed",
+                            data={
+                                "step": step,
+                                "name": tool_call.name,
+                                "call_id": tool_call.call_id,
+                                "is_error": is_error,
+                            },
+                        )
+                    )
 
                 self.trace.steps.append(
                     StepTrace(
@@ -136,7 +184,7 @@ class Agent:
                 continue
         self.trace.end_reason = "max_steps_exceeded"
 
-        self.events.append(
+        self._emit(
             AgentEvent(
                 type="agent_failed",
                 data={
