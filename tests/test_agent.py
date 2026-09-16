@@ -4,6 +4,7 @@ from miniharness.agent import Agent
 from miniharness.messages import Message, ToolCall, ToolResult
 from miniharness.model import AddModel, EchoModel, ModelError
 from miniharness.tools import ADD_TOOL, Tool, ToolRegistry
+from miniharness.context import ContextBuilder
 
 class FailingModel:
     def generate(self, messages, tools):
@@ -42,6 +43,16 @@ class MultiToolModel:
             role="assistant",
             content="done",
         )
+
+
+class RecordingContextBuilder(ContextBuilder):
+    def __init__(self):
+        self.histories = []
+
+    def build(self, history):
+        self.histories.append(list(history))
+
+        return list(history)
 
 
 def failing_add(a: int, b: int) -> int:
@@ -433,3 +444,66 @@ def test_listener_error_does_not_block_other_listeners():
         "model_completed",
         "agent_completed",
     ]
+
+
+def test_agent_builds_model_context_from_history():
+    registry = ToolRegistry()
+
+    context_builder = RecordingContextBuilder()
+
+    agent = Agent(
+        model=EchoModel(),
+        tools=registry,
+        context_builder=context_builder,
+    )
+
+    agent.run("hello")
+
+    assert len(context_builder.histories) == 1
+
+    history = context_builder.histories[0]
+
+    assert len(history) == 1
+    assert isinstance(history[0], Message)
+    assert history[0].role == "user"
+    assert history[0].content == "hello"
+
+    assert len(agent.messages) == 2
+
+
+def test_agent_records_history_in_session():
+    registry = ToolRegistry()
+
+    agent = Agent(
+        model=EchoModel(),
+        tools=registry,
+    )
+
+    agent.run("hello")
+
+    assert len(agent.session.items) == 2
+
+    assert isinstance(
+        agent.session.items[0],
+        Message,
+    )
+
+    assert (
+        agent.session.items[0].content
+        == "hello"
+    )
+
+    assert isinstance(
+        agent.session.items[1],
+        Message,
+    )
+
+    assert (
+        agent.session.items[1].content
+        == "Echo: hello"
+    )
+
+    assert (
+        agent.messages
+        is agent.session.items
+    )

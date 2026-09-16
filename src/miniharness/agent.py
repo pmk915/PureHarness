@@ -3,8 +3,11 @@ from miniharness.model import Model, ModelError
 from miniharness.tools import ToolRegistry
 from miniharness.trace import RunTrace, StepTrace
 from miniharness.events import AgentEvent
+from miniharness.context import ContextBuilder
 
 from collections.abc import Callable
+
+from miniharness.session import Session
 
 
 class Agent:
@@ -14,15 +17,22 @@ class Agent:
         tools: ToolRegistry | None = None,
         max_steps: int = 10,
         listeners: list[Callable[[AgentEvent], None]] | None = None,
+        context_builder: ContextBuilder | None = None,
     ):
         self.model = model
         self.tools = tools or ToolRegistry()
-        self.messages: list[AgentItem] = []
+        self.session = Session()
         self.max_steps = max_steps
         self.trace = RunTrace()
         self.events: list[AgentEvent] = []
         self.listeners = listeners or []
         self.listener_errors: list[Exception] = []
+        self.context_builder = context_builder or ContextBuilder()
+
+
+    @property
+    def messages(self):
+        return self.session.items
 
 
     def _emit(self, event: AgentEvent) -> None:
@@ -39,7 +49,7 @@ class Agent:
         self.trace = RunTrace()
         self.events = []
         self.listener_errors = []
-        
+
         self._emit(
             AgentEvent(
                 type="agent_started",
@@ -52,13 +62,17 @@ class Agent:
             content=user_input,
         )
 
-        self.messages.append(user_message)
+        self.session.append(user_message)
 
         for step in range(self.max_steps):
 
             try:
+                context = self.context_builder.build(
+                    self.session.snapshot()
+                )
+
                 output = self.model.generate(
-                    self.messages,
+                    context,
                     self.tools.list_tools(),
                 )
 
@@ -88,7 +102,7 @@ class Agent:
             # 情况1：模型直接回答
             if isinstance(output, Message):
 
-                self.messages.append(output)
+                self.session.append(output)
 
                 self.trace.steps.append(
                     StepTrace(
@@ -117,7 +131,7 @@ class Agent:
 
                 for tool_call in output:
 
-                    self.messages.append(tool_call)
+                    self.session.append(tool_call)
 
                     self._emit(
                         AgentEvent(
@@ -156,7 +170,7 @@ class Agent:
                         is_error=is_error,
                     )
 
-                    self.messages.append(tool_result)
+                    self.session.append(tool_result)
 
                     tool_results.append(tool_result)
 
