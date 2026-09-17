@@ -1,5 +1,13 @@
 from collections.abc import Callable
 from dataclasses import dataclass
+from enum import Enum
+
+
+class RiskLevel(str, Enum):
+    READ = "read"
+    WRITE = "write"
+    EXECUTE = "execute"
+    DESTRUCTIVE = "destructive"
 
 
 @dataclass
@@ -8,6 +16,9 @@ class Tool:
     description: str
     parameters: dict[str, object]
     function: Callable[..., object]
+    category: str = "general"
+    risk_level: RiskLevel = RiskLevel.READ
+    side_effects: bool = False
 
     def execute(self, arguments: dict[str, object]) -> object:
         return self.function(**arguments)
@@ -60,4 +71,7 @@ ADD_TOOL = Tool(
         "required": ["a", "b"],
     },
     function=add,
+    category="utility",
+    risk_level=RiskLevel.READ,
+    side_effects=False,
 )

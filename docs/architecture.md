@@ -2,7 +2,7 @@
 
 This document separates the implementation that exists today from the intended
 architecture. Sections marked **Current** describe repository behavior through
-the M1 observable-runtime milestone. Sections marked **Target** describe
+the M2 coding-tool foundation milestone. Sections marked **Target** describe
 direction, not implemented APIs.
 
 ## 1. Project positioning
@@ -65,9 +65,15 @@ and tools to the OpenAI Responses client format and reads
 ### Tool and ToolRegistry
 
 `Tool` currently combines a name, description, JSON-schema-like parameters, and
-the Python callable that executes the tool. `ToolRegistry` registers tools by
-name, lists them for the model, and dispatches execution. Registration replaces
-an existing tool with the same name.
+the Python callable that executes the tool. M2 adds explicit `category`,
+`RiskLevel`, and `side_effects` capability metadata while retaining sensible
+read-only defaults for backward compatibility. `RiskLevel` contains only
+`READ`, `WRITE`, `EXECUTE`, and the reserved `DESTRUCTIVE` value.
+
+`ToolRegistry` registers tools by name, lists them for the model, and dispatches
+execution. Registration replaces an existing tool with the same name. It does
+not select tools, enforce policy, inspect model context, or provide an execution
+backend.
 
 This is intentionally simpler than the target tool architecture. There is no
 separate selector, policy, executor, approval flow, or execution backend today.
@@ -145,11 +151,32 @@ changing runtime execution.
 
 ### Coding tools
 
-`coding_tools.py` provides workload-specific factories for UTF-8 file reading,
-file writing, and argv-based local command execution. File tools reject resolved
-paths outside the selected workspace; commands run with that workspace as their
-current directory and have a timeout. These tools are outside the runtime loop
-and are assembled by the coding demo.
+`coding_tools.py` remains outside the runtime loop and exposes explicit factory
+functions assembled by `create_coding_tools(workspace)`:
+
+| Tool | Category | Risk | Side effects |
+| --- | --- | --- | --- |
+| `list_files` | filesystem | `READ` | no |
+| `search_text` | filesystem | `READ` | no |
+| `read_file` | filesystem | `READ` | no |
+| `write_file` | filesystem | `WRITE` | yes |
+| `apply_patch` | filesystem | `WRITE` | yes |
+| `run_command` | execution | `EXECUTE` | yes |
+| `git_status` | git | `READ` | no |
+| `git_diff` | git | `READ` | no |
+
+Filesystem tools reject resolved paths outside the selected workspace.
+`list_files` is deterministic, depth/entry bounded, and skips noisy directories
+and symlinks. `search_text` performs bounded case-sensitive literal search over
+small UTF-8 files and skips binary, undecodable, large, noisy-directory, and
+symlink content. `apply_patch` performs one exact replacement only after proving
+the old text occurs exactly once.
+
+`git_status` and `git_diff` use fixed local read-only Git commands without
+arbitrary Git arguments or remote access; `git_diff` also disables external diff
+drivers and text conversion. `run_command` preserves the existing argv-based
+local subprocess behavior, workspace current directory, and timeout; it is not
+an execution backend or secure sandbox.
 
 ## 3. Design principles
 
@@ -260,9 +287,10 @@ strategies remain swappable without modifying the Agent execution loop.
 ToolCall -> ToolRegistry -> Tool.function -> ToolResult
 ```
 
-The same `Tool` object carries both the model-facing definition and executable
-callable. The Agent catches execution exceptions and turns them into error
-results.
+The same `Tool` object carries the model-facing definition, capability metadata,
+and executable callable. The Agent catches execution exceptions and turns them
+into error results. Metadata is descriptive in M2: there is no policy or
+selective exposure consumer yet.
 
 **Target:** responsibilities should evolve, milestone by milestone, toward:
 
@@ -273,7 +301,7 @@ ToolSpec -> ToolSelector -> ToolPolicy -> ToolExecutor -> ExecutionBackend
 `ToolSpec` describes an available operation. Selection limits what the model can
 see. Policy allows, denies, or requests approval. The executor manages invocation
 and structured results. The backend provides the execution environment. This is
-direction only: none of these new abstractions is introduced in M0.
+direction only: none of these new abstractions is introduced in M2.
 
 ## 8. Failure isolation
 
@@ -294,7 +322,8 @@ also be separable. Isolation must not hide failures: errors remain observable.
 sets the working directory and a timeout, but it does not provide container or OS
 isolation, filter the inherited environment, disable network access, prevent
 arbitrary process behavior, or enforce resource limits. Workspace path checks on
-the file tools do not turn local command execution into a secure sandbox.
+filesystem tools and read-only fixed Git inspection commands do not turn local
+command execution into a secure sandbox.
 
 Therefore the current local execution capability is **not a secure sandbox** and
 must not be described as one. In particular, secrets such as API credentials may
