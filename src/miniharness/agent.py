@@ -18,10 +18,15 @@ class Agent:
         max_steps: int = 10,
         listeners: list[Callable[[AgentEvent], None]] | None = None,
         context_builder: ContextBuilder | None = None,
+        session: Session | None = None,
     ):
         self.model = model
         self.tools = tools or ToolRegistry()
-        self.session = Session()
+        self.session = (
+            session
+            if session is not None
+            else Session()
+        )
         self.max_steps = max_steps
         self.trace = RunTrace()
         self.events: list[AgentEvent] = []
