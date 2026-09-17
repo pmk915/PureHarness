@@ -13,8 +13,8 @@ RunEndReason = Literal[
 @dataclass
 class StepTrace:
     index: int
-    output: Message | ToolCall
-    tool_result: ToolResult | None = None
+    output: Message | list[ToolCall]
+    tool_result: list[ToolResult] | None = None
 
 
 @dataclass

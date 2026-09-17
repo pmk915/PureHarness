@@ -5,6 +5,7 @@ from miniharness.messages import Message, ToolCall, ToolResult
 from miniharness.model import AddModel, EchoModel, ModelError
 from miniharness.tools import ADD_TOOL, Tool, ToolRegistry
 from miniharness.context import ContextBuilder
+from miniharness.session import Session
 
 class FailingModel:
     def generate(self, messages, tools):
@@ -83,11 +84,32 @@ def test_agent_records_lifecycle_events():
         for event in agent.events
     ] == [
         "agent_started",
+        "context_build_started",
+        "context_built",
+        "model_started",
         "model_completed",
         "agent_completed",
     ]
 
     assert agent.events[-1].data["reason"] == "completed"
+    assert agent.events[-1].data["step_count"] == 1
+
+    context_built = agent.events[2]
+
+    assert context_built.data == {
+        "step": 0,
+        "history_item_count": 1,
+        "context_item_count": 1,
+        "context_strategy": "ContextBuilder",
+    }
+
+    model_completed = agent.events[4]
+
+    assert model_completed.data == {
+        "step": 0,
+        "output_kind": "message",
+        "tool_call_count": 0,
+    }
 
 
 def test_agent_keeps_conversation_history():
@@ -169,6 +191,9 @@ def test_agent_stops_after_max_steps():
         for event in agent.events
     ] == [
         "agent_started",
+        "context_build_started",
+        "context_built",
+        "model_started",
         "model_completed",
         "tool_started",
         "tool_completed",
@@ -213,6 +238,18 @@ def test_agent_converts_tool_error_to_observation():
     assert agent.messages[2].is_error is True
     assert agent.messages[2].content == (
         "Tool error: ValueError: simulated tool failure"
+    )
+
+    tool_completed = next(
+        event
+        for event in agent.events
+        if event.type == "tool_completed"
+    )
+
+    assert tool_completed.data["is_error"] is True
+    assert (
+        tool_completed.data["result_character_count"]
+        == len(agent.messages[2].content)
     )
 
 
@@ -282,8 +319,18 @@ def test_agent_records_model_error_end_reason():
         for event in agent.events
     ] == [
         "agent_started",
+        "context_build_started",
+        "context_built",
+        "model_started",
+        "model_failed",
         "agent_failed",
     ]
+
+    assert agent.events[-2].data == {
+        "step": 0,
+        "reason": "model_error",
+        "error_type": "ModelError",
+    }
 
     assert (
         agent.events[-1].data["reason"]
@@ -333,24 +380,36 @@ def test_agent_records_tool_lifecycle_events():
         for event in agent.events
     ] == [
         "agent_started",
+        "context_build_started",
+        "context_built",
+        "model_started",
         "model_completed",
         "tool_started",
         "tool_completed",
+        "context_build_started",
+        "context_built",
+        "model_started",
         "model_completed",
         "agent_completed",
     ]
 
-    tool_started = agent.events[2]
-    tool_completed = agent.events[3]
+    tool_started = agent.events[5]
+    tool_completed = agent.events[6]
 
     assert tool_started.data["step"] == 0
     assert tool_started.data["name"] == "add"
     assert tool_started.data["call_id"] == "1"
+    assert tool_started.data["arguments_preview"] == {
+        "a": "12",
+        "b": "17",
+    }
 
     assert tool_completed.data["step"] == 0
     assert tool_completed.data["name"] == "add"
     assert tool_completed.data["call_id"] == "1"
     assert tool_completed.data["is_error"] is False
+    assert tool_completed.data["duration_seconds"] >= 0
+    assert tool_completed.data["result_character_count"] == 2
 
 
 def test_agent_notifies_event_listener():
@@ -374,6 +433,9 @@ def test_agent_notifies_event_listener():
         for event in received_events
     ] == [
         "agent_started",
+        "context_build_started",
+        "context_built",
+        "model_started",
         "model_completed",
         "agent_completed",
     ]
@@ -402,11 +464,14 @@ def test_listener_error_does_not_stop_agent():
         for event in agent.events
     ] == [
         "agent_started",
+        "context_build_started",
+        "context_built",
+        "model_started",
         "model_completed",
         "agent_completed",
     ]
 
-    assert len(agent.listener_errors) == 3
+    assert len(agent.listener_errors) == 6
 
     assert all(
         isinstance(error, ValueError)
@@ -441,6 +506,9 @@ def test_listener_error_does_not_block_other_listeners():
         for event in received_events
     ] == [
         "agent_started",
+        "context_build_started",
+        "context_built",
+        "model_started",
         "model_completed",
         "agent_completed",
     ]
@@ -506,4 +574,106 @@ def test_agent_records_history_in_session():
     assert (
         agent.messages
         is agent.session.items
+    )
+
+
+def test_agent_resumes_existing_session():
+    registry = ToolRegistry()
+
+    session = Session()
+
+    session.append(
+        Message(
+            role="user",
+            content="first",
+        )
+    )
+
+    session.append(
+        Message(
+            role="assistant",
+            content="Echo: first",
+        )
+    )
+
+    agent = Agent(
+        model=EchoModel(),
+        tools=registry,
+        session=session,
+    )
+
+    result = agent.run("second")
+
+    assert result == "Echo: second"
+
+    assert agent.session is session
+
+    assert len(agent.session.items) == 4
+
+    assert (
+        agent.session.items[0].content
+        == "first"
+    )
+
+    assert (
+        agent.session.items[1].content
+        == "Echo: first"
+    )
+
+    assert (
+        agent.session.items[2].content
+        == "second"
+    )
+    assert (
+        agent.session.items[3].content
+        == "Echo: second"
+    )
+
+
+
+def test_agent_resumes_session_loaded_from_jsonl(
+    tmp_path,
+):
+    original = Session()
+
+    original.append(
+        Message(
+            role="user",
+            content="first",
+        )
+    )
+
+    original.append(
+        Message(
+            role="assistant",
+            content="Echo: first",
+        )
+    )
+
+    path = tmp_path / "session.jsonl"
+
+    original.save_jsonl(path)
+
+    loaded = Session.load_jsonl(path)
+
+    registry = ToolRegistry()
+
+    agent = Agent(
+        model=EchoModel(),
+        tools=registry,
+        session=loaded,
+    )
+
+    agent.run("second")
+
+    assert len(agent.session.items) == 4
+
+    assert (
+        agent.session.items[0].content
+        == "first"
+    )
+
+    assert (
+        agent.session.items[2].content
+        == "second"
     )

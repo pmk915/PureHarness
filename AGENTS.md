@@ -56,6 +56,12 @@ python -m venv .venv
 .venv/bin/python -m pip install -e . pytest
 ```
 
+Install the optional Rich terminal renderer when working on CLI presentation:
+
+```bash
+.venv/bin/python -m pip install -e '.[cli]'
+```
+
 Run the configured full test suite from the repository root:
 
 ```bash
@@ -66,5 +72,5 @@ The coding demo requires `DEEPSEEK_API_KEY`, calls the external DeepSeek API,
 and operates on a temporary workspace:
 
 ```bash
-.venv/bin/python examples/coding_agent_demo.py
+.venv/bin/python examples/coding_agent_demo.py --terminal --locale zh-CN
 ```

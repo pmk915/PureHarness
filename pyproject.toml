@@ -12,6 +12,11 @@ dependencies = [
     "python-dotenv",
 ]
 
+[project.optional-dependencies]
+cli = [
+    "rich>=14.2",
+]
+
 [tool.setuptools.packages.find]
 where = ["src"]
 

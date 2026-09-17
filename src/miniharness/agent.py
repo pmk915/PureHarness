@@ -2,10 +2,11 @@ from miniharness.messages import AgentItem, Message, ToolCall, ToolResult
 from miniharness.model import Model, ModelError
 from miniharness.tools import ToolRegistry
 from miniharness.trace import RunTrace, StepTrace
-from miniharness.events import AgentEvent
+from miniharness.events import AgentEvent, safe_arguments_preview
 from miniharness.context import ContextBuilder
 
 from collections.abc import Callable
+from time import perf_counter
 
 from miniharness.session import Session
 
@@ -58,7 +59,11 @@ class Agent:
         self._emit(
             AgentEvent(
                 type="agent_started",
-                data={},
+                data={
+                    "history_item_count": len(
+                        self.session.items
+                    ),
+                },
             )
         )
 
@@ -72,8 +77,43 @@ class Agent:
         for step in range(self.max_steps):
 
             try:
+                history = self.session.snapshot()
+
+                self._emit(
+                    AgentEvent(
+                        type="context_build_started",
+                        data={
+                            "step": step,
+                            "history_item_count": len(history),
+                        },
+                    )
+                )
+
                 context = self.context_builder.build(
-                    self.session.snapshot()
+                    history
+                )
+
+                self._emit(
+                    AgentEvent(
+                        type="context_built",
+                        data={
+                            "step": step,
+                            "history_item_count": len(history),
+                            "context_item_count": len(context),
+                            "context_strategy": type(
+                                self.context_builder
+                            ).__name__,
+                        },
+                    )
+                )
+
+                self._emit(
+                    AgentEvent(
+                        type="model_started",
+                        data={
+                            "step": step,
+                        },
+                    )
                 )
 
                 output = self.model.generate(
@@ -81,25 +121,52 @@ class Agent:
                     self.tools.list_tools(),
                 )
 
-            except ModelError:
+            except ModelError as exc:
                 self.trace.end_reason = "model_error"
+
+                self._emit(
+                    AgentEvent(
+                        type="model_failed",
+                        data={
+                            "step": step,
+                            "reason": "model_error",
+                            "error_type": type(exc).__name__,
+                        },
+                    )
+                )
 
                 self._emit(
                     AgentEvent(
                         type="agent_failed",
                         data={
                             "reason": "model_error",
+                            "step_count": len(
+                                self.trace.steps
+                            ),
                         },
                     )
                 )
 
                 raise
 
+            output_kind = (
+                "message"
+                if isinstance(output, Message)
+                else "tool_calls"
+            )
+            tool_call_count = (
+                len(output)
+                if isinstance(output, list)
+                else 0
+            )
+
             self._emit(
                 AgentEvent(
                     type="model_completed",
                     data={
                         "step": step,
+                        "output_kind": output_kind,
+                        "tool_call_count": tool_call_count,
                     },
                 )
             )
@@ -123,6 +190,9 @@ class Agent:
                         type="agent_completed",
                         data={
                             "reason": "completed",
+                            "step_count": len(
+                                self.trace.steps
+                            ),
                         },
                     )
                 )
@@ -145,9 +215,16 @@ class Agent:
                                 "step": step,
                                 "name": tool_call.name,
                                 "call_id": tool_call.call_id,
+                                "arguments_preview": (
+                                    safe_arguments_preview(
+                                        tool_call.arguments
+                                    )
+                                ),
                             },
                         )
                     )
+
+                    tool_started_at = perf_counter()
 
                     try:
                         result = self.tools.execute(
@@ -167,6 +244,9 @@ class Agent:
 
                         is_error = True
 
+                    duration_seconds = (
+                        perf_counter() - tool_started_at
+                    )
 
                     tool_result = ToolResult(
                         name=tool_call.name,
@@ -187,6 +267,13 @@ class Agent:
                                 "name": tool_call.name,
                                 "call_id": tool_call.call_id,
                                 "is_error": is_error,
+                                "duration_seconds": round(
+                                    duration_seconds,
+                                    6,
+                                ),
+                                "result_character_count": len(
+                                    content
+                                ),
                             },
                         )
                     )
@@ -208,6 +295,7 @@ class Agent:
                 type="agent_failed",
                 data={
                     "reason": "max_steps_exceeded",
+                    "step_count": len(self.trace.steps),
                 },
             )
         )

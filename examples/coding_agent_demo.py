@@ -1,3 +1,5 @@
+import argparse
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -12,7 +14,10 @@ from miniharness.messages import Message, ToolCall
 from miniharness.tools import ToolRegistry
 
 
-def main() -> None:
+def main(
+    show_terminal: bool = False,
+    locale: str = "en",
+) -> None:
     with TemporaryDirectory(
         prefix="miniharness-coding-demo-"
     ) as temporary_directory:
@@ -45,10 +50,22 @@ def main() -> None:
         for tool in create_coding_tools(workspace):
             registry.register(tool)
 
+        listeners = []
+
+        if show_terminal:
+            from miniharness.rich_terminal import (
+                RichTerminalRenderer,
+            )
+
+            listeners.append(
+                RichTerminalRenderer(locale=locale)
+            )
+
         agent = Agent(
             model=DeepSeekModel(),
             tools=registry,
             max_steps=10,
+            listeners=listeners,
         )
 
         task = (
@@ -98,4 +115,21 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--terminal",
+        action="store_true",
+        help="Render structured Agent events with Rich.",
+    )
+    parser.add_argument(
+        "--locale",
+        choices=["en", "zh-CN"],
+        default="en",
+        help="Terminal presentation language.",
+    )
+    arguments = parser.parse_args()
+
+    main(
+        show_terminal=arguments.terminal,
+        locale=arguments.locale,
+    )

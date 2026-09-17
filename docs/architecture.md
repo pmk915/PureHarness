@@ -1,8 +1,9 @@
 # MiniHarness architecture
 
 This document separates the implementation that exists today from the intended
-architecture. Sections marked **Current** describe repository behavior at the M0
-baseline. Sections marked **Target** describe direction, not implemented APIs.
+architecture. Sections marked **Current** describe repository behavior through
+the M1 observable-runtime milestone. Sections marked **Target** describe
+direction, not implemented APIs.
 
 ## 1. Project positioning
 
@@ -96,15 +97,51 @@ evidence, but it is not currently a durable `RunRecord`.
 
 ### Events and listeners
 
-The Agent emits structured lifecycle events for agent start/completion/failure,
-model completion, and tool start/completion. Events are retained on the Agent
-for the current run and synchronously delivered to listeners. Their current
-`data` payloads are small dictionaries containing step and lifecycle metadata;
-they do not yet form a complete typed record of model outputs and tool results.
+The Agent emits a structured lifecycle for agent, context, model, and tool
+phases. Events are retained on the Agent for the current run and synchronously
+delivered to callable listeners:
+
+```text
+agent_started
+  context_build_started -> context_built
+  model_started -> model_completed | model_failed
+  tool_started -> tool_completed       (zero or more tools)
+agent_completed | agent_failed
+```
+
+The lifecycle inside the loop repeats for each model step. `model_failed` is
+followed by `agent_failed`; a tool exception remains a `tool_completed` event
+with `is_error=True` so the model can observe and respond to the failure.
+
+Event payloads use the following M1 contract:
+
+| Event | Payload |
+| --- | --- |
+| `agent_started` | `history_item_count` before the new user message |
+| `context_build_started` | `step`, `history_item_count` |
+| `context_built` | `step`, history/context counts, `context_strategy` |
+| `model_started` | `step` |
+| `model_completed` | `step`, `output_kind`, `tool_call_count` |
+| `model_failed` | `step`, `reason`, `error_type` |
+| `tool_started` | `step`, `name`, `call_id`, `arguments_preview` |
+| `tool_completed` | `step`, `name`, `call_id`, `is_error`, `duration_seconds`, `result_character_count` |
+| `agent_completed` | `reason`, `step_count` |
+| `agent_failed` | `reason`, `step_count` |
+
+`arguments_preview` is deterministic, limited to eight fields and 120 characters
+per value, and recursively redacts obvious sensitive keys. Events do not include
+complete tool results, model reasoning, or hidden chain-of-thought. Result
+character count is metadata, not content.
 
 Listener exceptions are caught, stored in `listener_errors`, and do not stop the
-run or block later listeners. There is no event-sink protocol, terminal renderer,
-metrics backend, or persistent event log yet.
+run or block later listeners. The callable listener API is the current event
+consumer boundary; there is no event-sink framework or persistent event log.
+
+`RichTerminalRenderer` is an optional callable listener with explicit English
+and Simplified Chinese templates. It imports Rich only from its adapter module,
+and Rich is provided by the `cli` optional dependency. The Agent neither imports
+Rich nor invokes terminal APIs. A renderer can be added or removed without
+changing runtime execution.
 
 ### Coding tools
 
@@ -174,7 +211,8 @@ packages or a class for every box:
   execution.
 
 The current `Agent` spans coordination concerns that will be separated only when
-their roadmap milestones require it. M0 does not introduce these abstractions.
+their roadmap milestones require it. M1 adds observability at the existing
+listener boundary; it does not introduce the later abstractions.
 
 ## 5. Plugin boundary
 

@@ -1,0 +1,95 @@
+from io import StringIO
+
+import pytest
+
+
+pytest.importorskip("rich")
+
+from rich.console import Console
+
+from miniharness.agent import Agent
+from miniharness.model import AddModel
+from miniharness.rich_terminal import RichTerminalRenderer
+from miniharness.tools import ADD_TOOL, ToolRegistry
+
+
+def _render_run(locale: str) -> str:
+    output = StringIO()
+    console = Console(
+        file=output,
+        force_terminal=False,
+        color_system=None,
+        width=100,
+    )
+    renderer = RichTerminalRenderer(
+        locale=locale,
+        console=console,
+    )
+    registry = ToolRegistry()
+    registry.register(ADD_TOOL)
+
+    agent = Agent(
+        model=AddModel(),
+        tools=registry,
+        max_steps=2,
+        listeners=[renderer],
+    )
+
+    assert agent.run("calculate") == "The result is 29"
+
+    return output.getvalue()
+
+
+def test_rich_terminal_renders_english_labels():
+    output = _render_run("en")
+
+    assert "Building context" in output
+    assert "Calling tool: add" in output
+    assert "a: 12" in output
+    assert "Tool completed" in output
+    assert "Task completed" in output
+
+
+def test_rich_terminal_renders_chinese_labels():
+    output = _render_run("zh-CN")
+
+    assert "正在构建上下文" in output
+    assert "正在调用工具：add" in output
+    assert "a: 12" in output
+    assert "工具执行完成" in output
+    assert "任务完成" in output
+
+
+def test_rich_terminal_rejects_unsupported_locale():
+    with pytest.raises(
+        ValueError,
+        match="Unsupported locale: fr",
+    ):
+        RichTerminalRenderer(locale="fr")
+
+
+def test_broken_renderer_does_not_stop_other_observers():
+    class BrokenRenderer:
+        def __call__(self, event):
+            raise RuntimeError("render failed")
+
+    received_events = []
+    registry = ToolRegistry()
+    registry.register(ADD_TOOL)
+    agent = Agent(
+        model=AddModel(),
+        tools=registry,
+        max_steps=2,
+        listeners=[
+            BrokenRenderer(),
+            received_events.append,
+        ],
+    )
+
+    assert agent.run("calculate") == "The result is 29"
+    assert received_events == agent.events
+    assert len(agent.listener_errors) == len(agent.events)
+    assert all(
+        isinstance(error, RuntimeError)
+        for error in agent.listener_errors
+    )
