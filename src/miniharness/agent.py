@@ -5,7 +5,10 @@ from miniharness.tool_policy import PolicyDecision
 from miniharness.tools import Tool, ToolRegistry
 from miniharness.trace import RunTrace, StepTrace
 from miniharness.events import AgentEvent, safe_arguments_preview
-from miniharness.context import ContextBuilder
+from miniharness.context import (
+    ContextBuilder,
+    ContextCompileError,
+)
 
 from collections.abc import Callable
 from time import perf_counter
@@ -96,51 +99,93 @@ class Agent:
 
         for step in range(self.max_steps):
 
-            try:
-                history = self.session.snapshot()
+            history = self.session.snapshot()
 
-                self._emit(
-                    AgentEvent(
-                        type="context_build_started",
-                        data={
-                            "step": step,
-                            "history_item_count": len(history),
-                        },
-                    )
+            self._emit(
+                AgentEvent(
+                    type="context_build_started",
+                    data={
+                        "step": step,
+                        "history_item_count": len(history),
+                    },
                 )
+            )
 
-                context = self.context_builder.build(
+            try:
+                compiled_context = self.context_builder.compile(
                     history
                 )
+            except ContextCompileError as exc:
+                self.trace.end_reason = "context_error"
 
                 self._emit(
                     AgentEvent(
-                        type="context_built",
+                        type="context_build_failed",
                         data={
                             "step": step,
-                            "history_item_count": len(history),
-                            "context_item_count": len(context),
-                            "context_strategy": type(
-                                self.context_builder
-                            ).__name__,
+                            "reason": "context_error",
+                            "error_type": type(exc).__name__,
                         },
                     )
                 )
 
                 self._emit(
                     AgentEvent(
-                        type="model_started",
+                        type="agent_failed",
                         data={
-                            "step": step,
+                            "reason": "context_error",
+                            "step_count": len(
+                                self.trace.steps
+                            ),
                         },
                     )
                 )
 
+                raise
+
+            context_event_data = {
+                "step": step,
+                "history_item_count": len(history),
+                "context_item_count": len(
+                    compiled_context.items
+                ),
+                "context_strategy": compiled_context.strategy,
+                "estimated_history_tokens": (
+                    compiled_context.estimated_tokens
+                ),
+                "total_units": compiled_context.total_units,
+                "included_units": (
+                    compiled_context.included_units
+                ),
+                "dropped_units": compiled_context.dropped_units,
+            }
+
+            if compiled_context.history_token_budget is not None:
+                context_event_data["history_token_budget"] = (
+                    compiled_context.history_token_budget
+                )
+
+            self._emit(
+                AgentEvent(
+                    type="context_built",
+                    data=context_event_data,
+                )
+            )
+
+            self._emit(
+                AgentEvent(
+                    type="model_started",
+                    data={
+                        "step": step,
+                    },
+                )
+            )
+
+            try:
                 output = self.model.generate(
-                    context,
+                    compiled_context.items,
                     self.tools.list_tools(),
                 )
-
             except ModelError as exc:
                 self.trace.end_reason = "model_error"
 

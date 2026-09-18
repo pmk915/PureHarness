@@ -17,6 +17,10 @@ _TEXT = {
         "history": "history",
         "context": "context",
         "strategy": "strategy",
+        "estimated_tokens": "estimated history tokens",
+        "units": "units",
+        "history_budget": "history token budget",
+        "context_build_failed": "✗ Context build failed",
         "item_unit": "items",
         "separator": ": ",
         "model_started": "● Requesting model...",
@@ -40,6 +44,10 @@ _TEXT = {
         "history": "历史记录",
         "context": "上下文",
         "strategy": "策略",
+        "estimated_tokens": "估算历史 tokens",
+        "units": "单元",
+        "history_budget": "历史 token 预算",
+        "context_build_failed": "✗ 上下文构建失败",
         "item_unit": "项",
         "separator": "：",
         "model_started": "● 正在请求模型...",
@@ -106,6 +114,27 @@ class RichTerminalRenderer:
                 f"{text['separator']}"
                 f"{data['context_strategy']}"
             )
+            self._print(
+                f"  {text['estimated_tokens']}"
+                f"{text['separator']}"
+                f"{data['estimated_history_tokens']}"
+            )
+            self._print(
+                f"  {text['units']}"
+                f"{text['separator']}"
+                f"{data['included_units']}/"
+                f"{data['total_units']}"
+            )
+
+            if "history_token_budget" in data:
+                self._print(
+                    f"  {text['history_budget']}"
+                    f"{text['separator']}"
+                    f"{data['history_token_budget']}"
+                )
+
+        elif event.type == "context_build_failed":
+            self._print(text["context_build_failed"])
 
         elif event.type == "model_started":
             self._print(text["model_started"])

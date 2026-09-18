@@ -8,6 +8,7 @@ pytest.importorskip("rich")
 from rich.console import Console
 
 from miniharness.agent import Agent
+from miniharness.events import AgentEvent
 from miniharness.model import AddModel
 from miniharness.rich_terminal import RichTerminalRenderer
 from miniharness.tools import ADD_TOOL, ToolRegistry
@@ -44,6 +45,8 @@ def test_rich_terminal_renders_english_labels():
     output = _render_run("en")
 
     assert "Building context" in output
+    assert "estimated history tokens:" in output
+    assert "units: 1/1" in output
     assert "Tool policy evaluated: add" in output
     assert "decision: allow" in output
     assert "Calling tool: add" in output
@@ -56,6 +59,8 @@ def test_rich_terminal_renders_chinese_labels():
     output = _render_run("zh-CN")
 
     assert "正在构建上下文" in output
+    assert "估算历史 tokens：" in output
+    assert "单元：1/1" in output
     assert "工具策略已评估：add" in output
     assert "决策：allow" in output
     assert "正在调用工具：add" in output
@@ -70,6 +75,30 @@ def test_rich_terminal_rejects_unsupported_locale():
         match="Unsupported locale: fr",
     ):
         RichTerminalRenderer(locale="fr")
+
+
+def test_rich_terminal_renders_context_build_failure():
+    output = StringIO()
+    renderer = RichTerminalRenderer(
+        console=Console(
+            file=output,
+            force_terminal=False,
+            color_system=None,
+        )
+    )
+
+    renderer(
+        AgentEvent(
+            type="context_build_failed",
+            data={
+                "step": 0,
+                "reason": "context_error",
+                "error_type": "ContextBudgetExceeded",
+            },
+        )
+    )
+
+    assert "Context build failed" in output.getvalue()
 
 
 def test_broken_renderer_does_not_stop_other_observers():

@@ -2,7 +2,7 @@
 
 This document separates the implementation that exists today from the intended
 architecture. Sections marked **Current** describe repository behavior through
-the M5B ToolPolicy and ToolExecutor milestone. Sections marked **Target** describe
+the M6 Context Compiler v1 milestone. Sections marked **Target** describe
 direction, not implemented APIs.
 
 ## 1. Project positioning
@@ -29,9 +29,9 @@ over a broad framework or a coding-agent product.
 user input
    |
    v
-Agent -> Session.snapshot() -> ContextBuilder -> Model
-  |                                           |
-  |                 Message or ToolCall(s) <--+
+Agent -> Session.snapshot() -> Context compiler -> CompiledContext -> Model
+  |                                                               |
+  |                                     Message or ToolCall(s) <--+
   |                           |
   +-> ToolExecutor -> ToolRegistry lookup
   |              `-> ToolPolicy -> Tool callable
@@ -49,10 +49,10 @@ session, and iterates up to `max_steps`. Each step builds model context from a
 session snapshot and calls the model. An assistant `Message` completes the run;
 one or more `ToolCall` objects are executed before the next model step.
 
-Tool exceptions are converted into error `ToolResult` observations. A
-`ModelError` and exhaustion of the step limit fail the run with a recorded end
-reason. The session remains across calls to `run`; the current working tree also
-allows an existing `Session` to be supplied to `Agent`.
+Tool exceptions are converted into error `ToolResult` observations. A context
+compilation error, `ModelError`, or exhaustion of the step limit fails the run
+with a recorded end reason. The session remains across calls to `run`; an
+existing `Session` can be supplied to `Agent`.
 
 ### Model
 
@@ -105,13 +105,55 @@ it safely means the tool is not executed. Tool policy remains independent of
 backend selection. Command-based tool callables may delegate to the separately
 injected `ExecutionBackend` port only after policy authorization.
 
-### ContextBuilder
+### Context compiler
 
-`ContextBuilder` returns a copy of full session history. The replaceable
-`RecentContextBuilder` selects a recent slice while walking backward to a user
-message so that it does not cut a tool interaction away from its initiating
-turn. The Agent accepts a context builder, but there is not yet a formal
-`ContextCompiler` port or token-aware compiler.
+The retained `ContextBuilder` name now provides the canonical `compile()` path
+and the FullHistory strategy. `build()` is only a compatibility view that
+delegates to `compile()` and returns its items. `RecentContextBuilder` and
+`TokenBudgetContextBuilder` use the same compiler semantics, so the Agent has no
+parallel legacy selection path.
+
+```text
+Session.snapshot()
+        |
+        v
+Context compiler
+  |-- ContextUnit grouping
+  |-- TokenEstimator
+  |-- FullHistory | Recent | TokenBudget strategy
+  `-- optional historical-token budget
+        |
+        v
+CompiledContext.items -> Model
+```
+
+`ContextUnit(items: tuple[AgentItem, ...])` is the atomic selection unit.
+Ordinary messages are individual units. All contiguous `ToolCall` and
+`ToolResult` items between messages form one tool-execution unit. This matches
+the current interleaved multi-tool Session layout and conservatively keeps
+adjacent tool-only model steps together when the Session has no boundary that
+can distinguish them. Results must match an earlier call in the same unit;
+missing legacy `call_id` values are matched deterministically by tool name and
+order, while clearly unmatched results fail with `ContextCompileError`.
+
+The current strategies are:
+
+- **FullHistory:** include every unit in original order.
+- **Recent:** preserve the existing `max_items`-based recent-user-turn behavior,
+  but expand selection only across whole semantic units.
+- **TokenBudget:** walk newest units backward, include the newest contiguous
+  suffix that fits, then return it in chronological order. If the newest
+  indivisible unit alone exceeds the budget, raise `ContextBudgetExceeded`
+  rather than truncating it.
+
+`TokenEstimator` is a replaceable protocol over a sequence of `AgentItem`s. The
+default `ApproximateTokenEstimator` deterministically serializes Message
+content, ToolCall names/arguments, and ToolResult content, then applies a simple
+character heuristic. `CompiledContext` reports the selected raw items, estimated
+history tokens, total/included/dropped unit counts, strategy, and optional
+history budget. These are approximate **historical trajectory** tokens only:
+system instructions, tool definitions, provider wrappers, and output-token
+reservation are deliberately outside M6's budget.
 
 ### Session
 
@@ -151,7 +193,8 @@ future work.
 ### Trace
 
 `RunTrace` is a per-run record of step outputs, associated tool results, and an
-end reason (`completed`, `max_steps_exceeded`, or `model_error`). It is reset for
+end reason (`completed`, `max_steps_exceeded`, `context_error`, or
+`model_error`). It is reset for
 each `Agent.run` call, unlike the conversation session. It is useful runtime
 evidence, but it is not currently a durable `RunRecord`.
 
@@ -163,7 +206,7 @@ delivered to callable listeners:
 
 ```text
 agent_started
-  context_build_started -> context_built
+  context_build_started -> context_built | context_build_failed
   model_started -> model_completed | model_failed
   tool_policy_evaluated                (zero or more tools)
     ALLOW -> tool_started -> tool_completed
@@ -177,6 +220,8 @@ followed by `agent_failed`; an allowed tool that starts and then raises retains 
 model-visible `ToolResult(is_error=True)` without `tool_started` or
 `tool_completed`, because tool execution never began. Events describe runtime
 execution while ToolResult describes the observation supplied to the model.
+`context_build_failed` is followed by `agent_failed`, and no model request is
+made with partial or malformed context.
 
 Event payloads use the following current contract:
 
@@ -184,7 +229,8 @@ Event payloads use the following current contract:
 | --- | --- |
 | `agent_started` | `history_item_count` before the new user message |
 | `context_build_started` | `step`, `history_item_count` |
-| `context_built` | `step`, history/context counts, `context_strategy` |
+| `context_built` | `step`, history/context counts, strategy, estimated history tokens, total/included/dropped units, optional history budget |
+| `context_build_failed` | `step`, `reason`, `error_type` |
 | `model_started` | `step` |
 | `model_completed` | `step`, `output_kind`, `tool_call_count` |
 | `model_failed` | `step`, `reason`, `error_type` |
@@ -370,11 +416,10 @@ include `Message`, `ToolCall`, `ToolResult`, `AgentEvent`, `StepTrace`, and
 Simple data objects should remain simple.
 
 Capabilities with plausible alternative implementations belong behind narrow
-ports. `Model`, `SessionStore`, `ExecutionBackend`, and `ToolPolicy` are
-protocol-shaped ports; context building is currently replaceable by constructor
-injection, and `ToolExecutor` is the small policy-enforced invocation service.
-Planned ports include `ContextCompiler` and `EventSink`, introduced only as their
-milestones need them.
+ports. `Model`, `SessionStore`, `ExecutionBackend`, `ToolPolicy`, and
+`TokenEstimator` are protocol-shaped ports. Context compilation strategies are
+replaceable by constructor injection, and `ToolExecutor` is the small
+policy-enforced invocation service. `EventSink` remains a planned port.
 
 Adapters implement those ports: for example, DeepSeek for `Model`, the current
 memory and JSONL adapters for `SessionStore`, the current local and Docker
@@ -394,17 +439,20 @@ TaskState = derived working state for the active task (planned; not present)
 Context   = per-inference projection sent to the model
 ```
 
-**Current:** `Session` stores ordered agent items, and `ContextBuilder` projects
-the list returned by `Session.snapshot()` for each model call. This snapshot is
-an isolated in-memory list view; it is distinct from the complete durable
-snapshot written by `JsonlSessionStore.save()`. `SessionStore` separates
-persistence from domain state, and the external lifecycle owns `session_id` and
-save/load timing. There is no `TaskState`, automatic checkpointing, durable
-runtime event log, or replay.
+**Current:** `Session` stores complete ordered agent history. The compiler groups
+the isolated list returned by `Session.snapshot()` into atomic semantic units
+and produces a `CompiledContext` projection for each model call. FullHistory,
+Recent, and TokenBudget strategies never mutate Session. This in-memory snapshot
+is distinct from the complete durable snapshot written by
+`JsonlSessionStore.save()`; the external lifecycle still owns `session_id` and
+save/load timing.
 
-**Target:** summaries, compacted observations, and task state can help construct
-context, but they never silently replace original session history. Context
-strategies remain swappable without modifying the Agent execution loop.
+There is no summary, compaction item, `TaskState`, selective tool exposure,
+automatic checkpointing, durable runtime event log, or replay. Planned future
+boundaries are M7 structured/compact tool-output representation, M8 TaskState,
+M9 old-trajectory compaction, and M10 selective tool exposure. Any future
+derived state must remain reproducible or traceable without replacing Session as
+the source of truth.
 
 ## 7. Tool definition and execution
 
@@ -445,8 +493,10 @@ concepts remain future work.
 
 **Current:** listener exceptions are isolated from the Agent and from other
 listeners. Tool exceptions become `ToolResult(is_error=True)` observations so a
-model can react. Model request errors and maximum-step exhaustion stop the run
-with explicit trace reasons and failure events.
+model can react. Context compilation errors stop before the model request and
+emit `context_build_failed` followed by `agent_failed`. Model request errors and
+maximum-step exhaustion also stop the run with explicit trace reasons and
+failure events.
 
 Requested Session persistence has explicit failure behavior through
 `SessionStoreError`; unlike non-critical listener failures, store failures are
@@ -513,20 +563,22 @@ how a command runs.
 - **M5B — ToolPolicy + ToolExecutor:** implemented; add allow, deny, and
   approval-required decisions without changing backend isolation
   responsibilities.
-- **M6 — Context Compiler / token-aware context:** replace simple slicing with a
-  measurable, token-aware projection strategy.
-- **M7 — Structured Tool Results + Context Compaction:** improve result semantics
-  and compact model context without losing source history.
+- **M6 — Context Compiler v1:** implemented; select raw semantic units through
+  measurable FullHistory, Recent, and TokenBudget strategies.
+- **M7 — Structured Tool Output:** improve oversized tool-output representation
+  without losing source history.
 - **M8 — Structured TaskState:** add explicit derived working state.
-- **M9 — Selective Tool Exposure:** control which tool definitions are available
+- **M9 — Old-trajectory compaction:** compact earlier trajectory without
+  replacing durable Session history.
+- **M10 — Selective Tool Exposure:** control which tool definitions are available
   to each inference.
-- **M10 — Resume / RunRecord / Replay:** extend beyond M3's Session-level
+- **M11 — Resume / RunRecord / Replay:** extend beyond M3's Session-level
   save/load continuation to make runtime executions recoverable and inspectable
   across process lifecycles.
-- **M11 — Context Benchmark and comparison:** compare context strategies using
+- **M12 — Context Benchmark and comparison:** compare context strategies using
   task success, tokens, calls, steps, constraint violations, and recovery.
 
-After M11, supporting work may include GitHub Actions, README improvements, an
+After M12, supporting work may include GitHub Actions, README improvements, an
 architecture diagram, a benchmark report, a terminal demo, a security model,
 limitations, and a v0.1 interview release.
 

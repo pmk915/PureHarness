@@ -35,6 +35,8 @@ product clone, a multi-agent framework, or an unrelated collection of tools.
     dependency-injection systems, metaprogramming, or plugin frameworks.
 13. All Agent runtime tool execution must pass through `ToolExecutor` and
     `ToolPolicy`; do not invoke `Tool.function` directly from the Agent.
+14. Context compilation must not mutate Session, orphan ToolCall/ToolResult
+    groups, or silently truncate an indivisible semantic unit to fit a budget.
 
 ## Development workflow
 

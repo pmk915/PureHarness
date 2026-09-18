@@ -8,6 +8,7 @@ from typing import Literal, TypedDict
 AgentEventType = Literal[
     "agent_started",
     "context_build_started",
+    "context_build_failed",
     "context_built",
     "model_started",
     "model_completed",
@@ -28,6 +29,11 @@ class AgentEventData(TypedDict, total=False):
     history_item_count: int
     context_item_count: int
     context_strategy: str
+    estimated_history_tokens: int
+    total_units: int
+    included_units: int
+    dropped_units: int
+    history_token_budget: int
     output_kind: Literal["message", "tool_calls"]
     tool_call_count: int
     name: str

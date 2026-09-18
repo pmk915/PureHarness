@@ -8,6 +8,7 @@ RunEndReason = Literal[
     "completed",
     "max_steps_exceeded",
     "model_error",
+    "context_error",
 ]
 
 @dataclass

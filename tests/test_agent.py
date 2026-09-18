@@ -4,7 +4,12 @@ from miniharness.agent import Agent
 from miniharness.messages import Message, ToolCall, ToolResult
 from miniharness.model import AddModel, EchoModel, ModelError
 from miniharness.tools import ADD_TOOL, Tool, ToolRegistry
-from miniharness.context import ContextBuilder
+from miniharness.context import (
+    ContextBudget,
+    ContextBudgetExceeded,
+    ContextBuilder,
+    TokenBudgetContextBuilder,
+)
 from miniharness.session import Session
 from miniharness.session_store import JsonlSessionStore
 from miniharness.tool_executor import ToolExecutor
@@ -59,12 +64,30 @@ class StaticPolicy:
 
 class RecordingContextBuilder(ContextBuilder):
     def __init__(self):
+        super().__init__()
         self.histories = []
 
-    def build(self, history):
+    def compile(self, history):
         self.histories.append(list(history))
 
-        return list(history)
+        return super().compile(history)
+
+
+class RecordingModel:
+    def __init__(self):
+        self.contexts = []
+
+    def generate(self, messages, tools):
+        self.contexts.append(list(messages))
+        return Message(role="assistant", content="done")
+
+
+class FixedMessageEstimator:
+    def __init__(self, costs):
+        self.costs = costs
+
+    def estimate(self, items):
+        return self.costs[items[0].content]
 
 
 def failing_add(a: int, b: int) -> int:
@@ -107,12 +130,15 @@ def test_agent_records_lifecycle_events():
 
     context_built = agent.events[2]
 
-    assert context_built.data == {
-        "step": 0,
-        "history_item_count": 1,
-        "context_item_count": 1,
-        "context_strategy": "ContextBuilder",
-    }
+    assert context_built.data["step"] == 0
+    assert context_built.data["history_item_count"] == 1
+    assert context_built.data["context_item_count"] == 1
+    assert context_built.data["context_strategy"] == "FullHistory"
+    assert context_built.data["estimated_history_tokens"] > 0
+    assert context_built.data["total_units"] == 1
+    assert context_built.data["included_units"] == 1
+    assert context_built.data["dropped_units"] == 0
+    assert "history_token_budget" not in context_built.data
 
     model_completed = agent.events[4]
 
@@ -669,6 +695,87 @@ def test_agent_builds_model_context_from_history():
     assert history[0].content == "hello"
 
     assert len(agent.messages) == 2
+
+
+def test_agent_sends_compiled_context_items_and_emits_statistics():
+    session = Session(
+        items=[
+            Message(role="user", content="old"),
+            Message(role="assistant", content="recent"),
+        ]
+    )
+    model = RecordingModel()
+    builder = TokenBudgetContextBuilder(
+        ContextBudget(max_estimated_tokens=5),
+        FixedMessageEstimator(
+            {"old": 10, "recent": 3, "new": 2}
+        ),
+    )
+    agent = Agent(
+        model=model,
+        session=session,
+        context_builder=builder,
+    )
+
+    assert agent.run("new") == "done"
+    assert model.contexts == [
+        [
+            Message(role="assistant", content="recent"),
+            Message(role="user", content="new"),
+        ]
+    ]
+
+    context_built = next(
+        event
+        for event in agent.events
+        if event.type == "context_built"
+    )
+
+    assert context_built.data == {
+        "step": 0,
+        "history_item_count": 3,
+        "context_item_count": 2,
+        "context_strategy": "TokenBudget",
+        "estimated_history_tokens": 5,
+        "total_units": 3,
+        "included_units": 2,
+        "dropped_units": 1,
+        "history_token_budget": 5,
+    }
+
+
+def test_context_budget_failure_stops_before_model_call():
+    model = RecordingModel()
+    agent = Agent(
+        model=model,
+        context_builder=TokenBudgetContextBuilder(
+            ContextBudget(max_estimated_tokens=1),
+            FixedMessageEstimator({"oversized": 2}),
+        ),
+    )
+
+    with pytest.raises(
+        ContextBudgetExceeded,
+        match="Newest indivisible context unit",
+    ):
+        agent.run("oversized")
+
+    assert model.contexts == []
+    assert agent.trace.end_reason == "context_error"
+    assert isinstance(agent.messages[0], Message)
+    assert agent.messages[0].content == "oversized"
+    assert [event.type for event in agent.events] == [
+        "agent_started",
+        "context_build_started",
+        "context_build_failed",
+        "agent_failed",
+    ]
+    assert agent.events[2].data == {
+        "step": 0,
+        "reason": "context_error",
+        "error_type": "ContextBudgetExceeded",
+    }
+    assert agent.events[3].data["reason"] == "context_error"
 
 
 def test_agent_records_history_in_session():
