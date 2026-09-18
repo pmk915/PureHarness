@@ -2,7 +2,7 @@
 
 This document separates the implementation that exists today from the intended
 architecture. Sections marked **Current** describe repository behavior through
-the M2 coding-tool foundation milestone. Sections marked **Target** describe
+the M3 durable-state-boundary milestone. Sections marked **Target** describe
 direction, not implemented APIs.
 
 ## 1. Project positioning
@@ -29,13 +29,15 @@ over a broad framework or a coding-agent product.
 user input
    |
    v
-Agent -> Session snapshot -> ContextBuilder -> Model
-  |                                         |
-  |               Message or ToolCall(s) <--+
-  |                         |
+Agent -> Session.snapshot() -> ContextBuilder -> Model
+  |                                           |
+  |                 Message or ToolCall(s) <--+
+  |                           |
   +-> ToolRegistry -> Tool callable
   |
   +-> Session + RunTrace + AgentEvent listeners
+
+External lifecycle -> SessionStore <-> Session -> Agent
 ```
 
 ### Agent
@@ -89,10 +91,37 @@ turn. The Agent accepts a context builder, but there is not yet a formal
 ### Session
 
 `Session` contains the ordered `Message`, `ToolCall`, and `ToolResult` history.
-It can return a snapshot and currently implements JSONL save/load directly.
-This history is the source of truth; persistence currently requires an explicit
-JSONL save. A separate `SessionStore`, run record, replay facility, and
-`TaskState` do not yet exist.
+It owns only this in-memory domain state: `append()` extends the history and
+`snapshot()` returns a new list for context/runtime consumers. The history is
+the source of truth. `Session` does not own file paths, serialization, schema
+versions, or persistence identity.
+
+### Session stores
+
+`SessionStore` is the current persistence port, with only `save(session_id,
+session)` and `load(session_id)`. `MemorySessionStore` is an in-memory adapter
+that deep-copies on both operations so callers cannot mutate stored state
+without another save. `JsonlSessionStore` is a local JSONL adapter that writes a
+complete Session snapshot for each save. The external lifecycle chooses a
+session ID and explicitly loads or saves; the Agent receives only a `Session`
+and never imports or invokes a concrete store.
+
+Each JSONL file begins with schema metadata, followed by one record per item:
+
+```json
+{"type": "session_meta", "schema_version": 1}
+{"type": "message", "role": "user", "content": "你好"}
+{"type": "tool_call", "name": "read_file", "arguments": {"path": "a.py"}, "call_id": "1"}
+{"type": "tool_result", "name": "read_file", "content": "...", "call_id": "1", "is_error": false}
+```
+
+The metadata record is not an `AgentItem`. Saves write and flush a temporary
+file in the destination directory and atomically replace the target, preserving
+the prior valid file when failure occurs before replacement. Unsupported
+versions, malformed data, missing sessions, and filesystem failures raise
+`SessionStoreError`. This is snapshot persistence, not an append-only event log.
+A durable `RunRecord`, replay facility, checkpoint policy, and `TaskState` remain
+future work.
 
 ### Trace
 
@@ -249,17 +278,18 @@ include `Message`, `ToolCall`, `ToolResult`, `AgentEvent`, `StepTrace`, and
 Simple data objects should remain simple.
 
 Capabilities with plausible alternative implementations belong behind narrow
-ports. `Model` is already a protocol-shaped port; context building is currently
-replaceable by constructor injection. Planned ports include `ContextCompiler`,
-`SessionStore`, `ToolExecutor`, `ExecutionBackend`, `EventSink`, and
+ports. `Model` and `SessionStore` are protocol-shaped ports; context building is
+currently replaceable by constructor injection. Planned ports include
+`ContextCompiler`, `ToolExecutor`, `ExecutionBackend`, `EventSink`, and
 `ToolPolicy`, introduced only as their milestones need them.
 
-Adapters implement those ports: for example, DeepSeek for `Model`, JSONL for a
-future `SessionStore`, Docker for a future `ExecutionBackend`, or a terminal
-renderer for a future `EventSink`. Concrete adapters must not import or control
-one another. This avoids combinations such as a Docker backend coupled to a
-terminal renderer or a context compiler coupled to JSONL persistence, and keeps
-each integration replaceable and independently testable.
+Adapters implement those ports: for example, DeepSeek for `Model`, the current
+memory and JSONL adapters for `SessionStore`, Docker for a future
+`ExecutionBackend`, or a terminal renderer for a future `EventSink`. Concrete
+adapters must not import or control one another. This avoids combinations such
+as a Docker backend coupled to a terminal renderer or a context compiler
+coupled to JSONL persistence, and keeps each integration replaceable and
+independently testable.
 
 ## 6. State, task state, and context
 
@@ -272,8 +302,12 @@ Context   = per-inference projection sent to the model
 ```
 
 **Current:** `Session` stores ordered agent items, and `ContextBuilder` projects
-that history for each model call. There is no `TaskState`. JSONL persistence is a
-method on `Session`, not a separate store.
+the list returned by `Session.snapshot()` for each model call. This snapshot is
+an isolated in-memory list view; it is distinct from the complete durable
+snapshot written by `JsonlSessionStore.save()`. `SessionStore` separates
+persistence from domain state, and the external lifecycle owns `session_id` and
+save/load timing. There is no `TaskState`, automatic checkpointing, durable
+runtime event log, or replay.
 
 **Target:** summaries, compacted observations, and task state can help construct
 context, but they never silently replace original session history. Context
@@ -310,8 +344,10 @@ listeners. Tool exceptions become `ToolResult(is_error=True)` observations so a
 model can react. Model request errors and maximum-step exhaustion stop the run
 with explicit trace reasons and failure events.
 
-**Target:** event sinks, renderers, metrics, persistence, policy, and execution
-backends should have explicit failure behavior. Where recovery is reasonable,
+Requested Session persistence already has explicit failure behavior through
+`SessionStoreError`; unlike non-critical listener failures, store failures are
+not swallowed. **Target:** event sinks, metrics, policy, and execution backends
+should likewise have explicit failure behavior. Where recovery is reasonable,
 backend or sandbox failure should become a structured tool failure instead of
 destroying the whole run. Durable session lifecycle and runtime lifecycle should
 also be separable. Isolation must not hide failures: errors remain observable.
@@ -344,8 +380,8 @@ high-level direction is not a security guarantee.
   an inspectable terminal experience.
 - **M2 — Tool Architecture v2 and CodingToolSet:** improve tool boundaries while
   keeping coding capabilities outside the kernel.
-- **M3 — State Plane / SessionStore separation:** separate durable persistence
-  from the in-memory session model.
+- **M3 — State Plane / SessionStore separation:** implemented; durable snapshot
+  persistence is separate from the in-memory session model.
 - **M4 — ExecutionBackend abstraction:** define a replaceable execution boundary.
 - **M5 — Docker Sandbox + ToolPolicy:** introduce controlled, least-privilege
   execution and policy decisions.
@@ -356,7 +392,8 @@ high-level direction is not a security guarantee.
 - **M8 — Structured TaskState:** add explicit derived working state.
 - **M9 — Selective Tool Exposure:** control which tool definitions are available
   to each inference.
-- **M10 — Resume / RunRecord / Replay:** make runs recoverable and inspectable
+- **M10 — Resume / RunRecord / Replay:** extend beyond M3's Session-level
+  save/load continuation to make runtime executions recoverable and inspectable
   across process lifecycles.
 - **M11 — Context Benchmark and comparison:** compare context strategies using
   task success, tokens, calls, steps, constraint violations, and recovery.

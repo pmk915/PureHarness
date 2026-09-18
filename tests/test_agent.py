@@ -6,6 +6,7 @@ from miniharness.model import AddModel, EchoModel, ModelError
 from miniharness.tools import ADD_TOOL, Tool, ToolRegistry
 from miniharness.context import ContextBuilder
 from miniharness.session import Session
+from miniharness.session_store import JsonlSessionStore
 
 class FailingModel:
     def generate(self, messages, tools):
@@ -631,49 +632,45 @@ def test_agent_resumes_existing_session():
 
 
 
-def test_agent_resumes_session_loaded_from_jsonl(
+def test_agent_continues_session_loaded_from_store(
     tmp_path,
 ):
-    original = Session()
-
-    original.append(
-        Message(
-            role="user",
-            content="first",
-        )
-    )
-
-    original.append(
-        Message(
-            role="assistant",
-            content="Echo: first",
-        )
-    )
-
-    path = tmp_path / "session.jsonl"
-
-    original.save_jsonl(path)
-
-    loaded = Session.load_jsonl(path)
-
-    registry = ToolRegistry()
-
-    agent = Agent(
+    original_agent = Agent(
         model=EchoModel(),
-        tools=registry,
+    )
+    original_agent.run("first")
+
+    store = JsonlSessionStore(tmp_path)
+    store.save("task-001", original_agent.session)
+
+    resumed_store = JsonlSessionStore(tmp_path)
+    loaded = resumed_store.load("task-001")
+    resumed_agent = Agent(
+        model=EchoModel(),
         session=loaded,
     )
 
-    agent.run("second")
+    result = resumed_agent.run("second")
 
-    assert len(agent.session.items) == 4
+    assert result == "Echo: second"
+    assert len(resumed_agent.session.items) == 4
 
     assert (
-        agent.session.items[0].content
+        resumed_agent.session.items[0].content
         == "first"
     )
 
     assert (
-        agent.session.items[2].content
+        resumed_agent.session.items[1].content
+        == "Echo: first"
+    )
+
+    assert (
+        resumed_agent.session.items[2].content
         == "second"
+    )
+
+    assert (
+        resumed_agent.session.items[3].content
+        == "Echo: second"
     )
