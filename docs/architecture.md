@@ -2,7 +2,7 @@
 
 This document separates the implementation that exists today from the intended
 architecture. Sections marked **Current** describe repository behavior through
-the M4 execution-backend milestone. Sections marked **Target** describe
+the M5A Docker-sandbox milestone. Sections marked **Target** describe
 direction, not implemented APIs.
 
 ## 1. Project positioning
@@ -74,11 +74,12 @@ read-only defaults for backward compatibility. `RiskLevel` contains only
 
 `ToolRegistry` registers tools by name, lists them for the model, and dispatches
 execution. Registration replaces an existing tool with the same name. It does
-not select tools, enforce policy, inspect model context, or provide an execution
-backend.
+not select tools, enforce policy, inspect model context, or choose an execution
+backend. Command-based tool callables may delegate to the separately injected
+`ExecutionBackend` port.
 
 This is intentionally simpler than the target tool architecture. There is no
-separate selector, policy, executor, approval flow, or execution backend today.
+separate selector, policy, executor, or approval flow today.
 
 ### ContextBuilder
 
@@ -207,23 +208,16 @@ fixed local read-only commands without arbitrary Git arguments or remote access;
 `git_diff` also disables external diff drivers and text conversion. The tool
 layer converts `CommandResult` back to the existing model-facing strings and
 preserves non-zero Git handling. Filesystem tools continue to use direct Python
-filesystem APIs; M4 does not introduce a filesystem backend.
+filesystem APIs; M5A still does not introduce a filesystem backend.
 
 ### Command execution
 
 `ExecutionBackend` is the current narrow process-execution port:
 
 ```text
-command-based coding tool
-          |
-          v
- ExecutionBackend.execute(argv, cwd, timeout)
-          |
-          v
- LocalExecutionBackend
-          |
-          v
- host subprocess
+                                      +-> LocalExecutionBackend -> host process
+command tool -> ExecutionBackend -----|
+                                      +-> DockerExecutionBackend -> container
 ```
 
 `CommandResult` contains only `exit_code`, `stdout`, and `stderr`. A normal
@@ -236,8 +230,43 @@ stdout/stderr, enforces the supplied timeout, uses the supplied cwd, and inherit
 the host environment. It runs with host process privileges and is **not a
 sandbox**; it is suitable only for trusted local execution. The coding-tool
 factory creates one local backend by default for backward compatibility, while
-allowing a different backend to be injected. A Docker backend and ToolPolicy
-remain future M5 work.
+allowing a different backend to be injected.
+
+`DockerExecutionBackend` is an explicitly selected adapter for practical
+container isolation. Its trusted constructor owns the host workspace, image,
+resource limits, numeric user/group IDs, and Docker executable; none of these
+are model-facing tool arguments. It defaults to `python:3.12-bookworm`, which
+matches the project's Python baseline and includes Git for `git_status` and
+`git_diff`. `--pull never` prevents implicit image downloads, so the image must
+be installed by the operator.
+
+For every call it resolves `cwd`, rejects paths and symlinks escaping the
+configured workspace, maps the workspace to writable `/workspace`, maps nested
+working directories below that path, and starts a fresh named container with:
+
+- `--rm`, network mode `none`, and no shell wrapping;
+- a read-only root filesystem and a writable, bounded `/tmp` tmpfs;
+- the host developer's numeric UID/GID, with a non-root fallback when the host
+  identity is root;
+- all Linux capabilities dropped and `no-new-privileges` enabled;
+- default limits of 512 MiB memory, 1 CPU, and 128 PIDs;
+- only fixed safe environment values (`HOME`, `TMPDIR`, locale, and Python
+  bytecode behavior), never host environment values or secret variables; and
+- exactly one host bind mount: the configured writable workspace. The Docker
+  socket, host root, devices, and host namespaces are never mounted or enabled.
+
+The Docker CLI is invoked directly with argv. Exit codes 125-127 and recognizable
+daemon failures are infrastructure `ExecutionError`s; ordinary application
+non-zero exits remain `CommandResult`s. On timeout the named container is
+force-removed with an explicit best-effort cleanup call. Docker CLI and daemon
+availability are checked only when this optional adapter is used. Unit tests do
+not pull images; integration tests require the configured image to exist locally
+and otherwise skip clearly.
+
+Filesystem tools remain host-side while command and Git tools use the selected
+backend. A Docker command can modify the same writable workspace immediately
+visible to host-side tools. ToolPolicy, approvals, and RiskLevel enforcement
+remain future M5B work.
 
 ## 3. Design principles
 
@@ -258,9 +287,9 @@ remain future M5 work.
   listener failure isolation.
 - Treat requested actions as untrusted until policy and execution boundaries
   have evaluated them.
-- Default future sandboxes to least privilege: no network, no secrets, non-root
-  execution, workspace-scoped files, resource limits, timeouts, and explicit
-  environment allowlists.
+- Default sandbox adapters to least privilege: no network or host secrets,
+  non-root execution, workspace-scoped files, resource limits, timeouts, and
+  explicit environment values.
 - Measure changes to context and execution strategies with benchmarks before
   claiming improvement.
 - Prefer inspectable, explicit control flow to framework-style indirection.
@@ -316,12 +345,12 @@ ports include `ContextCompiler`, `ToolExecutor`, `EventSink`, and `ToolPolicy`,
 introduced only as their milestones need them.
 
 Adapters implement those ports: for example, DeepSeek for `Model`, the current
-memory and JSONL adapters for `SessionStore`, the current local adapter for
-`ExecutionBackend`, Docker for a future execution adapter, or a terminal
-renderer for a future `EventSink`. Concrete adapters must not import or control
-one another. This avoids combinations such as a Docker backend coupled to a
-terminal renderer or a context compiler coupled to JSONL persistence, and keeps
-each integration replaceable and independently testable.
+memory and JSONL adapters for `SessionStore`, the current local and Docker
+adapters for `ExecutionBackend`, or a terminal renderer for a future `EventSink`.
+Concrete adapters must not import or control one another. This avoids
+combinations such as a Docker backend coupled to a terminal renderer or a
+context compiler coupled to JSONL persistence, and keeps each integration
+replaceable and independently testable.
 
 ## 6. State, task state, and context
 
@@ -384,10 +413,11 @@ with explicit trace reasons and failure events.
 Requested Session persistence has explicit failure behavior through
 `SessionStoreError`; unlike non-critical listener failures, store failures are
 not swallowed. Local process start/setup/timeout failures become
-`ExecutionError`, which follows the existing Agent tool-exception path. Normal
-non-zero process exits remain `CommandResult` values. **Target:** event sinks,
-metrics, policy, and future backends should likewise have explicit failure
-behavior. Where recovery is reasonable,
+`ExecutionError`, which follows the existing Agent tool-exception path. Docker
+CLI, daemon, container-start, and timeout failures use the same error boundary.
+Normal non-zero process exits remain `CommandResult` values. **Target:** event
+sinks, metrics, policy, and future backends should likewise have explicit
+failure behavior. Where recovery is reasonable,
 backend or sandbox failure should become a structured tool failure instead of
 destroying the whole run. Durable session lifecycle and runtime lifecycle should
 also be separable. Isolation must not hide failures: errors remain observable.
@@ -395,23 +425,20 @@ also be separable. Isolation must not hide failures: errors remain observable.
 ## 9. Security boundary
 
 **Current:** command-based coding tools use the replaceable `ExecutionBackend`
-port, whose default `LocalExecutionBackend` invokes a host subprocess. It sets
-the working directory and a timeout, but it does not provide container or OS
-isolation, filter the inherited environment, disable network access, prevent
-arbitrary process behavior, or enforce resource limits. Workspace path checks on
-filesystem tools and read-only fixed Git inspection commands do not turn local
-command execution into a secure sandbox.
+port. The default `LocalExecutionBackend` invokes a host subprocess, inherits the
+host environment, and provides no isolation; it is retained for lightweight,
+trusted local use. Explicit `DockerExecutionBackend` injection adds the practical
+container controls described above without changing Agent or tool semantics.
 
-Therefore the current local execution capability is **not a secure sandbox** and
-must not be described as one. In particular, secrets such as API credentials may
-be present in the parent environment and should not be exposed to untrusted
-commands.
+The local backend is **not a secure sandbox**. The Docker backend materially
+reduces exposure, but its writable workspace is intentionally mutable, Docker
+shares the host kernel, the Docker daemon remains a privileged host component,
+and container/runtime/kernel vulnerabilities remain possible. It must not be
+presented as a perfect boundary for hostile multi-tenant workloads.
 
-**Target:** M5 may add a Docker-backed execution adapter and tool policy with
-least-privilege defaults: no network or secrets by default, non-root execution,
-workspace-scoped mounts, resource limits, timeouts, and explicit environment
-allowlists. Docker is a future adapter, not a kernel dependency, and this
-high-level direction is not a security guarantee.
+**Target:** M5B may add ToolPolicy and approval decisions above execution.
+Network enablement, secret injection, and broader host access remain denied by
+the M5A adapter rather than becoming model-controlled options.
 
 ## 10. Roadmap
 
@@ -425,8 +452,10 @@ high-level direction is not a security guarantee.
   persistence is separate from the in-memory session model.
 - **M4 — ExecutionBackend abstraction:** implemented; command-based coding tools
   share a replaceable process-execution boundary.
-- **M5 — Docker Sandbox + ToolPolicy:** introduce controlled, least-privilege
-  execution and policy decisions.
+- **M5A — Docker Sandbox v0.1:** implemented; add explicit, constrained Docker
+  command execution while keeping local execution as the default.
+- **M5B — ToolPolicy:** planned; add allow, deny, and approval decisions without
+  changing backend isolation responsibilities.
 - **M6 — Context Compiler / token-aware context:** replace simple slicing with a
   measurable, token-aware projection strategy.
 - **M7 — Structured Tool Results + Context Compaction:** improve result semantics
