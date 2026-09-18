@@ -12,6 +12,7 @@ AgentEventType = Literal[
     "model_started",
     "model_completed",
     "model_failed",
+    "tool_policy_evaluated",
     "tool_started",
     "tool_completed",
     "agent_completed",
@@ -31,6 +32,8 @@ class AgentEventData(TypedDict, total=False):
     tool_call_count: int
     name: str
     call_id: str | None
+    risk_level: str
+    decision: Literal["allow", "deny", "require_approval"]
     arguments_preview: dict[str, str]
     is_error: bool
     duration_seconds: float

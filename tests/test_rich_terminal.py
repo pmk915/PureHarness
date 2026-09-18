@@ -44,6 +44,8 @@ def test_rich_terminal_renders_english_labels():
     output = _render_run("en")
 
     assert "Building context" in output
+    assert "Tool policy evaluated: add" in output
+    assert "decision: allow" in output
     assert "Calling tool: add" in output
     assert "a: 12" in output
     assert "Tool completed" in output
@@ -54,6 +56,8 @@ def test_rich_terminal_renders_chinese_labels():
     output = _render_run("zh-CN")
 
     assert "正在构建上下文" in output
+    assert "工具策略已评估：add" in output
+    assert "决策：allow" in output
     assert "正在调用工具：add" in output
     assert "a: 12" in output
     assert "工具执行完成" in output

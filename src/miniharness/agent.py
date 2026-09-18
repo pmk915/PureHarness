@@ -1,6 +1,8 @@
 from miniharness.messages import AgentItem, Message, ToolCall, ToolResult
 from miniharness.model import Model, ModelError
-from miniharness.tools import ToolRegistry
+from miniharness.tool_executor import ToolExecutor
+from miniharness.tool_policy import PolicyDecision
+from miniharness.tools import Tool, ToolRegistry
 from miniharness.trace import RunTrace, StepTrace
 from miniharness.events import AgentEvent, safe_arguments_preview
 from miniharness.context import ContextBuilder
@@ -20,9 +22,27 @@ class Agent:
         listeners: list[Callable[[AgentEvent], None]] | None = None,
         context_builder: ContextBuilder | None = None,
         session: Session | None = None,
+        tool_executor: ToolExecutor | None = None,
     ):
         self.model = model
-        self.tools = tools or ToolRegistry()
+        if tool_executor is None:
+            self.tools = (
+                tools
+                if tools is not None
+                else ToolRegistry()
+            )
+            self.tool_executor = ToolExecutor(self.tools)
+        else:
+            if (
+                tools is not None
+                and tools is not tool_executor.registry
+            ):
+                raise ValueError(
+                    "Agent tools and ToolExecutor registry must match."
+                )
+
+            self.tools = tool_executor.registry
+            self.tool_executor = tool_executor
         self.session = (
             session
             if session is not None
@@ -208,28 +228,53 @@ class Agent:
 
                     self.session.append(tool_call)
 
-                    self._emit(
-                        AgentEvent(
-                            type="tool_started",
-                            data={
-                                "step": step,
-                                "name": tool_call.name,
-                                "call_id": tool_call.call_id,
-                                "arguments_preview": (
-                                    safe_arguments_preview(
-                                        tool_call.arguments
-                                    )
-                                ),
-                            },
-                        )
-                    )
+                    tool_started_at: float | None = None
 
-                    tool_started_at = perf_counter()
+                    def on_policy_evaluated(
+                        tool: Tool,
+                        decision: PolicyDecision,
+                    ) -> None:
+                        self._emit(
+                            AgentEvent(
+                                type="tool_policy_evaluated",
+                                data={
+                                    "step": step,
+                                    "name": tool.name,
+                                    "call_id": tool_call.call_id,
+                                    "risk_level": tool.risk_level.value,
+                                    "decision": decision.value,
+                                },
+                            )
+                        )
+
+                    def on_tool_started(tool: Tool) -> None:
+                        nonlocal tool_started_at
+                        tool_started_at = perf_counter()
+
+                        self._emit(
+                            AgentEvent(
+                                type="tool_started",
+                                data={
+                                    "step": step,
+                                    "name": tool.name,
+                                    "call_id": tool_call.call_id,
+                                    "arguments_preview": (
+                                        safe_arguments_preview(
+                                            tool_call.arguments
+                                        )
+                                    ),
+                                },
+                            )
+                        )
 
                     try:
-                        result = self.tools.execute(
+                        result = self.tool_executor.execute(
                             tool_call.name,
                             tool_call.arguments,
+                            on_policy_evaluated=(
+                                on_policy_evaluated
+                            ),
+                            on_tool_started=on_tool_started,
                         )
 
                         content = str(result)
@@ -244,10 +289,6 @@ class Agent:
 
                         is_error = True
 
-                    duration_seconds = (
-                        perf_counter() - tool_started_at
-                    )
-
                     tool_result = ToolResult(
                         name=tool_call.name,
                         content=content,
@@ -259,24 +300,29 @@ class Agent:
 
                     tool_results.append(tool_result)
 
-                    self._emit(
-                        AgentEvent(
-                            type="tool_completed",
-                            data={
-                                "step": step,
-                                "name": tool_call.name,
-                                "call_id": tool_call.call_id,
-                                "is_error": is_error,
-                                "duration_seconds": round(
-                                    duration_seconds,
-                                    6,
-                                ),
-                                "result_character_count": len(
-                                    content
-                                ),
-                            },
+                    if tool_started_at is not None:
+                        duration_seconds = (
+                            perf_counter() - tool_started_at
                         )
-                    )
+
+                        self._emit(
+                            AgentEvent(
+                                type="tool_completed",
+                                data={
+                                    "step": step,
+                                    "name": tool_call.name,
+                                    "call_id": tool_call.call_id,
+                                    "is_error": is_error,
+                                    "duration_seconds": round(
+                                        duration_seconds,
+                                        6,
+                                    ),
+                                    "result_character_count": len(
+                                        content
+                                    ),
+                                },
+                            )
+                        )
 
                 self.trace.steps.append(
                     StepTrace(

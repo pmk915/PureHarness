@@ -7,6 +7,8 @@ from miniharness.tools import ADD_TOOL, Tool, ToolRegistry
 from miniharness.context import ContextBuilder
 from miniharness.session import Session
 from miniharness.session_store import JsonlSessionStore
+from miniharness.tool_executor import ToolExecutor
+from miniharness.tool_policy import PolicyDecision
 
 class FailingModel:
     def generate(self, messages, tools):
@@ -45,6 +47,14 @@ class MultiToolModel:
             role="assistant",
             content="done",
         )
+
+
+class StaticPolicy:
+    def __init__(self, decision):
+        self.decision = decision
+
+    def evaluate(self, tool, arguments):
+        return self.decision
 
 
 class RecordingContextBuilder(ContextBuilder):
@@ -196,6 +206,7 @@ def test_agent_stops_after_max_steps():
         "context_built",
         "model_started",
         "model_completed",
+        "tool_policy_evaluated",
         "tool_started",
         "tool_completed",
         "agent_failed",
@@ -241,11 +252,19 @@ def test_agent_converts_tool_error_to_observation():
         "Tool error: ValueError: simulated tool failure"
     )
 
-    tool_completed = next(
+    tool_events = [
         event
         for event in agent.events
-        if event.type == "tool_completed"
-    )
+        if event.type.startswith("tool_")
+    ]
+
+    assert [event.type for event in tool_events] == [
+        "tool_policy_evaluated",
+        "tool_started",
+        "tool_completed",
+    ]
+
+    tool_completed = tool_events[2]
 
     assert tool_completed.data["is_error"] is True
     assert (
@@ -385,6 +404,7 @@ def test_agent_records_tool_lifecycle_events():
         "context_built",
         "model_started",
         "model_completed",
+        "tool_policy_evaluated",
         "tool_started",
         "tool_completed",
         "context_build_started",
@@ -394,8 +414,17 @@ def test_agent_records_tool_lifecycle_events():
         "agent_completed",
     ]
 
-    tool_started = agent.events[5]
-    tool_completed = agent.events[6]
+    policy_evaluated = agent.events[5]
+    tool_started = agent.events[6]
+    tool_completed = agent.events[7]
+
+    assert policy_evaluated.data == {
+        "step": 0,
+        "name": "add",
+        "call_id": "1",
+        "risk_level": "read",
+        "decision": "allow",
+    }
 
     assert tool_started.data["step"] == 0
     assert tool_started.data["name"] == "add"
@@ -411,6 +440,108 @@ def test_agent_records_tool_lifecycle_events():
     assert tool_completed.data["is_error"] is False
     assert tool_completed.data["duration_seconds"] >= 0
     assert tool_completed.data["result_character_count"] == 2
+
+
+def test_agent_uses_replaceable_allow_policy():
+    call_count = 0
+
+    def add(a, b):
+        nonlocal call_count
+        call_count += 1
+        return a + b
+
+    registry = ToolRegistry()
+    registry.register(
+        Tool(
+            name="add",
+            description="Add two values.",
+            parameters=ADD_TOOL.parameters,
+            function=add,
+        )
+    )
+    executor = ToolExecutor(
+        registry,
+        StaticPolicy(PolicyDecision.ALLOW),
+    )
+    agent = Agent(
+        model=AddModel(),
+        tools=registry,
+        tool_executor=executor,
+        max_steps=2,
+    )
+
+    assert agent.run("calculate") == "The result is 29"
+    assert call_count == 1
+    assert agent.messages[2].is_error is False
+
+
+@pytest.mark.parametrize(
+    ("decision", "error_detail"),
+    [
+        (
+            PolicyDecision.DENY,
+            "Tool 'add' was denied by policy.",
+        ),
+        (
+            PolicyDecision.REQUIRE_APPROVAL,
+            "Tool 'add' requires approval and was not executed.",
+        ),
+    ],
+)
+def test_agent_observes_unauthorized_tool_as_error(
+    decision,
+    error_detail,
+):
+    call_count = 0
+
+    def add(a, b):
+        nonlocal call_count
+        call_count += 1
+        return a + b
+
+    registry = ToolRegistry()
+    registry.register(
+        Tool(
+            name="add",
+            description="Add two values.",
+            parameters=ADD_TOOL.parameters,
+            function=add,
+        )
+    )
+    executor = ToolExecutor(
+        registry,
+        StaticPolicy(decision),
+    )
+    agent = Agent(
+        model=AddModel(),
+        tools=registry,
+        tool_executor=executor,
+        max_steps=2,
+    )
+
+    result = agent.run("calculate")
+
+    assert result == (
+        "The result is Tool error: ToolPolicyError: "
+        f"{error_detail}"
+    )
+    assert call_count == 0
+    assert isinstance(agent.messages[2], ToolResult)
+    assert agent.messages[2].is_error is True
+    assert agent.messages[2].content == (
+        f"Tool error: ToolPolicyError: {error_detail}"
+    )
+
+    tool_events = [
+        event
+        for event in agent.events
+        if event.type.startswith("tool_")
+    ]
+
+    assert [event.type for event in tool_events] == [
+        "tool_policy_evaluated",
+    ]
+    assert tool_events[0].data["decision"] == decision.value
 
 
 def test_agent_notifies_event_listener():

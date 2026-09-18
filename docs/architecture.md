@@ -2,7 +2,7 @@
 
 This document separates the implementation that exists today from the intended
 architecture. Sections marked **Current** describe repository behavior through
-the M5A Docker-sandbox milestone. Sections marked **Target** describe
+the M5B ToolPolicy and ToolExecutor milestone. Sections marked **Target** describe
 direction, not implemented APIs.
 
 ## 1. Project positioning
@@ -33,7 +33,8 @@ Agent -> Session.snapshot() -> ContextBuilder -> Model
   |                                           |
   |                 Message or ToolCall(s) <--+
   |                           |
-  +-> ToolRegistry -> Tool callable
+  +-> ToolExecutor -> ToolRegistry lookup
+  |              `-> ToolPolicy -> Tool callable
   |
   +-> Session + RunTrace + AgentEvent listeners
 
@@ -64,7 +65,7 @@ are small local implementations used by tests and examples.
 and tools to the OpenAI Responses client format and reads
 `DEEPSEEK_API_KEY`. The Agent depends on the `Model` protocol, not this adapter.
 
-### Tool and ToolRegistry
+### Tool, ToolRegistry, ToolPolicy, and ToolExecutor
 
 `Tool` currently combines a name, description, JSON-schema-like parameters, and
 the Python callable that executes the tool. M2 adds explicit `category`,
@@ -72,14 +73,37 @@ the Python callable that executes the tool. M2 adds explicit `category`,
 read-only defaults for backward compatibility. `RiskLevel` contains only
 `READ`, `WRITE`, `EXECUTE`, and the reserved `DESTRUCTIVE` value.
 
-`ToolRegistry` registers tools by name, lists them for the model, and dispatches
-execution. Registration replaces an existing tool with the same name. It does
-not select tools, enforce policy, inspect model context, or choose an execution
-backend. Command-based tool callables may delegate to the separately injected
-`ExecutionBackend` port.
+`ToolRegistry` only registers tools by name, looks them up, and lists them for the
+model. Registration replaces an existing tool with the same name. It does not
+execute tools, select tools, enforce policy, inspect model context, or choose an
+execution backend.
 
-This is intentionally simpler than the target tool architecture. There is no
-separate selector, policy, executor, or approval flow today.
+`ToolExecutor` is the canonical runtime path from an Agent tool call to a tool
+implementation. It looks up the tool, asks the injected `ToolPolicy` to evaluate
+the tool and arguments, and invokes `Tool.execute()` only after an `ALLOW`
+decision. `DENY` and `REQUIRE_APPROVAL` raise a concise `ToolPolicyError` before
+the tool function can run. The Agent's existing exception handling turns that
+failure into `ToolResult(is_error=True)`, allowing the model to react.
+Optional synchronous decision/start callbacks let the Agent emit correctly
+ordered events; the executor does not store events or own result orchestration.
+
+`ToolPolicy` is a replaceable protocol. `DefaultToolPolicy` uses `RiskLevel`
+directly and has this complete mapping:
+
+| Risk level | Default decision |
+| --- | --- |
+| `READ` | `ALLOW` |
+| `WRITE` | `ALLOW` |
+| `EXECUTE` | `ALLOW` |
+| `DESTRUCTIVE` | `DENY` |
+
+`category` and `side_effects` remain descriptive metadata; the default mapping
+does not combine them into extra rules.
+
+`REQUIRE_APPROVAL` is a supported decision, but M5B has no approval handler, so
+it safely means the tool is not executed. Tool policy remains independent of
+backend selection. Command-based tool callables may delegate to the separately
+injected `ExecutionBackend` port only after policy authorization.
 
 ### ContextBuilder
 
@@ -141,15 +165,20 @@ delivered to callable listeners:
 agent_started
   context_build_started -> context_built
   model_started -> model_completed | model_failed
-  tool_started -> tool_completed       (zero or more tools)
+  tool_policy_evaluated                (zero or more tools)
+    ALLOW -> tool_started -> tool_completed
+    DENY | REQUIRE_APPROVAL -> no tool execution event
 agent_completed | agent_failed
 ```
 
 The lifecycle inside the loop repeats for each model step. `model_failed` is
-followed by `agent_failed`; a tool exception remains a `tool_completed` event
-with `is_error=True` so the model can observe and respond to the failure.
+followed by `agent_failed`; an allowed tool that starts and then raises retains a
+`tool_completed` event with `is_error=True`. A policy rejection creates a
+model-visible `ToolResult(is_error=True)` without `tool_started` or
+`tool_completed`, because tool execution never began. Events describe runtime
+execution while ToolResult describes the observation supplied to the model.
 
-Event payloads use the following M1 contract:
+Event payloads use the following current contract:
 
 | Event | Payload |
 | --- | --- |
@@ -159,12 +188,14 @@ Event payloads use the following M1 contract:
 | `model_started` | `step` |
 | `model_completed` | `step`, `output_kind`, `tool_call_count` |
 | `model_failed` | `step`, `reason`, `error_type` |
+| `tool_policy_evaluated` | `step`, `name`, `call_id`, `risk_level`, `decision` |
 | `tool_started` | `step`, `name`, `call_id`, `arguments_preview` |
 | `tool_completed` | `step`, `name`, `call_id`, `is_error`, `duration_seconds`, `result_character_count` |
 | `agent_completed` | `reason`, `step_count` |
 | `agent_failed` | `reason`, `step_count` |
 
-`arguments_preview` is deterministic, limited to eight fields and 120 characters
+Policy events contain no arguments. `arguments_preview` is deterministic,
+limited to eight fields and 120 characters
 per value, and recursively redacts obvious sensitive keys. Events do not include
 complete tool results, model reasoning, or hidden chain-of-thought. Result
 character count is metadata, not content.
@@ -265,8 +296,8 @@ and otherwise skip clearly.
 
 Filesystem tools remain host-side while command and Git tools use the selected
 backend. A Docker command can modify the same writable workspace immediately
-visible to host-side tools. ToolPolicy, approvals, and RiskLevel enforcement
-remain future M5B work.
+visible to host-side tools. `ToolPolicy` authorization happens above both local
+and Docker execution and does not inspect or select either backend.
 
 ## 3. Design principles
 
@@ -328,8 +359,8 @@ packages or a class for every box:
   execution.
 
 The current `Agent` spans coordination concerns that will be separated only when
-their roadmap milestones require it. M1 adds observability at the existing
-listener boundary; it does not introduce the later abstractions.
+their roadmap milestones require it. It delegates authorization and invocation
+to `ToolExecutor` while continuing to own runtime event and result orchestration.
 
 ## 5. Plugin boundary
 
@@ -339,10 +370,11 @@ include `Message`, `ToolCall`, `ToolResult`, `AgentEvent`, `StepTrace`, and
 Simple data objects should remain simple.
 
 Capabilities with plausible alternative implementations belong behind narrow
-ports. `Model`, `SessionStore`, and `ExecutionBackend` are protocol-shaped ports;
-context building is currently replaceable by constructor injection. Planned
-ports include `ContextCompiler`, `ToolExecutor`, `EventSink`, and `ToolPolicy`,
-introduced only as their milestones need them.
+ports. `Model`, `SessionStore`, `ExecutionBackend`, and `ToolPolicy` are
+protocol-shaped ports; context building is currently replaceable by constructor
+injection, and `ToolExecutor` is the small policy-enforced invocation service.
+Planned ports include `ContextCompiler` and `EventSink`, introduced only as their
+milestones need them.
 
 Adapters implement those ports: for example, DeepSeek for `Model`, the current
 memory and JSONL adapters for `SessionStore`, the current local and Docker
@@ -379,29 +411,35 @@ strategies remain swappable without modifying the Agent execution loop.
 **Current:** the flow is effectively:
 
 ```text
-ToolCall -> ToolRegistry -> Tool.function -> ToolResult
+ToolCall -> ToolExecutor -> ToolRegistry lookup -> ToolPolicy
+                                        |
+                                     ALLOW only
+                                        v
+                                  Tool.function -> ToolResult
 
 command Tool.function -> ExecutionBackend -> CommandResult
 ```
 
 The same `Tool` object carries the model-facing definition, capability metadata,
-and executable callable. Command-based coding tools delegate process execution
-through `ExecutionBackend`; other tools retain their existing direct callable
-implementations. The Agent catches execution exceptions and turns them into
-error results. Metadata remains descriptive: there is no policy or selective
-exposure consumer yet.
+and executable callable. `ToolExecutor` is the only production runtime invoker;
+the registry remains discovery and lookup only. The default policy consumes
+existing risk metadata without duplicating it. Command-based coding tools
+delegate process execution through `ExecutionBackend`; other tools retain their
+existing direct callable implementations. The Agent catches execution and policy
+exceptions and turns them into error results. There is no selective exposure
+consumer yet.
 
 **Target:** responsibilities should evolve, milestone by milestone, toward:
 
 ```text
-ToolSpec -> ToolSelector -> ToolPolicy -> ToolExecutor -> ExecutionBackend
+ToolSpec -> ToolSelector -> ToolExecutor -> ToolPolicy -> Tool -> ExecutionBackend
 ```
 
 `ToolSpec` describes an available operation. Selection limits what the model can
-see. Policy allows, denies, or requests approval. The executor manages invocation
-and structured results. The implemented backend port provides the process
-execution replacement point; the other concepts in this target flow remain
-future work.
+see. Policy allows, denies, or requests approval. The implemented executor
+manages authorized invocation, while the implemented backend port provides the
+process-execution replacement point. Separate `ToolSpec` and `ToolSelector`
+concepts remain future work.
 
 ## 8. Failure isolation
 
@@ -416,18 +454,32 @@ not swallowed. Local process start/setup/timeout failures become
 `ExecutionError`, which follows the existing Agent tool-exception path. Docker
 CLI, daemon, container-start, and timeout failures use the same error boundary.
 Normal non-zero process exits remain `CommandResult` values. **Target:** event
-sinks, metrics, policy, and future backends should likewise have explicit
-failure behavior. Where recovery is reasonable,
+sinks, metrics, and future backends should likewise have explicit failure
+behavior. Policy denial and approval-required decisions already become ordinary
+tool-error observations. Where recovery is reasonable,
 backend or sandbox failure should become a structured tool failure instead of
 destroying the whole run. Durable session lifecycle and runtime lifecycle should
 also be separable. Isolation must not hide failures: errors remain observable.
 
 ## 9. Security boundary
 
-**Current:** command-based coding tools use the replaceable `ExecutionBackend`
-port. The default `LocalExecutionBackend` invokes a host subprocess, inherits the
-host environment, and provides no isolation; it is retained for lightweight,
-trusted local use. Explicit `DockerExecutionBackend` injection adds the practical
+**Current:** every production Agent tool invocation passes through
+`ToolExecutor` and its injected `ToolPolicy` before `Tool.execute()`. This
+establishes the invariant that no tool side effect occurs before an `ALLOW`
+decision. For command tools, it also means `ExecutionBackend.execute()` cannot
+be reached after `DENY` or `REQUIRE_APPROVAL`.
+
+Policy is capability-level, not an argument security analyzer. `RiskLevel`
+describes a tool capability class, not the safety of every possible argument.
+The default policy allows `EXECUTE` because tests and builds are a core coding
+workflow; it does not parse argv, use command blacklists, or prove that an
+arbitrary command is safe. A destructive command passed to an allowed
+`run_command` tool can still damage the writable workspace.
+
+Command-based coding tools use the replaceable `ExecutionBackend` port. The
+default `LocalExecutionBackend` invokes a host subprocess, inherits the host
+environment, and provides no isolation; it is retained for lightweight, trusted
+local use. Explicit `DockerExecutionBackend` injection adds the practical
 container controls described above without changing Agent or tool semantics.
 
 The local backend is **not a secure sandbox**. The Docker backend materially
@@ -436,9 +488,13 @@ shares the host kernel, the Docker daemon remains a privileged host component,
 and container/runtime/kernel vulnerabilities remain possible. It must not be
 presented as a perfect boundary for hostile multi-tenant workloads.
 
-**Target:** M5B may add ToolPolicy and approval decisions above execution.
-Network enablement, secret injection, and broader host access remain denied by
-the M5A adapter rather than becoming model-controlled options.
+There is no real approval mechanism in M5B: `REQUIRE_APPROVAL` is a fail-closed
+state. Future mitigations may include argument-aware policy, staged workspaces,
+diff/apply approval, or restricted command profiles. Network enablement, secret
+injection, and broader host access remain denied by the M5A adapter rather than
+becoming model-controlled options. `ToolPolicy` knows nothing about local versus
+Docker execution, and `ExecutionBackend` remains responsible only for where and
+how a command runs.
 
 ## 10. Roadmap
 
@@ -454,8 +510,9 @@ the M5A adapter rather than becoming model-controlled options.
   share a replaceable process-execution boundary.
 - **M5A — Docker Sandbox v0.1:** implemented; add explicit, constrained Docker
   command execution while keeping local execution as the default.
-- **M5B — ToolPolicy:** planned; add allow, deny, and approval decisions without
-  changing backend isolation responsibilities.
+- **M5B — ToolPolicy + ToolExecutor:** implemented; add allow, deny, and
+  approval-required decisions without changing backend isolation
+  responsibilities.
 - **M6 — Context Compiler / token-aware context:** replace simple slicing with a
   measurable, token-aware projection strategy.
 - **M7 — Structured Tool Results + Context Compaction:** improve result semantics

@@ -33,6 +33,8 @@ product clone, a multi-agent framework, or an unrelated collection of tools.
     changes semantics.
 12. Prefer small, explicit Python abstractions over managers, factories,
     dependency-injection systems, metaprogramming, or plugin frameworks.
+13. All Agent runtime tool execution must pass through `ToolExecutor` and
+    `ToolPolicy`; do not invoke `Tool.function` directly from the Agent.
 
 ## Development workflow
 

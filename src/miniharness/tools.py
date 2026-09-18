@@ -37,14 +37,6 @@ class ToolRegistry:
 
         return self._tools[name]
 
-    def execute(
-        self,
-        name: str,
-        arguments: dict[str, object],
-    ) -> object:
-        tool = self.get(name)
-        return tool.execute(arguments)
-
     def list_tools(self) -> list[Tool]:
         return list(self._tools.values())
 

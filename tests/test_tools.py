@@ -28,19 +28,11 @@ def test_risk_level_has_only_m2_values():
     ]
 
 
-def test_registry_executes_registered_tool():
+def test_registry_gets_registered_tool():
     registry = ToolRegistry()
     registry.register(ADD_TOOL)
 
-    result = registry.execute(
-        "add",
-        {
-            "a": 12,
-            "b": 17,
-        },
-    )
-
-    assert result == 29
+    assert registry.get("add") is ADD_TOOL
 
 
 def test_registry_rejects_unknown_tool():

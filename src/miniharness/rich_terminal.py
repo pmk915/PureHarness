@@ -22,6 +22,9 @@ _TEXT = {
         "model_started": "● Requesting model...",
         "model_completed": "✓ Model response received",
         "tool_calls": "tool calls",
+        "tool_policy_evaluated": "◆ Tool policy evaluated",
+        "risk": "risk",
+        "decision": "decision",
         "tool_started": "◆ Calling tool",
         "tool_completed": "✓ Tool completed",
         "tool_failed": "✗ Tool failed",
@@ -42,6 +45,9 @@ _TEXT = {
         "model_started": "● 正在请求模型...",
         "model_completed": "✓ 已收到模型响应",
         "tool_calls": "工具调用",
+        "tool_policy_evaluated": "◆ 工具策略已评估",
+        "risk": "风险",
+        "decision": "决策",
         "tool_started": "◆ 正在调用工具",
         "tool_completed": "✓ 工具执行完成",
         "tool_failed": "✗ 工具执行失败",
@@ -113,6 +119,23 @@ class RichTerminalRenderer:
                     f"{text['separator']}"
                     f"{data['tool_call_count']}"
                 )
+
+        elif event.type == "tool_policy_evaluated":
+            self._print(
+                f"{text['tool_policy_evaluated']}"
+                f"{text['separator']}"
+                f"{data['name']}"
+            )
+            self._print(
+                f"  {text['risk']}"
+                f"{text['separator']}"
+                f"{data['risk_level']}"
+            )
+            self._print(
+                f"  {text['decision']}"
+                f"{text['separator']}"
+                f"{data['decision']}"
+            )
 
         elif event.type == "tool_started":
             self._print(
