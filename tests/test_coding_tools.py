@@ -14,7 +14,30 @@ from miniharness.coding_tools import (
     create_search_text_tool,
     create_write_file_tool,
 )
+from miniharness.execution import CommandResult
 from miniharness.tools import RiskLevel
+
+
+class FakeExecutionBackend:
+    def __init__(self, responses):
+        self.responses = iter(responses)
+        self.calls = []
+
+    def execute(
+        self,
+        argv,
+        *,
+        cwd,
+        timeout,
+    ):
+        self.calls.append(
+            {
+                "argv": argv,
+                "cwd": cwd,
+                "timeout": timeout,
+            }
+        )
+        return next(self.responses)
 
 
 def test_coding_tools_have_expected_metadata(tmp_path):
@@ -408,6 +431,86 @@ def test_run_command_tool_executes_in_workspace(
 
     assert "exit_code: 0" in result
     assert "hello from command" in result
+
+
+def test_coding_command_tools_share_injected_backend(
+    tmp_path,
+    monkeypatch,
+):
+    backend = FakeExecutionBackend(
+        [
+            CommandResult(
+                exit_code=0,
+                stdout="fake command output",
+                stderr="",
+            ),
+            CommandResult(
+                exit_code=0,
+                stdout=" M example.py\n",
+                stderr="",
+            ),
+            CommandResult(
+                exit_code=0,
+                stdout="fake diff\n",
+                stderr="",
+            ),
+        ]
+    )
+
+    def reject_host_execution(*args, **kwargs):
+        raise AssertionError("host subprocess should not run")
+
+    monkeypatch.setattr(
+        "miniharness.execution.subprocess.run",
+        reject_host_execution,
+    )
+    tools = {
+        tool.name: tool
+        for tool in create_coding_tools(
+            tmp_path,
+            execution_backend=backend,
+        )
+    }
+
+    command_output = tools["run_command"].execute(
+        {"argv": ["fake", "command"]}
+    )
+    status_output = tools["git_status"].execute({})
+    diff_output = tools["git_diff"].execute(
+        {"path": "example.py"}
+    )
+
+    assert command_output == (
+        "exit_code: 0\n"
+        "stdout:\nfake command output\n"
+        "stderr:\n"
+    )
+    assert status_output == " M example.py"
+    assert diff_output == "fake diff"
+    assert backend.calls == [
+        {
+            "argv": ["fake", "command"],
+            "cwd": tmp_path.resolve(),
+            "timeout": 10.0,
+        },
+        {
+            "argv": ["git", "status", "--short"],
+            "cwd": tmp_path.resolve(),
+            "timeout": 10.0,
+        },
+        {
+            "argv": [
+                "git",
+                "diff",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--",
+                "example.py",
+            ],
+            "cwd": tmp_path.resolve(),
+            "timeout": 10.0,
+        },
+    ]
 
 
 def test_git_status_reports_local_worktree(tmp_path):

@@ -2,7 +2,7 @@
 
 This document separates the implementation that exists today from the intended
 architecture. Sections marked **Current** describe repository behavior through
-the M3 durable-state-boundary milestone. Sections marked **Target** describe
+the M4 execution-backend milestone. Sections marked **Target** describe
 direction, not implemented APIs.
 
 ## 1. Project positioning
@@ -181,7 +181,7 @@ changing runtime execution.
 ### Coding tools
 
 `coding_tools.py` remains outside the runtime loop and exposes explicit factory
-functions assembled by `create_coding_tools(workspace)`:
+functions assembled by `create_coding_tools(workspace, execution_backend=...)`:
 
 | Tool | Category | Risk | Side effects |
 | --- | --- | --- | --- |
@@ -201,11 +201,43 @@ small UTF-8 files and skips binary, undecodable, large, noisy-directory, and
 symlink content. `apply_patch` performs one exact replacement only after proving
 the old text occurs exactly once.
 
-`git_status` and `git_diff` use fixed local read-only Git commands without
-arbitrary Git arguments or remote access; `git_diff` also disables external diff
-drivers and text conversion. `run_command` preserves the existing argv-based
-local subprocess behavior, workspace current directory, and timeout; it is not
-an execution backend or secure sandbox.
+`run_command`, `git_status`, and `git_diff` send argv, the resolved workspace,
+and a timeout through the same injected `ExecutionBackend`. Git tools retain
+fixed local read-only commands without arbitrary Git arguments or remote access;
+`git_diff` also disables external diff drivers and text conversion. The tool
+layer converts `CommandResult` back to the existing model-facing strings and
+preserves non-zero Git handling. Filesystem tools continue to use direct Python
+filesystem APIs; M4 does not introduce a filesystem backend.
+
+### Command execution
+
+`ExecutionBackend` is the current narrow process-execution port:
+
+```text
+command-based coding tool
+          |
+          v
+ ExecutionBackend.execute(argv, cwd, timeout)
+          |
+          v
+ LocalExecutionBackend
+          |
+          v
+ host subprocess
+```
+
+`CommandResult` contains only `exit_code`, `stdout`, and `stderr`. A normal
+non-zero exit remains a result. Failure to start a process, invalid local setup,
+or timeout raises `ExecutionError`; the backend does not create Agent-domain
+`ToolResult` objects or know how the Agent observes tool failures.
+
+`LocalExecutionBackend` uses argv execution without a shell, captures text
+stdout/stderr, enforces the supplied timeout, uses the supplied cwd, and inherits
+the host environment. It runs with host process privileges and is **not a
+sandbox**; it is suitable only for trusted local execution. The coding-tool
+factory creates one local backend by default for backward compatibility, while
+allowing a different backend to be injected. A Docker backend and ToolPolicy
+remain future M5 work.
 
 ## 3. Design principles
 
@@ -278,18 +310,18 @@ include `Message`, `ToolCall`, `ToolResult`, `AgentEvent`, `StepTrace`, and
 Simple data objects should remain simple.
 
 Capabilities with plausible alternative implementations belong behind narrow
-ports. `Model` and `SessionStore` are protocol-shaped ports; context building is
-currently replaceable by constructor injection. Planned ports include
-`ContextCompiler`, `ToolExecutor`, `ExecutionBackend`, `EventSink`, and
-`ToolPolicy`, introduced only as their milestones need them.
+ports. `Model`, `SessionStore`, and `ExecutionBackend` are protocol-shaped ports;
+context building is currently replaceable by constructor injection. Planned
+ports include `ContextCompiler`, `ToolExecutor`, `EventSink`, and `ToolPolicy`,
+introduced only as their milestones need them.
 
 Adapters implement those ports: for example, DeepSeek for `Model`, the current
-memory and JSONL adapters for `SessionStore`, Docker for a future
-`ExecutionBackend`, or a terminal renderer for a future `EventSink`. Concrete
-adapters must not import or control one another. This avoids combinations such
-as a Docker backend coupled to a terminal renderer or a context compiler
-coupled to JSONL persistence, and keeps each integration replaceable and
-independently testable.
+memory and JSONL adapters for `SessionStore`, the current local adapter for
+`ExecutionBackend`, Docker for a future execution adapter, or a terminal
+renderer for a future `EventSink`. Concrete adapters must not import or control
+one another. This avoids combinations such as a Docker backend coupled to a
+terminal renderer or a context compiler coupled to JSONL persistence, and keeps
+each integration replaceable and independently testable.
 
 ## 6. State, task state, and context
 
@@ -319,12 +351,16 @@ strategies remain swappable without modifying the Agent execution loop.
 
 ```text
 ToolCall -> ToolRegistry -> Tool.function -> ToolResult
+
+command Tool.function -> ExecutionBackend -> CommandResult
 ```
 
 The same `Tool` object carries the model-facing definition, capability metadata,
-and executable callable. The Agent catches execution exceptions and turns them
-into error results. Metadata is descriptive in M2: there is no policy or
-selective exposure consumer yet.
+and executable callable. Command-based coding tools delegate process execution
+through `ExecutionBackend`; other tools retain their existing direct callable
+implementations. The Agent catches execution exceptions and turns them into
+error results. Metadata remains descriptive: there is no policy or selective
+exposure consumer yet.
 
 **Target:** responsibilities should evolve, milestone by milestone, toward:
 
@@ -334,8 +370,9 @@ ToolSpec -> ToolSelector -> ToolPolicy -> ToolExecutor -> ExecutionBackend
 
 `ToolSpec` describes an available operation. Selection limits what the model can
 see. Policy allows, denies, or requests approval. The executor manages invocation
-and structured results. The backend provides the execution environment. This is
-direction only: none of these new abstractions is introduced in M2.
+and structured results. The implemented backend port provides the process
+execution replacement point; the other concepts in this target flow remain
+future work.
 
 ## 8. Failure isolation
 
@@ -344,18 +381,22 @@ listeners. Tool exceptions become `ToolResult(is_error=True)` observations so a
 model can react. Model request errors and maximum-step exhaustion stop the run
 with explicit trace reasons and failure events.
 
-Requested Session persistence already has explicit failure behavior through
+Requested Session persistence has explicit failure behavior through
 `SessionStoreError`; unlike non-critical listener failures, store failures are
-not swallowed. **Target:** event sinks, metrics, policy, and execution backends
-should likewise have explicit failure behavior. Where recovery is reasonable,
+not swallowed. Local process start/setup/timeout failures become
+`ExecutionError`, which follows the existing Agent tool-exception path. Normal
+non-zero process exits remain `CommandResult` values. **Target:** event sinks,
+metrics, policy, and future backends should likewise have explicit failure
+behavior. Where recovery is reasonable,
 backend or sandbox failure should become a structured tool failure instead of
 destroying the whole run. Durable session lifecycle and runtime lifecycle should
 also be separable. Isolation must not hide failures: errors remain observable.
 
 ## 9. Security boundary
 
-**Current:** `create_run_command_tool` invokes a local subprocess directly. It
-sets the working directory and a timeout, but it does not provide container or OS
+**Current:** command-based coding tools use the replaceable `ExecutionBackend`
+port, whose default `LocalExecutionBackend` invokes a host subprocess. It sets
+the working directory and a timeout, but it does not provide container or OS
 isolation, filter the inherited environment, disable network access, prevent
 arbitrary process behavior, or enforce resource limits. Workspace path checks on
 filesystem tools and read-only fixed Git inspection commands do not turn local
@@ -382,7 +423,8 @@ high-level direction is not a security guarantee.
   keeping coding capabilities outside the kernel.
 - **M3 — State Plane / SessionStore separation:** implemented; durable snapshot
   persistence is separate from the in-memory session model.
-- **M4 — ExecutionBackend abstraction:** define a replaceable execution boundary.
+- **M4 — ExecutionBackend abstraction:** implemented; command-based coding tools
+  share a replaceable process-execution boundary.
 - **M5 — Docker Sandbox + ToolPolicy:** introduce controlled, least-privilege
   execution and policy decisions.
 - **M6 — Context Compiler / token-aware context:** replace simple slicing with a

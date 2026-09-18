@@ -1,7 +1,10 @@
-import subprocess
 from collections.abc import Iterator
 from pathlib import Path
 
+from miniharness.execution import (
+    ExecutionBackend,
+    LocalExecutionBackend,
+)
 from miniharness.tools import RiskLevel, Tool
 
 
@@ -21,6 +24,7 @@ _DEFAULT_SEARCH_MATCHES = 50
 _MAX_SEARCH_MATCHES = 200
 _MAX_SEARCH_FILE_BYTES = 1_000_000
 _MATCH_PREVIEW_LENGTH = 160
+_DEFAULT_COMMAND_TIMEOUT_SECONDS = 10.0
 
 
 def _resolve_workspace_path(
@@ -86,20 +90,19 @@ def _iter_workspace_files(directory: Path) -> Iterator[Path]:
 def _run_git(
     workspace: Path,
     arguments: list[str],
+    execution_backend: ExecutionBackend,
 ) -> str:
-    result = subprocess.run(
+    result = execution_backend.execute(
         ["git", *arguments],
         cwd=workspace.resolve(),
-        capture_output=True,
-        text=True,
-        check=False,
+        timeout=_DEFAULT_COMMAND_TIMEOUT_SECONDS,
     )
 
-    if result.returncode != 0:
+    if result.exit_code != 0:
         detail = result.stderr.strip() or result.stdout.strip()
         raise RuntimeError(
             f"Git command failed with exit code "
-            f"{result.returncode}: {detail}"
+            f"{result.exit_code}: {detail}"
         )
 
     return result.stdout.rstrip()
@@ -528,8 +531,16 @@ def create_apply_patch_tool(workspace: Path) -> Tool:
 
 def create_run_command_tool(
     workspace: Path,
-    timeout_seconds: float = 10.0,
+    timeout_seconds: float = _DEFAULT_COMMAND_TIMEOUT_SECONDS,
+    *,
+    execution_backend: ExecutionBackend | None = None,
 ) -> Tool:
+    backend = (
+        execution_backend
+        if execution_backend is not None
+        else LocalExecutionBackend()
+    )
+
     def run_command(
         argv: list[str],
     ) -> str:
@@ -538,17 +549,14 @@ def create_run_command_tool(
                 "Command argv must not be empty."
             )
 
-        result = subprocess.run(
+        result = backend.execute(
             argv,
             cwd=workspace.resolve(),
-            capture_output=True,
-            text=True,
             timeout=timeout_seconds,
-            check=False,
         )
 
         return (
-            f"exit_code: {result.returncode}\n"
+            f"exit_code: {result.exit_code}\n"
             f"stdout:\n{result.stdout}\n"
             f"stderr:\n{result.stderr}"
         )
@@ -556,10 +564,10 @@ def create_run_command_tool(
     return Tool(
         name="run_command",
         description=(
-            "Run an argv command as a local subprocess with the workspace as "
-            "its current directory, returning exit code, stdout, and stderr. "
-            "Use it for tests and validation. It has a timeout and is not a "
-            "secure sandbox."
+            "Run an argv command through the configured execution backend "
+            "with the workspace as its current directory, returning exit "
+            "code, stdout, and stderr. Use it for tests and validation. The "
+            "default local backend has a timeout and is not a secure sandbox."
         ),
         parameters={
             "type": "object",
@@ -584,11 +592,22 @@ def create_run_command_tool(
     )
 
 
-def create_git_status_tool(workspace: Path) -> Tool:
+def create_git_status_tool(
+    workspace: Path,
+    *,
+    execution_backend: ExecutionBackend | None = None,
+) -> Tool:
+    backend = (
+        execution_backend
+        if execution_backend is not None
+        else LocalExecutionBackend()
+    )
+
     def git_status() -> str:
         output = _run_git(
             workspace,
             ["status", "--short"],
+            backend,
         )
 
         return output or "Working tree clean."
@@ -612,7 +631,17 @@ def create_git_status_tool(workspace: Path) -> Tool:
     )
 
 
-def create_git_diff_tool(workspace: Path) -> Tool:
+def create_git_diff_tool(
+    workspace: Path,
+    *,
+    execution_backend: ExecutionBackend | None = None,
+) -> Tool:
+    backend = (
+        execution_backend
+        if execution_backend is not None
+        else LocalExecutionBackend()
+    )
+
     def git_diff(path: str | None = None) -> str:
         arguments = [
             "diff",
@@ -625,7 +654,11 @@ def create_git_diff_tool(workspace: Path) -> Tool:
             relative = _relative_path(workspace, target)
             arguments.extend(["--", relative])
 
-        output = _run_git(workspace, arguments)
+        output = _run_git(
+            workspace,
+            arguments,
+            backend,
+        )
 
         return output or "No unstaged changes."
 
@@ -657,14 +690,31 @@ def create_git_diff_tool(workspace: Path) -> Tool:
 
 def create_coding_tools(
     workspace: Path,
+    *,
+    execution_backend: ExecutionBackend | None = None,
 ) -> list[Tool]:
+    backend = (
+        execution_backend
+        if execution_backend is not None
+        else LocalExecutionBackend()
+    )
+
     return [
         create_list_files_tool(workspace),
         create_search_text_tool(workspace),
         create_read_file_tool(workspace),
         create_write_file_tool(workspace),
         create_apply_patch_tool(workspace),
-        create_run_command_tool(workspace),
-        create_git_status_tool(workspace),
-        create_git_diff_tool(workspace),
+        create_run_command_tool(
+            workspace,
+            execution_backend=backend,
+        ),
+        create_git_status_tool(
+            workspace,
+            execution_backend=backend,
+        ),
+        create_git_diff_tool(
+            workspace,
+            execution_backend=backend,
+        ),
     ]
