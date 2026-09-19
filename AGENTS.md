@@ -85,6 +85,12 @@ product clone, a multi-agent framework, or an unrelated collection of tools.
     policy DENY must never invoke an ApprovalHandler.
 36. Durable resume must not reopen historical approvals or retry approval-gated
     calls, including calls approved before an uncertain interruption.
+37. Runtime events carry occurrence-time identity; renderers serialize or
+    display them without inventing event timestamps or controlling execution.
+38. Live-event wire schemas and persisted RunRecord schemas are distinct public
+    interfaces and must not silently replace one another.
+39. Machine-mode stdout contains only its documented JSON/JSONL payload;
+    diagnostics belong on stderr and command outcome remains an exit-code fact.
 
 ## Development workflow
 

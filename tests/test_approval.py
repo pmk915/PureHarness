@@ -283,6 +283,7 @@ def test_agent_records_ordered_approval_events_and_evidence(
         if event.type == "approval_requested"
     )
     assert approval_event.data["run_id"] == "approval-run"
+    assert approval_event.run_id == "approval-run"
     assert approval_event.data["call_id"] == "approval-call"
     assert executions == (["artifact"] if executed else [])
 

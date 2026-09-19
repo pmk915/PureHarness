@@ -90,6 +90,19 @@ Resume loads prior conversation state passively. It does not call the model or
 re-execute historical tools; the next ordinary user message starts a new Run.
 `/status`, `/help`, and `/exit` remain available without an API key.
 
+Use the versioned local machine interfaces when output will be consumed by a
+program:
+
+```bash
+miniharness run "fix the failing test" --output jsonl
+miniharness inspect run.json --json
+miniharness sessions --json
+```
+
+JSONL run mode writes only one JSON event per stdout line. Configuration and
+startup errors go to stderr and the process exit code remains authoritative.
+Interactive mode stays human-facing.
+
 When an injected policy returns `REQUIRE_APPROVAL`, interactive mode displays a
 redacted argument preview and asks for a one-time decision:
 
@@ -141,6 +154,9 @@ running the full matrix.
   `interrupted`, rolls Session back to its last durable logical boundary, and
   returns control to the prompt. An uncertain in-flight tool is never resumed
   or automatically retried.
+- **Live events are not persisted evidence.** JSONL exposes execution while it
+  happens; RunRecord is finalized evidence; replay is a read-only ordered view
+  derived from that evidence.
 
 ## Testing
 
@@ -165,3 +181,7 @@ MiniHarness intentionally omits exact call-stack continuation, automatic retry
 of interrupted tools, concurrent writers for one session, workspace
 relocation, session branching, a full-screen TUI, web services, multi-agent
 orchestration, and a plugin framework.
+
+The machine interface is a local schema-version-1 JSON/JSONL surface, not an
+OpenTelemetry exporter, remote logging service, RPC protocol, or interactive
+machine-control API. See the [observability guide](docs/observability.md).

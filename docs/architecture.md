@@ -2,7 +2,7 @@
 
 This document separates the implementation that exists today from the intended
 architecture. Sections marked **Current** describe repository behavior through
-the M15 human approval and action safety milestone. Sections marked **Target**
+the M16 observability and machine-interface milestone. Sections marked **Target**
 describe direction, not implemented APIs.
 
 ## 1. Project positioning
@@ -36,6 +36,8 @@ CLI/user input -> Agent -> Session.snapshot()                            +-> Mod
   +-> exposure validation -> ToolExecutor -> ToolRegistry lookup
                     -> ToolPolicy -> ApprovalHandler? -> Tool callable
   +-> Session + RunTrace + AgentEvent listeners
+                                  |-> human renderer
+                                  `-> JSONL renderer
                     |
                     +-> finalized RunRecord -> observational replay
 
@@ -555,6 +557,13 @@ REPL's input/output adapters. It is called only after `REQUIRE_APPROVAL`.
 One-shot `run` intentionally has no interactive handler and therefore fails
 closed rather than blocking a pipe or CI job.
 
+One-shot `run --output jsonl` replaces the human listener with the JSONL
+listener and suppresses final response prose. `inspect --json` writes the
+existing versioned RunRecord document, while `sessions --json` writes a
+versioned newest-first summary derived from durable metadata and RunRecords.
+Machine-mode stdout contains only JSON/JSONL; CLI diagnostics use stderr.
+Interactive mode is intentionally not a JSON control protocol.
+
 The default command-line provider adapter is DeepSeek, but the Agent continues
 to depend only on the Model protocol. Deterministic tests inject scripted model
 factories and make no network calls. Real-model trials are explicit, manual,
@@ -562,9 +571,11 @@ nondeterministic, and potentially paid.
 
 ### Events and listeners
 
-The Agent emits a structured lifecycle for agent, context, model, and tool
-phases. Events are retained on the Agent for the current run and synchronously
-delivered to callable listeners:
+The Agent emits a structured lifecycle for agent, context, model, approval, and
+tool phases. Every `AgentEvent` captures an aware UTC occurrence timestamp and
+the Agent attaches the active `run_id` and optional `session_id` before
+observers receive it. Events are retained on the Agent for the current run and
+synchronously delivered to callable listeners:
 
 ```text
 agent_started
@@ -576,7 +587,7 @@ agent_started
     REQUIRE_APPROVAL -> approval_requested
       APPROVE -> approval_granted -> tool_started -> tool_completed
       DENY -> approval_denied -> model-visible denial, no tool execution event
-agent_completed | agent_failed
+agent_completed | agent_interrupted | agent_failed
 ```
 
 The lifecycle inside the loop repeats for each model step. `model_failed` is
@@ -604,11 +615,12 @@ Event payloads use the following current contract:
 | `model_completed` | `step`, `output_kind`, `tool_call_count` |
 | `model_failed` | `step`, `reason`, `error_type` |
 | `tool_policy_evaluated` | `step`, `name`, `call_id`, `risk_level`, `decision` |
-| `approval_requested` | `run_id`, `step`, `name`, `call_id`, redacted `arguments_preview` |
-| `approval_granted` / `approval_denied` | `run_id`, `step`, `name`, `call_id`, `approval_decision` |
+| `approval_requested` | `step`, `name`, `call_id`, redacted `arguments_preview` |
+| `approval_granted` / `approval_denied` | `step`, `name`, `call_id`, `approval_decision` |
 | `tool_started` | `step`, `name`, `call_id`, `arguments_preview` |
 | `tool_completed` | `step`, `name`, `call_id`, `is_error`, `duration_seconds`, `result_character_count` |
 | `agent_completed` | `reason`, `step_count` |
+| `agent_interrupted` | `reason`, `step_count` |
 | `agent_failed` | `reason`, `step_count` |
 
 Policy events contain no arguments. `arguments_preview` is deterministic,
@@ -632,6 +644,20 @@ recent-error counts. When M9 actually replaces old tool units, it adds exactly
 one concise trajectory-compaction line; it never prints the derived history.
 For each `model_started`, it adds one concise selected/all tool count and
 approximate schema-token line without listing tool names or schemas.
+
+M16 adds an independent `JsonlEventRenderer`. It maps every current public event
+name explicitly into live-event wire schema version 1, preserves observation
+order, uses the event's occurrence timestamp, promotes `step` to an optional
+top-level field, and emits event-specific sanitized data under `payload`.
+Unknown events, missing run identity, non-finite numbers, and unsupported Python
+objects fail serialization rather than falling back to `repr`. JSONL rendering
+does not alter Agent control flow; the CLI detects listener failure after the
+run and reports an application/output error.
+
+The live wire schema is not the RunRecord persistence schema. Live events are
+transient execution observations; RunRecord remains finalized versioned
+evidence, and replay remains a side-effect-free ordered reconstruction of that
+evidence.
 
 ### Coding tools
 
@@ -1026,6 +1052,9 @@ for where and how a command runs.
 - **M15 — Human Approval & Action Safety:** implemented; resolve
   approval-required tool calls through a replaceable fail-closed handler, emit
   and persist structured decisions, and provide one-time terminal approval.
+- **M16 — Observability & Machine Interface:** implemented; expose occurrence-
+  time runtime events as versioned JSONL and provide JSON views of RunRecord
+  evidence and durable session summaries without coupling runtime to the CLI.
 
 Future work may address concurrent session writers, session migration or
 branching, workspace relocation, and stronger cancellation of synchronous

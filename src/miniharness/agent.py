@@ -113,6 +113,10 @@ class Agent:
 
 
     def _emit(self, event: AgentEvent) -> None:
+        if event.run_id is None and self._active_record_builder is not None:
+            event.run_id = self._active_record_builder.run_id
+        if event.session_id is None:
+            event.session_id = self.session_id
         self.events.append(event)
 
         for listener in self.listeners:

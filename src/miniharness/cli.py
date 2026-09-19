@@ -1,5 +1,6 @@
 import argparse
 import os
+import sys
 
 from collections.abc import Callable, Sequence
 from datetime import datetime, timezone
@@ -26,6 +27,12 @@ from miniharness.experiment import (
     write_experiment_results,
 )
 from miniharness.model import Model, ModelError
+from miniharness.observability import (
+    JsonlEventRenderer,
+    dumps_wire,
+    run_record_to_wire,
+    session_summaries_to_wire,
+)
 from miniharness.run_record import (
     RunRecord,
     RunRecordSerializationError,
@@ -128,16 +135,35 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="Write the finalized RunRecord as JSON.",
     )
+    run_parser.add_argument(
+        "--output",
+        dest="output_mode",
+        choices=("human", "jsonl"),
+        default="human",
+        help="Render human text or a versioned JSONL event stream.",
+    )
 
     inspect_parser = subparsers.add_parser(
         "inspect",
         help="Inspect a serialized RunRecord JSON file.",
     )
     inspect_parser.add_argument("record", type=Path)
+    inspect_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Write the versioned RunRecord JSON document.",
+    )
 
-    subparsers.add_parser(
+    sessions_parser = subparsers.add_parser(
         "sessions",
         help="List saved interactive sessions.",
+    )
+    sessions_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Write a versioned JSON session summary.",
     )
 
     resume_parser = subparsers.add_parser(
@@ -185,21 +211,39 @@ def main(
     model_factory: ModelFactory | None = None,
     input_fn: InputFunction = input,
     output_fn: OutputFunction = print,
+    error_fn: OutputFunction | None = None,
 ) -> int:
     parser = build_parser()
     arguments = parser.parse_args(argv)
     factory = model_factory or _default_model_factory
+    error_output = (
+        error_fn
+        if error_fn is not None
+        else (_stderr_output if output_fn is print else output_fn)
+    )
+    jsonl_mode = (
+        arguments.command == "run"
+        and arguments.output_mode == "jsonl"
+    )
 
     try:
         if arguments.command == "run":
             return _run_once(arguments, factory, output_fn)
         if arguments.command == "inspect":
-            return _inspect_record(arguments.record, output_fn)
+            return _inspect_record(
+                arguments.record,
+                output_fn,
+                as_json=arguments.json_output,
+            )
         if arguments.command == "benchmark":
             return _run_benchmark(arguments, factory, output_fn)
         durable_store = _create_durable_store()
         if arguments.command == "sessions":
-            return _list_sessions(durable_store, output_fn)
+            return _list_sessions(
+                durable_store,
+                output_fn,
+                as_json=arguments.json_output,
+            )
         if arguments.command == "resume":
             state = _load_durable_session(
                 durable_store,
@@ -225,13 +269,14 @@ def main(
             durable_store=durable_store,
         )
     except KeyboardInterrupt:
-        output_fn("Interrupted.")
+        if not jsonl_mode:
+            output_fn("Interrupted.")
         return 130
     except CLIError as exc:
-        output_fn(f"Error: {exc}")
+        error_output(f"Error: {exc}")
         return 2
     except Exception as exc:
-        output_fn(f"Error: {type(exc).__name__}: {exc}")
+        error_output(f"Error: {type(exc).__name__}: {exc}")
         return 1
 
 
@@ -407,11 +452,17 @@ def _save_durable_session(
 def _list_sessions(
     store: DurableSessionStore,
     output_fn: OutputFunction,
+    *,
+    as_json: bool = False,
 ) -> int:
     try:
         summaries = store.list_sessions()
     except SessionStoreError as exc:
         raise CLIError(str(exc)) from exc
+
+    if as_json:
+        output_fn(dumps_wire(session_summaries_to_wire(summaries)))
+        return 0
 
     if not summaries:
         output_fn("No saved sessions.")
@@ -454,32 +505,51 @@ def _run_once(
     output_fn: OutputFunction,
 ) -> int:
     workspace = _resolve_workspace(arguments.workspace)
+    jsonl_mode = arguments.output_mode == "jsonl"
+    renderer = (
+        JsonlEventRenderer(output_fn)
+        if jsonl_mode
+        else PlainTerminalRenderer(output_fn)
+    )
     agent = _create_agent(
         workspace,
         model_factory(arguments.model),
         session_id=str(uuid4()),
         output_fn=output_fn,
+        event_listener=renderer,
     )
     exit_code = 0
     try:
         response = agent.run(arguments.prompt)
     except Exception as exc:
-        output_fn(f"Run failed: {type(exc).__name__}: {exc}")
+        if not jsonl_mode:
+            output_fn(f"Run failed: {type(exc).__name__}: {exc}")
         exit_code = 1
     else:
-        output_fn(response)
+        if not jsonl_mode:
+            output_fn(response)
+
+    if jsonl_mode and agent.listener_errors:
+        first_error = agent.listener_errors[0]
+        raise CLIError(
+            "JSONL event output failed: "
+            f"{type(first_error).__name__}: {first_error}"
+        )
 
     if arguments.record is not None:
         if agent.last_run_record is None:
             raise CLIError("Agent produced no RunRecord to save")
         _write_run_record(arguments.record, agent.last_run_record)
-        output_fn(f"Run record: {arguments.record}")
+        if not jsonl_mode:
+            output_fn(f"Run record: {arguments.record}")
     return exit_code
 
 
 def _inspect_record(
     path: Path,
     output_fn: OutputFunction,
+    *,
+    as_json: bool = False,
 ) -> int:
     try:
         value = path.read_text(encoding="utf-8")
@@ -488,6 +558,10 @@ def _inspect_record(
         raise CLIError(f"Could not read RunRecord: {path}") from exc
     except RunRecordSerializationError as exc:
         raise CLIError(f"Invalid RunRecord: {exc}") from exc
+
+    if as_json:
+        output_fn(dumps_wire(run_record_to_wire(record)))
+        return 0
 
     output_fn(f"Run ID: {record.run_id}")
     output_fn(f"Session ID: {record.session_id or '(none)'}")
@@ -579,6 +653,7 @@ def _create_agent(
     output_fn: OutputFunction,
     session: Session | None = None,
     approval_handler: ApprovalHandler | None = None,
+    event_listener: Callable[[AgentEvent], None] | None = None,
 ) -> Agent:
     registry = ToolRegistry()
     for tool in create_coding_tools(workspace):
@@ -591,10 +666,18 @@ def _create_agent(
         model=model,
         tools=registry,
         tool_executor=tool_executor,
-        listeners=[PlainTerminalRenderer(output_fn)],
+        listeners=[
+            event_listener
+            if event_listener is not None
+            else PlainTerminalRenderer(output_fn)
+        ],
         session_id=session_id,
         session=session,
     )
+
+
+def _stderr_output(value: str) -> None:
+    print(value, file=sys.stderr)
 
 
 def _render_status(

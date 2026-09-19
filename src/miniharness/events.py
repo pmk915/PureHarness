@@ -1,7 +1,8 @@
 import json
 import re
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Literal, TypedDict
 
 
@@ -82,6 +83,11 @@ class AgentEventData(TypedDict, total=False):
 class AgentEvent:
     type: AgentEventType
     data: AgentEventData
+    timestamp: datetime = field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
+    run_id: str | None = None
+    session_id: str | None = None
 
 
 _REDACTED = "[REDACTED]"
