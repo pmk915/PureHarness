@@ -3,3 +3,6 @@ python-dotenv
 
 [cli]
 rich>=14.2
+
+[dev]
+pytest>=8

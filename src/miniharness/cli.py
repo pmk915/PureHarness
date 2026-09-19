@@ -22,7 +22,7 @@ from miniharness.experiment import (
     summarize_experiment,
     write_experiment_results,
 )
-from miniharness.model import Model
+from miniharness.model import Model, ModelError
 from miniharness.run_record import (
     RunRecord,
     RunRecordSerializationError,
@@ -157,7 +157,6 @@ def main(
 ) -> int:
     parser = build_parser()
     arguments = parser.parse_args(argv)
-    load_dotenv()
     factory = model_factory or _default_model_factory
 
     try:
@@ -197,12 +196,7 @@ def _run_interactive(
 ) -> int:
     resolved_workspace = _resolve_workspace(workspace)
     session_id = str(uuid4())
-    agent = _create_agent(
-        resolved_workspace,
-        model_factory(model_name),
-        session_id=session_id,
-        output_fn=output_fn,
-    )
+    agent: Agent | None = None
     runs = 0
     output_fn("MiniHarness")
     output_fn(f"Workspace: {resolved_workspace}")
@@ -244,6 +238,23 @@ def _run_interactive(
         if prompt.startswith("/"):
             output_fn(f"Unknown command: {prompt}")
             continue
+
+        if agent is None:
+            try:
+                agent = _create_agent(
+                    resolved_workspace,
+                    model_factory(model_name),
+                    session_id=session_id,
+                    output_fn=output_fn,
+                )
+            except CLIError as exc:
+                output_fn(f"Error: {exc}")
+                continue
+            except Exception as exc:
+                output_fn(
+                    f"Run failed: {type(exc).__name__}: {exc}"
+                )
+                continue
 
         runs += 1
         try:
@@ -401,7 +412,7 @@ def _create_agent(
 
 
 def _render_status(
-    agent: Agent,
+    agent: Agent | None,
     *,
     session_id: str,
     workspace: Path,
@@ -409,7 +420,7 @@ def _render_status(
     run_count: int,
     output_fn: OutputFunction,
 ) -> None:
-    record = agent.last_run_record
+    record = None if agent is None else agent.last_run_record
     output_fn(f"Session ID: {session_id}")
     output_fn(f"Workspace: {workspace}")
     output_fn(f"Model: {model_name}")
@@ -499,4 +510,8 @@ def _require_requested(
 
 
 def _default_model_factory(model_name: str) -> Model:
-    return DeepSeekModel(model=model_name)
+    load_dotenv()
+    try:
+        return DeepSeekModel(model=model_name)
+    except ModelError as exc:
+        raise CLIError(str(exc)) from exc

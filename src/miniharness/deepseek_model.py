@@ -15,9 +15,12 @@ class DeepSeekModel:
         model: str = "deepseek-v4-flash",
     ):
         self.model = model
+        api_key = os.environ.get("DEEPSEEK_API_KEY")
+        if not api_key:
+            raise ModelError("DEEPSEEK_API_KEY is not set.")
 
         self.client = OpenAI(
-            api_key=os.environ["DEEPSEEK_API_KEY"],
+            api_key=api_key,
             base_url="https://api.deepseek.com",
         )
 

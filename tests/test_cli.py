@@ -2,6 +2,7 @@ import tomllib
 
 import pytest
 
+import miniharness.cli as cli_module
 from miniharness.cli import main
 from miniharness.experiment import load_experiment_results
 from miniharness.messages import Message, ToolCall
@@ -104,6 +105,83 @@ def test_interactive_session_is_multi_turn_and_supports_commands(tmp_path):
     assert "Runs in session: 1" in rendered
     assert "Last end reason: completed" in rendered
     assert "Goodbye." in rendered
+
+
+def test_interactive_status_and_exit_do_not_require_api_key(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.setattr(
+        cli_module,
+        "load_dotenv",
+        lambda: pytest.fail("slash commands must not load API credentials"),
+    )
+    output = []
+
+    exit_code = main(
+        ["--workspace", str(tmp_path)],
+        model_factory=lambda name: pytest.fail(
+            "slash commands must not create a model"
+        ),
+        input_fn=_input(["/status", "/exit"]),
+        output_fn=output.append,
+    )
+
+    assert exit_code == 0
+    assert "Runs in session: 0" in output
+    assert "Last run ID: (none)" in output
+    assert output[-1] == "Goodbye."
+
+
+def test_interactive_help_and_exit_do_not_create_model(tmp_path):
+    output = []
+
+    exit_code = main(
+        ["--workspace", str(tmp_path)],
+        model_factory=lambda name: pytest.fail(
+            "slash commands must not create a model"
+        ),
+        input_fn=_input(["/help", "/exit"]),
+        output_fn=output.append,
+    )
+
+    assert exit_code == 0
+    assert any("Commands: /help, /status, /exit" in line for line in output)
+    assert output[-1] == "Goodbye."
+
+
+def test_interactive_lazily_creates_and_reuses_one_agent(tmp_path):
+    model = MultiTurnModel()
+    factory_calls = []
+    calls_seen_before_input = []
+    values = iter(
+        ["/status", "first request", "second request", "/exit"]
+    )
+
+    def model_factory(name):
+        factory_calls.append(name)
+        return model
+
+    def tracked_input(prompt):
+        calls_seen_before_input.append(len(factory_calls))
+        return next(values)
+
+    exit_code = main(
+        ["--workspace", str(tmp_path), "--model", "fake-model"],
+        model_factory=model_factory,
+        input_fn=tracked_input,
+        output_fn=lambda value: None,
+    )
+
+    assert exit_code == 0
+    assert calls_seen_before_input == [0, 0, 1, 1]
+    assert factory_calls == ["fake-model"]
+    assert len(model.contexts) == 2
+    assert sum(
+        isinstance(item, Message) and item.role == "user"
+        for item in model.contexts[1]
+    ) == 2
 
 
 def test_interactive_ctrl_d_exits_cleanly(tmp_path):
@@ -210,6 +288,25 @@ def test_one_shot_failure_has_nonzero_exit_without_traceback(tmp_path):
     assert any("Run failed: ModelError" in line for line in output)
 
 
+def test_one_shot_missing_api_key_has_friendly_error(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.setattr(cli_module, "load_dotenv", lambda: False)
+    output = []
+
+    exit_code = main(
+        ["run", "hello", "--workspace", str(tmp_path)],
+        output_fn=output.append,
+    )
+
+    assert exit_code == 2
+    assert output == ["Error: DEEPSEEK_API_KEY is not set."]
+    assert "KeyError" not in output[0]
+    assert "Traceback" not in output[0]
+
+
 def test_benchmark_command_reuses_harness_without_real_api(tmp_path):
     output_path = tmp_path / "results.jsonl"
     output = []
@@ -269,6 +366,7 @@ def test_console_script_is_registered():
 
     assert project["version"] == "0.1.0"
     assert project["readme"] == "README.md"
+    assert project["optional-dependencies"]["dev"] == ["pytest>=8"]
     assert project["scripts"]["miniharness"] == (
         "miniharness.cli:main"
     )

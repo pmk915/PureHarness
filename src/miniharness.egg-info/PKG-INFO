@@ -8,6 +8,8 @@ Requires-Dist: openai
 Requires-Dist: python-dotenv
 Provides-Extra: cli
 Requires-Dist: rich>=14.2; extra == "cli"
+Provides-Extra: dev
+Requires-Dist: pytest>=8; extra == "dev"
 
 # MiniHarness
 
