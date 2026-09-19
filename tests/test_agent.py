@@ -937,6 +937,47 @@ def test_agent_prepends_derived_task_state_without_storing_it():
     assert context_built.data["estimated_task_state_tokens"] > 0
 
 
+def test_agent_can_disable_model_facing_task_state():
+    model = RecordingModel()
+    agent = Agent(
+        model=model,
+        include_task_state=False,
+        run_id_factory=lambda: "task-state-disabled",
+    )
+
+    assert agent.run("plain context") == "done"
+
+    assert [
+        item.content
+        for item in model.contexts[0]
+        if isinstance(item, Message)
+    ] == ["plain context"]
+    context_built = next(
+        event
+        for event in agent.events
+        if event.type == "context_built"
+    )
+    assert context_built.data["estimated_task_state_tokens"] == 0
+    assert agent.last_run_record is not None
+    assert (
+        agent.last_run_record.model_invocations[
+            0
+        ].estimated_task_state_tokens
+        == 0
+    )
+
+
+def test_agent_rejects_non_boolean_task_state_toggle():
+    with pytest.raises(
+        ValueError,
+        match="include_task_state must be bool",
+    ):
+        Agent(
+            model=EchoModel(),
+            include_task_state=1,
+        )
+
+
 def test_context_budget_failure_stops_before_model_call():
     model = RecordingModel()
     agent = Agent(

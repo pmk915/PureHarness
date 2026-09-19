@@ -63,6 +63,12 @@ product clone, a multi-agent framework, or an unrelated collection of tools.
     selection, policy, execution, or task-success decisions.
 26. Observational replay must never invoke models, tools, policies, execution
     backends, or other side effects.
+27. Benchmark task success must come from an external deterministic oracle, not
+    from Agent completion or a model judgment.
+28. Every benchmark task/config case must use a fresh copied workspace; coding
+    tools must never bind to the canonical fixture.
+29. Benchmark code consumes RunRecord, and core runtime modules must not depend
+    on benchmark types or results.
 
 ## Development workflow
 

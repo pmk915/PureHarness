@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "id": "large_output",
+  "prompt": "Fix the sensor severity classification. Run the verifier to inspect its diagnostic report.",
+  "verification_argv": ["python3", "verify.py"],
+  "selective_tool_names": ["read_file", "search_text", "apply_patch", "run_command"],
+  "declared_required_tools": ["read_file", "apply_patch", "run_command"]
+}

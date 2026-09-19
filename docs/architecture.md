@@ -2,7 +2,7 @@
 
 This document separates the implementation that exists today from the intended
 architecture. Sections marked **Current** describe repository behavior through
-the M11 RunRecord and Observational Replay milestone. Sections marked **Target**
+the M12 deterministic benchmark milestone. Sections marked **Target**
 describe direction, not implemented APIs.
 
 ## 1. Project positioning
@@ -68,6 +68,11 @@ Each known completion or failure path finalizes one `RunRecord`. The existing
 the structured result from `agent.last_run_record`. Recording consumes facts
 already produced by context compilation, TaskState reduction, tool selection,
 execution, and the trace. It does not control any of those operations.
+
+TaskState model injection is enabled by default. Setting
+`include_task_state=False` keeps deriving the same deterministic TaskState for
+ToolSelectionContext and lifecycle statistics, but does not render or prepend
+the system message and records zero estimated TaskState tokens.
 
 ### Model
 
@@ -285,12 +290,14 @@ schema estimate, and estimated savings. None of these fields is an exact
 provider input-token count.
 
 `CompiledContext.items` remains the trajectory view and does not mix in
-TaskState. Immediately before a model call, the Agent prepends one derived
-`Message(role="system")` rendered from TaskState. That message is estimated
-separately through the same `TokenEstimator` as
+TaskState. By default, immediately before a model call the Agent prepends one
+derived `Message(role="system")` rendered from TaskState. That message is
+estimated separately through the same `TokenEstimator` as
 `estimated_task_state_tokens`; `estimated_history_tokens` and an optional
 history budget retain their trajectory-only meanings. M8 intentionally has no
-unified provider-request budget allocator.
+unified provider-request budget allocator. The M12-introduced disabled mode
+omits that message and records zero for this estimate without changing Session,
+trajectory compilation, TaskState derivation, or selector input.
 
 Tool selection does not belong to `CompiledContext`. Model request preparation
 keeps three independently measurable components: the derived TaskState message,
@@ -397,6 +404,64 @@ values in recorded step and tool-call order. Entries expose only recorded
 summaries and structured metadata. Replay imports no Agent, Model, Tool,
 ToolExecutor, ToolPolicy, registry, or ExecutionBackend and performs no I/O;
 it cannot rerun or reconstruct prompts, hidden details, or side effects.
+
+### Deterministic benchmark
+
+M12 adds a separate benchmark consumer around the runtime:
+
+```text
+Runtime
+  |
+  v
+RunRecord
+  |
+  v
+BenchmarkRunner
+  |-- fresh fixture workspace per task/config
+  |-- explicit BenchmarkConfig
+  |-- independent argv verification oracle
+  `-- BenchmarkResult
+         |
+         +-> JSONL
+         `-> per-config summary
+```
+
+`BenchmarkTask` is inspectable static metadata: task ID, prompt, canonical
+fixture path, verification argv, and optional curated tool-name metadata.
+`BenchmarkConfig` names one explicit combination of context strategy,
+ToolResult projection, TaskState injection, trajectory compaction, and tool
+exposure. The four standard configurations are `raw_baseline`,
+`budget_only`, `context_engineered`, and `full_miniharness`; they are not
+generated as a factorial matrix.
+
+For each task/config pair, the runner copies the canonical fixture into a new
+temporary directory and constructs coding tools bound only to that copy. It
+creates a fresh model through the caller's model factory and runs cases
+serially in task-then-config order. Agent failures that have a finalized
+RunRecord still proceed to verification. Missing fixtures, workspace-copy
+failures, invalid construction, verifier start failures, or an Agent failure
+without a RunRecord are benchmark infrastructure errors.
+
+Verification is a separate low-level argv execution with no shell and a
+centralized 30-second timeout. It does not pass through ToolSelector,
+ToolExecutor, or ToolPolicy because it judges the system under evaluation
+rather than acting as that system. A zero verifier exit code alone defines
+`task_success`. Therefore:
+
+```text
+end_reason = runtime outcome
+task_success = external oracle outcome
+
+completed != task_success
+```
+
+`BenchmarkResult` schema version 1 embeds the M11 RunRecord rather than
+recomputing runtime metrics, retains bounded verifier output previews, and
+records minimal stable configuration identity. JSONL output uses one result per
+line. Frozen per-config summaries report raw success counts/rates, end reasons,
+calls, steps, cumulative estimated model-facing token categories, and
+compaction counts. No composite score, provider-exact usage, model comparison,
+LLM judge, parallel runner, or generic RunRecordStore is present.
 
 ### Events and listeners
 
@@ -700,7 +765,7 @@ provider-neutral approximations. M9 compacts only old complete tool execution,
 not natural-language history, and it is an ephemeral context view rather than a
 persisted summary. M10 selectors are static/configuration-driven and do not
 infer required tools from TaskState. There is no automatic checkpointing,
-durable runtime event log, or replay.
+durable runtime event log, or execution replay.
 
 ## 7. Tool definition and execution
 
@@ -836,8 +901,10 @@ how a command runs.
   serializable structured record per run and inspect it deterministically
   without replaying models, tools, backends, or side effects. Session resume
   remains the separate M3 lifecycle responsibility.
-- **M12 — Context Benchmark and comparison:** compare context strategies using
-  task success, tokens, calls, steps, constraint violations, and recovery.
+- **M12 — Deterministic Context Benchmark:** implemented; compare four explicit
+  runtime/context configurations over isolated curated fixtures using an
+  external argv oracle, M11 RunRecords, JSONL results, and multidimensional
+  per-config summaries.
 
 After M12, supporting work may include GitHub Actions, README improvements, an
 architecture diagram, a benchmark report, a terminal demo, a security model,

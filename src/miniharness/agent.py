@@ -49,7 +49,11 @@ class Agent:
         tool_selector: ToolSelector | None = None,
         session_id: str | None = None,
         run_id_factory: Callable[[], str] | None = None,
+        include_task_state: bool = True,
     ):
+        if not isinstance(include_task_state, bool):
+            raise ValueError("include_task_state must be bool")
+
         self.model = model
         if tool_executor is None:
             self.tools = (
@@ -91,6 +95,7 @@ class Agent:
             else AllToolsSelector()
         )
         self.session_id = session_id
+        self.include_task_state = include_task_state
         self._run_id_factory = (
             run_id_factory
             if run_id_factory is not None
@@ -165,12 +170,16 @@ class Agent:
 
             try:
                 task_state = self.task_state_reducer.reduce(history)
-                task_state_item = render_task_state(task_state)
-                estimated_task_state_tokens = (
-                    self.context_builder.estimate_tokens(
-                        [task_state_item]
+                if self.include_task_state:
+                    task_state_item = render_task_state(task_state)
+                    estimated_task_state_tokens = (
+                        self.context_builder.estimate_tokens(
+                            [task_state_item]
+                        )
                     )
-                )
+                else:
+                    task_state_item = None
+                    estimated_task_state_tokens = 0
                 compiled_context = self.context_builder.compile(
                     history
                 )
@@ -204,10 +213,9 @@ class Agent:
 
                 raise
 
-            model_context = [
-                task_state_item,
-                *compiled_context.items,
-            ]
+            model_context = list(compiled_context.items)
+            if task_state_item is not None:
+                model_context.insert(0, task_state_item)
             context_event_data = {
                 "step": step,
                 "history_item_count": len(history),
