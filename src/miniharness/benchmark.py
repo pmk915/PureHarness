@@ -18,6 +18,7 @@ from miniharness.context import (
 from miniharness.execution import (
     ExecutionBackend,
     ExecutionError,
+    ExecutionTimeoutError,
     LocalExecutionBackend,
 )
 from miniharness.model import Model
@@ -45,6 +46,7 @@ BENCHMARK_TASK_SCHEMA_VERSION = 1
 DEFAULT_BENCHMARK_HISTORY_TOKEN_BUDGET = 8_000
 DEFAULT_VERIFICATION_TIMEOUT_SECONDS = 30.0
 DEFAULT_VERIFICATION_PREVIEW_CHARS = 2_000
+TRUSTED_VERIFIER_PLACEHOLDER = "{trusted_verifier}"
 
 _CONTEXT_STRATEGIES = frozenset({"full_history", "token_budget"})
 _COMPONENT_MODES = frozenset({"identity", "deterministic"})
@@ -59,12 +61,25 @@ class BenchmarkSerializationError(BenchmarkError):
     """Raised when benchmark data cannot be serialized or loaded."""
 
 
+class BenchmarkVerifierError(BenchmarkError):
+    """Raised when trusted verification infrastructure fails."""
+
+
+class BenchmarkVerifierTimeout(BenchmarkVerifierError):
+    """Raised when trusted verification exceeds its timeout."""
+
+
+class BenchmarkIntegrityError(BenchmarkError):
+    """Raised when trusted benchmark inputs change during a case."""
+
+
 @dataclass(frozen=True)
 class BenchmarkTask:
     task_id: str
     prompt: str
     fixture_path: Path
     verification_argv: tuple[str, ...]
+    trusted_verifier_path: Path | None = None
     selective_tool_names: tuple[str, ...] = ()
     declared_required_tools: tuple[str, ...] = ()
 
@@ -72,11 +87,33 @@ class BenchmarkTask:
         _validate_non_empty_text("task_id", self.task_id)
         _validate_non_empty_text("prompt", self.prompt)
         object.__setattr__(self, "fixture_path", Path(self.fixture_path))
+        if self.trusted_verifier_path is not None:
+            object.__setattr__(
+                self,
+                "trusted_verifier_path",
+                Path(self.trusted_verifier_path),
+            )
         _validate_string_tuple(
             "verification_argv",
             self.verification_argv,
             allow_empty=False,
         )
+        placeholder_count = self.verification_argv.count(
+            TRUSTED_VERIFIER_PLACEHOLDER
+        )
+        if self.trusted_verifier_path is None and placeholder_count:
+            raise ValueError(
+                "verification_argv cannot reference a missing "
+                "trusted_verifier_path"
+            )
+        if (
+            self.trusted_verifier_path is not None
+            and placeholder_count != 1
+        ):
+            raise ValueError(
+                "verification_argv must contain exactly one "
+                "trusted verifier placeholder"
+            )
         _validate_string_tuple(
             "selective_tool_names",
             self.selective_tool_names,
@@ -121,6 +158,11 @@ class BenchmarkTask:
                 verification_argv=_require_string_tuple(
                     data,
                     "verification_argv",
+                ),
+                trusted_verifier_path=_optional_relative_path(
+                    data,
+                    "trusted_verifier",
+                    base=task_directory,
                 ),
                 selective_tool_names=_optional_string_tuple(
                     data,
@@ -510,6 +552,29 @@ class BenchmarkRunner:
             raise BenchmarkError(
                 f"Benchmark fixture directory does not exist: {fixture}"
             )
+        trusted_verifier_snapshot: bytes | None = None
+        trusted_verifier_path: Path | None = None
+        if task.trusted_verifier_path is not None:
+            trusted_verifier_path = (
+                task.trusted_verifier_path.resolve()
+            )
+            if (
+                trusted_verifier_path == fixture
+                or fixture in trusted_verifier_path.parents
+            ):
+                raise BenchmarkError(
+                    "Trusted verifier must be outside the Agent workspace "
+                    "fixture"
+                )
+            try:
+                trusted_verifier_snapshot = (
+                    trusted_verifier_path.read_bytes()
+                )
+            except OSError as exc:
+                raise BenchmarkError(
+                    "Could not read trusted verifier: "
+                    f"{trusted_verifier_path}"
+                ) from exc
         if (
             self.workspace_parent is not None
             and not self.workspace_parent.is_dir()
@@ -581,14 +646,57 @@ class BenchmarkRunner:
                     "Agent completed without producing a RunRecord"
                 )
 
+            verification_argv = list(task.verification_argv)
+            if (
+                trusted_verifier_path is not None
+                and trusted_verifier_snapshot is not None
+            ):
+                try:
+                    current_verifier = trusted_verifier_path.read_bytes()
+                except OSError as exc:
+                    raise BenchmarkIntegrityError(
+                        "Trusted verifier became unreadable during "
+                        "Agent execution"
+                    ) from exc
+                if current_verifier != trusted_verifier_snapshot:
+                    raise BenchmarkIntegrityError(
+                        "Trusted verifier changed during Agent execution"
+                    )
+
+                verifier_copy = (
+                    Path(temporary_path)
+                    / "trusted-verifier"
+                    / trusted_verifier_path.name
+                )
+                try:
+                    verifier_copy.parent.mkdir()
+                    verifier_copy.write_bytes(trusted_verifier_snapshot)
+                except OSError as exc:
+                    raise BenchmarkError(
+                        "Could not materialize trusted verifier"
+                    ) from exc
+                verification_argv = [
+                    (
+                        str(verifier_copy)
+                        if item == TRUSTED_VERIFIER_PLACEHOLDER
+                        else item
+                    )
+                    for item in verification_argv
+                ]
+
             try:
                 verification = self.verification_backend.execute(
-                    list(task.verification_argv),
+                    verification_argv,
                     cwd=workspace,
                     timeout=self.verification_timeout_seconds,
                 )
+            except ExecutionTimeoutError as exc:
+                raise BenchmarkVerifierTimeout(
+                    "Benchmark verification timed out after "
+                    f"{self.verification_timeout_seconds} seconds"
+                ) from exc
             except ExecutionError as exc:
-                raise BenchmarkError(
+                raise BenchmarkVerifierError(
                     "Benchmark verification could not be executed"
                 ) from exc
 
@@ -963,3 +1071,25 @@ def _optional_string_tuple(
             f"{key} must contain non-empty text"
         )
     return tuple(value)
+
+
+def _optional_relative_path(
+    data: dict[str, object],
+    key: str,
+    *,
+    base: Path,
+) -> Path | None:
+    value = data.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value:
+        raise BenchmarkSerializationError(
+            f"{key} must be non-empty text"
+        )
+
+    relative = Path(value)
+    if relative.is_absolute() or ".." in relative.parts:
+        raise BenchmarkSerializationError(
+            f"{key} must be a safe relative path"
+        )
+    return base / relative

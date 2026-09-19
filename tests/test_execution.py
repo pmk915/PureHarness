@@ -4,6 +4,7 @@ import pytest
 
 from miniharness.execution import (
     ExecutionError,
+    ExecutionTimeoutError,
     LocalExecutionBackend,
 )
 
@@ -65,13 +66,13 @@ def test_local_execution_backend_uses_supplied_cwd(
     assert result.stdout.strip() == str(tmp_path.resolve())
 
 
-def test_local_execution_backend_timeout_is_execution_error(
+def test_local_execution_backend_timeout_is_distinct_execution_error(
     tmp_path,
 ):
     backend = LocalExecutionBackend()
 
     with pytest.raises(
-        ExecutionError,
+        ExecutionTimeoutError,
         match="Command timed out",
     ):
         backend.execute(

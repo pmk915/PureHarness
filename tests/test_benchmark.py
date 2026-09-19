@@ -11,10 +11,14 @@ from miniharness.benchmark import (
     BENCHMARK_RESULT_SCHEMA_VERSION,
     BenchmarkConfig,
     BenchmarkError,
+    BenchmarkIntegrityError,
     BenchmarkResult,
     BenchmarkRunner,
     BenchmarkSerializationError,
     BenchmarkTask,
+    BenchmarkVerifierError,
+    BenchmarkVerifierTimeout,
+    TRUSTED_VERIFIER_PLACEHOLDER,
     default_benchmark_configs,
     load_benchmark_results,
     load_benchmark_tasks,
@@ -25,7 +29,10 @@ from miniharness.context import (
     ContextBuilder,
     TokenBudgetContextBuilder,
 )
-from miniharness.execution import CommandResult
+from miniharness.execution import (
+    CommandResult,
+    ExecutionTimeoutError,
+)
 from miniharness.messages import Message, ToolCall, ToolResult
 from miniharness.tool_result_projection import (
     DeterministicToolResultProjector,
@@ -60,7 +67,9 @@ def _fixture_task(tmp_path: Path) -> BenchmarkTask:
         "broken",
         encoding="utf-8",
     )
-    (fixture / "verify.py").write_text(
+    verifier = tmp_path / "trusted" / "verify.py"
+    verifier.parent.mkdir()
+    verifier.write_text(
         "from pathlib import Path\n"
         "value = Path('value.txt').read_text(encoding='utf-8')\n"
         "raise SystemExit(0 if value == 'fixed' else 1)\n",
@@ -70,7 +79,11 @@ def _fixture_task(tmp_path: Path) -> BenchmarkTask:
         task_id="fixture-task",
         prompt="Fix value.txt.",
         fixture_path=fixture,
-        verification_argv=(sys.executable, "verify.py"),
+        verification_argv=(
+            sys.executable,
+            TRUSTED_VERIFIER_PLACEHOLDER,
+        ),
+        trusted_verifier_path=verifier,
         selective_tool_names=("read_file", "write_file"),
         declared_required_tools=("write_file",),
     )
@@ -110,6 +123,8 @@ def test_benchmark_task_validates_static_metadata(tmp_path):
 
     assert task.verification_argv[0] == sys.executable
     assert task.fixture_path.is_dir()
+    assert task.trusted_verifier_path is not None
+    assert task.trusted_verifier_path.is_file()
 
     with pytest.raises(ValueError, match="task_id"):
         BenchmarkTask(
@@ -139,6 +154,13 @@ def test_task_loader_validates_schema_and_loads_curated_tasks(tmp_path):
         "multi_file",
         "simple_fix",
     ]
+    assert all(
+        task.trusted_verifier_path is not None
+        and task.trusted_verifier_path.is_file()
+        and task.fixture_path
+        not in task.trusted_verifier_path.parents
+        for task in tasks
+    )
 
     invalid = tmp_path / "invalid"
     invalid.mkdir()
@@ -271,6 +293,61 @@ def test_completed_agent_can_fail_external_oracle(tmp_path):
     assert result.verification_exit_code == 1
 
 
+def test_workspace_verifier_edit_cannot_forge_success(tmp_path):
+    task = _fixture_task(tmp_path)
+    assert task.trusted_verifier_path is not None
+    trusted_before = task.trusted_verifier_path.read_bytes()
+    model = ScriptedModel(
+        [
+            [
+                ToolCall(
+                    name="write_file",
+                    arguments={
+                        "path": "verify.py",
+                        "content": "raise SystemExit(0)\n",
+                    },
+                    call_id="forge-1",
+                )
+            ],
+            Message(role="assistant", content="done"),
+        ]
+    )
+
+    result = BenchmarkRunner(
+        lambda task, config: model
+    ).run_case(task, _config())
+
+    assert result.agent_end_reason == "completed"
+    assert result.task_success is False
+    assert task.trusted_verifier_path.read_bytes() == trusted_before
+
+
+def test_trusted_verifier_mutation_is_integrity_failure(tmp_path):
+    task = _fixture_task(tmp_path)
+    assert task.trusted_verifier_path is not None
+    trusted_path = task.trusted_verifier_path
+    trusted_before = trusted_path.read_bytes()
+
+    class MutatingModel:
+        def generate(self, messages, tools):
+            trusted_path.write_text(
+                "raise SystemExit(0)\n",
+                encoding="utf-8",
+            )
+            return Message(role="assistant", content="done")
+
+    try:
+        with pytest.raises(
+            BenchmarkIntegrityError,
+            match="Trusted verifier changed",
+        ):
+            BenchmarkRunner(
+                lambda task, config: MutatingModel()
+            ).run_case(task, _config())
+    finally:
+        trusted_path.write_bytes(trusted_before)
+
+
 def test_scripted_model_can_pass_external_oracle(tmp_path):
     task = _fixture_task(tmp_path)
     runner = BenchmarkRunner(
@@ -340,7 +417,7 @@ def test_large_output_fixture_records_tool_result_projection():
             [
                 ToolCall(
                     name="run_command",
-                    arguments={"argv": ["python3", "verify.py"]},
+                    arguments={"argv": ["python3", "diagnose.py"]},
                     call_id="verify-1",
                 )
             ],
@@ -594,10 +671,13 @@ def test_verifier_nonzero_is_task_failure_but_start_error_is_infrastructure(
 
     missing_verifier = replace(
         task,
-        verification_argv=("definitely-missing-miniharness-command",),
+        verification_argv=(
+            "definitely-missing-miniharness-command",
+            TRUSTED_VERIFIER_PLACEHOLDER,
+        ),
     )
     with pytest.raises(
-        BenchmarkError,
+        BenchmarkVerifierError,
         match="verification could not be executed",
     ):
         runner.run_case(missing_verifier, _config())
@@ -631,9 +711,62 @@ def test_verifier_uses_independent_backend_and_configured_timeout(tmp_path):
 
     assert result.task_success is True
     assert len(backend.calls) == 1
-    assert backend.calls[0][0] == task.verification_argv
+    assert backend.calls[0][0][0] == sys.executable
+    assert backend.calls[0][0][1] != (
+        str(task.trusted_verifier_path)
+    )
+    assert Path(backend.calls[0][0][1]).name == "verify.py"
     assert backend.calls[0][2] == 4.5
     assert backend.calls[0][1] != task.fixture_path
+
+
+def test_verifier_timeout_has_distinct_infrastructure_error(tmp_path):
+    task = _fixture_task(tmp_path)
+
+    class TimeoutBackend:
+        def execute(self, argv, *, cwd, timeout):
+            raise ExecutionTimeoutError("timed out")
+
+    runner = BenchmarkRunner(
+        lambda task, config: ScriptedModel(
+            [Message(role="assistant", content="done")]
+        ),
+        verification_backend=TimeoutBackend(),
+        verification_timeout_seconds=0.25,
+    )
+
+    with pytest.raises(
+        BenchmarkVerifierTimeout,
+        match="timed out after 0.25 seconds",
+    ):
+        runner.run_case(task, _config())
+
+
+def test_trusted_verifier_must_be_outside_fixture(tmp_path):
+    fixture = tmp_path / "fixture"
+    fixture.mkdir()
+    verifier = fixture / "verify.py"
+    verifier.write_text("raise SystemExit(0)\n", encoding="utf-8")
+    task = BenchmarkTask(
+        task_id="unsafe-verifier",
+        prompt="do nothing",
+        fixture_path=fixture,
+        verification_argv=(
+            sys.executable,
+            TRUSTED_VERIFIER_PLACEHOLDER,
+        ),
+        trusted_verifier_path=verifier,
+    )
+
+    with pytest.raises(
+        BenchmarkError,
+        match="outside the Agent workspace",
+    ):
+        BenchmarkRunner(
+            lambda task, config: ScriptedModel(
+                [Message(role="assistant", content="done")]
+            )
+        ).run_case(task, _config())
 
 
 def test_verification_output_is_bounded(tmp_path):

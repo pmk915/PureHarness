@@ -12,6 +12,7 @@ from miniharness.execution import (
     DEFAULT_DOCKER_IMAGE,
     DockerExecutionBackend,
     ExecutionError,
+    ExecutionTimeoutError,
 )
 
 
@@ -357,7 +358,7 @@ def test_docker_backend_timeout_forces_container_cleanup(
     )
 
     with pytest.raises(
-        ExecutionError,
+        ExecutionTimeoutError,
         match="Docker command timed out",
     ):
         _backend(tmp_path).execute(
@@ -551,7 +552,7 @@ def test_docker_integration_timeout_cleanup(
     )
 
     with pytest.raises(
-        ExecutionError,
+        ExecutionTimeoutError,
         match="Docker command timed out",
     ):
         backend.execute(

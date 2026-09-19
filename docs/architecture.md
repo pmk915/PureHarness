@@ -2,7 +2,7 @@
 
 This document separates the implementation that exists today from the intended
 architecture. Sections marked **Current** describe repository behavior through
-the M12 deterministic benchmark milestone. Sections marked **Target**
+the M13 v0.1 evidence and CLI milestone. Sections marked **Target**
 describe direction, not implemented APIs.
 
 ## 1. Project positioning
@@ -27,7 +27,7 @@ over a broad framework or a coding-agent product.
 
 ```text
                              +-> TaskStateReducer -> system state view --+
-user input -> Agent -> Session.snapshot()                                +-> Model
+CLI/user input -> Agent -> Session.snapshot()                            +-> Model
   |                          +-> Context compiler -> trajectory view ----+    ^
   |                                                                           |
   |              ToolRegistry -> ToolSelector -> selected tool schemas -------+
@@ -40,7 +40,15 @@ user input -> Agent -> Session.snapshot()                                +-> Mod
                     +-> finalized RunRecord -> observational replay
 
 External lifecycle -> SessionStore <-> Session -> Agent
+
+RunRecord -> inspect / observational replay
+
+External benchmark -> fresh Agent workspace -> trusted verifier -> Experiment
 ```
+
+The installed `miniharness` command is a thin composition layer around these
+components. CLI input, terminal rendering, benchmark selection, and provider
+construction do not enter the Agent kernel.
 
 ### Agent
 
@@ -435,12 +443,17 @@ exposure. The four standard configurations are `raw_baseline`,
 generated as a factorial matrix.
 
 For each task/config pair, the runner copies the canonical fixture into a new
-temporary directory and constructs coding tools bound only to that copy. It
+temporary directory and constructs coding tools bound only to that copy.
+Trusted verifier source lives outside the fixture. The runner snapshots it
+before Agent execution, verifies that the canonical source remains unchanged,
+and materializes the snapshot at a separate temporary path only after the Agent
+stops. Workspace-local verifier edits therefore cannot forge success. It
 creates a fresh model through the caller's model factory and runs cases
 serially in task-then-config order. Agent failures that have a finalized
 RunRecord still proceed to verification. Missing fixtures, workspace-copy
-failures, invalid construction, verifier start failures, or an Agent failure
-without a RunRecord are benchmark infrastructure errors.
+failures, invalid construction, verifier start/timeout failures, verifier
+integrity failures, or an Agent failure without a RunRecord are benchmark
+infrastructure errors.
 
 Verification is a separate low-level argv execution with no shell and a
 centralized 30-second timeout. It does not pass through ToolSelector,
@@ -462,6 +475,38 @@ line. Frozen per-config summaries report raw success counts/rates, end reasons,
 calls, steps, cumulative estimated model-facing token categories, and
 compaction counts. No composite score, provider-exact usage, model comparison,
 LLM judge, parallel runner, or generic RunRecordStore is present.
+
+### Experiment runner and CLI
+
+**Current:** `ExperimentRunner` composes the deterministic benchmark API into a
+serial repeated-trial matrix. Its ordering is repetition, task, then
+configuration. Every case still delegates to `BenchmarkRunner`, which creates a
+fresh model and workspace. `ExperimentResult` wraps the complete
+`BenchmarkResult` with model identity, one-based repetition, and monotonic case
+duration. Versioned JSONL is the machine-readable evidence format; per-config
+summaries report success, duration, runtime counts, estimated token totals, and
+compaction counts. Provider-exact usage is intentionally absent because the
+generic Model protocol does not currently expose it.
+
+`miniharness` provides three thin command paths plus interactive mode:
+
+```text
+miniharness                 one Session, repeated Agent.run() turns
+miniharness run PROMPT      one Agent run
+miniharness inspect PATH    read-only RunRecord inspection
+miniharness benchmark       BenchmarkRunner + ExperimentRunner
+```
+
+Interactive `/help`, `/status`, and `/exit` are CLI concerns. Structured Agent
+events feed a terminal renderer, and the renderer never controls execution. A
+Session spans interactive turns, while each turn has a distinct RunRecord.
+Ctrl+D exits cleanly; Ctrl+C is handled at the prompt/run boundary. Durable
+interactive resume and stronger interruption recovery are not v0.1 features.
+
+The default command-line provider adapter is DeepSeek, but the Agent continues
+to depend only on the Model protocol. Deterministic tests inject scripted model
+factories and make no network calls. Real-model trials are explicit, manual,
+nondeterministic, and potentially paid.
 
 ### Events and listeners
 
@@ -905,10 +950,14 @@ how a command runs.
   runtime/context configurations over isolated curated fixtures using an
   external argv oracle, M11 RunRecords, JSONL results, and multidimensional
   per-config summaries.
+- **M13 — v0.1 Evidence and CLI Release:** implemented; harden trusted
+  verifiers, add controlled repeated real-model experiment support and JSONL
+  evidence, provide an installed multi-turn CLI, and document/test/package the
+  release boundary.
 
-After M12, supporting work may include GitHub Actions, README improvements, an
-architecture diagram, a benchmark report, a terminal demo, a security model,
-limitations, and a v0.1 interview release.
+Post-v0.1 work may address durable interactive session lifecycle, stronger
+interruption semantics, persistent session lookup, resume UX, and crash
+recovery. These are future work, not current capabilities.
 
 ## 11. Non-goals for v0.1
 

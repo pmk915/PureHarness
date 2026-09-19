@@ -1,2 +1,5 @@
 openai
 python-dotenv
+
+[cli]
+rich>=14.2

@@ -69,6 +69,11 @@ product clone, a multi-agent framework, or an unrelated collection of tools.
     tools must never bind to the canonical fixture.
 29. Benchmark code consumes RunRecord, and core runtime modules must not depend
     on benchmark types or results.
+30. Trusted benchmark verifiers must remain outside Agent workspaces; workspace
+    edits must not be able to alter the oracle used to determine task success.
+31. The CLI is a thin adapter over runtime interfaces; the kernel must not
+    import CLI code, and one interactive Session may contain multiple distinct
+    Agent runs and RunRecords.
 
 ## Development workflow
 

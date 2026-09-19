@@ -6,6 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "miniharness"
 version = "0.1.0"
 description = "A minimal, inspectable agent harness built from first principles."
+readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "openai",
@@ -16,6 +17,9 @@ dependencies = [
 cli = [
     "rich>=14.2",
 ]
+
+[project.scripts]
+miniharness = "miniharness.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

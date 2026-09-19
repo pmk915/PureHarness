@@ -1,3 +1,10 @@
+import sys
+
+from pathlib import Path
+
+
+sys.path.insert(0, str(Path.cwd()))
+
 from pipeline import parse_numbers, text_average
 
 

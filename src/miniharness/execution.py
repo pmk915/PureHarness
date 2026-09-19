@@ -28,6 +28,10 @@ class ExecutionError(Exception):
     """Raised when a command could not be executed to completion."""
 
 
+class ExecutionTimeoutError(ExecutionError):
+    """Raised when command execution exceeds its configured timeout."""
+
+
 class ExecutionBackend(Protocol):
     def execute(
         self,
@@ -64,7 +68,7 @@ class LocalExecutionBackend:
                 check=False,
             )
         except subprocess.TimeoutExpired as exc:
-            raise ExecutionError(
+            raise ExecutionTimeoutError(
                 f"Command timed out after {timeout} seconds: {argv[0]}"
             ) from exc
         except (OSError, ValueError) as exc:
@@ -220,7 +224,7 @@ class DockerExecutionBackend:
                 if cleanup_error
                 else ""
             )
-            raise ExecutionError(
+            raise ExecutionTimeoutError(
                 "Docker command timed out after "
                 f"{timeout} seconds.{detail}"
             ) from exc
