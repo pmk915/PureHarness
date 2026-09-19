@@ -2,7 +2,7 @@
 
 This document separates the implementation that exists today from the intended
 architecture. Sections marked **Current** describe repository behavior through
-the M6 Context Compiler v1 milestone. Sections marked **Target** describe
+the M7 Structured Tool Output milestone. Sections marked **Target** describe
 direction, not implemented APIs.
 
 ## 1. Project positioning
@@ -30,6 +30,7 @@ user input
    |
    v
 Agent -> Session.snapshot() -> Context compiler -> CompiledContext -> Model
+                              (result projection)
   |                                                               |
   |                                     Message or ToolCall(s) <--+
   |                           |
@@ -114,14 +115,21 @@ delegates to `compile()` and returns its items. `RecentContextBuilder` and
 parallel legacy selection path.
 
 ```text
-Session.snapshot()
+Session.snapshot() (complete raw trajectory)
         |
         v
-Context compiler
-  |-- ContextUnit grouping
-  |-- TokenEstimator
-  |-- FullHistory | Recent | TokenBudget strategy
-  `-- optional historical-token budget
+ContextUnit grouping
+        |
+        v
+ToolResultProjector
+  |-- IdentityToolResultProjector
+  `-- DeterministicToolResultProjector
+        |
+        v
+TokenEstimator (model-facing representation)
+        |
+        v
+FullHistory | Recent | TokenBudget strategy
         |
         v
 CompiledContext.items -> Model
@@ -136,9 +144,31 @@ can distinguish them. Results must match an earlier call in the same unit;
 missing legacy `call_id` values are matched deterministically by tool name and
 order, while clearly unmatched results fail with `ContextCompileError`.
 
+After grouping raw history, the compiler projects each `ToolResult` into a
+fresh model-facing copy. `ToolResultProjector` is a narrow replaceable protocol.
+`IdentityToolResultProjector` supplies an unmodified-copy baseline, while the
+default `DeterministicToolResultProjector` leaves normal results unchanged and
+compacts results over 12,000 characters by retaining 6,000 leading and 4,000
+trailing characters around an explicit omission marker. The marker reports the
+omitted, original, and retained character counts. Projection changes only
+content; `name`, `call_id`, `is_error`, order, and tool-unit atomicity are
+preserved. The compacting projector is the default so the normal Agent path
+handles oversized results, while its threshold preserves existing small-result
+behavior and explicit identity injection preserves raw-text benchmarks.
+
+The raw `Session` objects are never changed. Projection is derived independently
+for each compilation, and the JSONL persistence representation continues to
+store the complete raw result. This result-level operation is not an LLM
+summary, `TaskState`, or compaction of an older trajectory. Head/tail retention
+is not semantic summarization and may omit important middle content. The token
+estimate remains provider-neutral rather than using a provider-specific
+tokenizer.
+
 The current strategies are:
 
-- **FullHistory:** include every unit in original order.
+- **FullHistory:** represent every semantic unit in original order. Its
+  model-facing result text may still be projected; inject the identity
+  projector when a raw-text benchmark baseline is required.
 - **Recent:** preserve the existing `max_items`-based recent-user-turn behavior,
   but expand selection only across whole semantic units.
 - **TokenBudget:** walk newest units backward, include the newest contiguous
@@ -146,14 +176,23 @@ The current strategies are:
   indivisible unit alone exceeds the budget, raise `ContextBudgetExceeded`
   rather than truncating it.
 
+Projection occurs before token estimation and strategy selection. Consequently,
+`TokenEstimator` estimates the actual model-facing `AgentItem` representation
+produced by the projector, not the raw `ToolResult`. This lets an otherwise
+oversized unit fit a `TokenBudget` without weakening the budget. If the newest
+atomic unit remains too large after projection, compilation still raises
+`ContextBudgetExceeded` and does not split or repeatedly truncate the unit.
+
 `TokenEstimator` is a replaceable protocol over a sequence of `AgentItem`s. The
 default `ApproximateTokenEstimator` deterministically serializes Message
-content, ToolCall names/arguments, and ToolResult content, then applies a simple
-character heuristic. `CompiledContext` reports the selected raw items, estimated
-history tokens, total/included/dropped unit counts, strategy, and optional
-history budget. These are approximate **historical trajectory** tokens only:
+content, ToolCall names/arguments, and projected ToolResult content, then
+applies a simple character heuristic. `CompiledContext` reports the selected
+model-facing items, estimated history tokens, total/included/dropped unit
+counts, strategy, optional history budget, and aggregate selected-result
+projection statistics: projected/compacted result counts and raw/projected
+character counts. These are approximate **historical trajectory** tokens only:
 system instructions, tool definitions, provider wrappers, and output-token
-reservation are deliberately outside M6's budget.
+reservation are deliberately outside the current budget.
 
 ### Session
 
@@ -229,7 +268,7 @@ Event payloads use the following current contract:
 | --- | --- |
 | `agent_started` | `history_item_count` before the new user message |
 | `context_build_started` | `step`, `history_item_count` |
-| `context_built` | `step`, history/context counts, strategy, estimated history tokens, total/included/dropped units, optional history budget |
+| `context_built` | `step`, history/context counts, strategy, estimated history tokens, total/included/dropped units, projected/compacted result counts, raw/projected result character counts, optional history budget |
 | `context_build_failed` | `step`, `reason`, `error_type` |
 | `model_started` | `step` |
 | `model_completed` | `step`, `output_kind`, `tool_call_count` |
@@ -254,7 +293,8 @@ consumer boundary; there is no event-sink framework or persistent event log.
 and Simplified Chinese templates. It imports Rich only from its adapter module,
 and Rich is provided by the `cli` optional dependency. The Agent neither imports
 Rich nor invokes terminal APIs. A renderer can be added or removed without
-changing runtime execution.
+changing runtime execution. Its context summary includes one concise count of
+compacted tool outputs.
 
 ### Coding tools
 
@@ -416,9 +456,10 @@ include `Message`, `ToolCall`, `ToolResult`, `AgentEvent`, `StepTrace`, and
 Simple data objects should remain simple.
 
 Capabilities with plausible alternative implementations belong behind narrow
-ports. `Model`, `SessionStore`, `ExecutionBackend`, `ToolPolicy`, and
-`TokenEstimator` are protocol-shaped ports. Context compilation strategies are
-replaceable by constructor injection, and `ToolExecutor` is the small
+ports. `Model`, `SessionStore`, `ExecutionBackend`, `ToolPolicy`,
+`TokenEstimator`, and `ToolResultProjector` are protocol-shaped ports. Context
+compilation strategies and result projection are replaceable by constructor
+injection, and `ToolExecutor` is the small
 policy-enforced invocation service. `EventSink` remains a planned port.
 
 Adapters implement those ports: for example, DeepSeek for `Model`, the current
@@ -439,20 +480,22 @@ TaskState = derived working state for the active task (planned; not present)
 Context   = per-inference projection sent to the model
 ```
 
-**Current:** `Session` stores complete ordered agent history. The compiler groups
-the isolated list returned by `Session.snapshot()` into atomic semantic units
-and produces a `CompiledContext` projection for each model call. FullHistory,
-Recent, and TokenBudget strategies never mutate Session. This in-memory snapshot
-is distinct from the complete durable snapshot written by
-`JsonlSessionStore.save()`; the external lifecycle still owns `session_id` and
-save/load timing.
+**Current:** `Session` stores complete ordered agent history, including full raw
+`ToolResult` text. The compiler groups the isolated list returned by
+`Session.snapshot()` into atomic semantic units, derives model-facing result
+copies, estimates those projected units, and produces a `CompiledContext` for
+each model call. FullHistory, Recent, and TokenBudget strategies never mutate
+Session. This in-memory snapshot is distinct from the complete durable snapshot
+written by `JsonlSessionStore.save()`; the external lifecycle still owns
+`session_id` and save/load timing.
 
-There is no summary, compaction item, `TaskState`, selective tool exposure,
-automatic checkpointing, durable runtime event log, or replay. Planned future
-boundaries are M7 structured/compact tool-output representation, M8 TaskState,
-M9 old-trajectory compaction, and M10 selective tool exposure. Any future
-derived state must remain reproducible or traceable without replacing Session as
-the source of truth.
+There is no summary item, `TaskState`, selective tool exposure, automatic
+checkpointing, durable runtime event log, or replay. M7 only performs
+deterministic result-level projection for the current model request; it does not
+compact old trajectory units. Planned future boundaries are M8 TaskState, M9
+old-trajectory compaction, and M10 selective tool exposure. Any future derived
+state must remain reproducible or traceable without replacing Session as the
+source of truth.
 
 ## 7. Tool definition and execution
 
@@ -565,8 +608,8 @@ how a command runs.
   responsibilities.
 - **M6 — Context Compiler v1:** implemented; select raw semantic units through
   measurable FullHistory, Recent, and TokenBudget strategies.
-- **M7 — Structured Tool Output:** improve oversized tool-output representation
-  without losing source history.
+- **M7 — Structured Tool Output:** implemented; deterministically project
+  oversized model-facing ToolResult text without losing raw Session history.
 - **M8 — Structured TaskState:** add explicit derived working state.
 - **M9 — Old-trajectory compaction:** compact earlier trajectory without
   replacing durable Session history.

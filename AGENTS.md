@@ -37,6 +37,9 @@ product clone, a multi-agent framework, or an unrelated collection of tools.
     `ToolPolicy`; do not invoke `Tool.function` directly from the Agent.
 14. Context compilation must not mutate Session, orphan ToolCall/ToolResult
     groups, or silently truncate an indivisible semantic unit to fit a budget.
+15. Model-facing ToolResult compaction is derived context state; preserve raw
+    results in Session and estimate the projected representation sent to the
+    model.
 
 ## Development workflow
 

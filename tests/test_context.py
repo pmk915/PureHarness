@@ -1,4 +1,5 @@
 from collections.abc import Sequence
+from copy import deepcopy
 
 import pytest
 
@@ -18,6 +19,10 @@ from miniharness.messages import (
     ToolResult,
 )
 from miniharness.session import Session
+from miniharness.tool_result_projection import (
+    DeterministicToolResultProjector,
+    IdentityToolResultProjector,
+)
 
 
 class ContentCostEstimator:
@@ -39,6 +44,32 @@ class ContentCostEstimator:
             key = first.name
 
         return self.costs[key]
+
+
+class ModelContentLengthEstimator:
+    def estimate(self, items):
+        return sum(
+            len(item.content)
+            if isinstance(item, (Message, ToolResult))
+            else 1
+            for item in items
+        )
+
+
+class FixedToolResultProjector:
+    def project(self, result):
+        return ToolResult(
+            name=result.name,
+            content="fixed projection",
+            call_id=result.call_id,
+            is_error=result.is_error,
+        )
+
+
+class MutatingToolResultProjector:
+    def project(self, result):
+        result.content = "mutated projection"
+        return result
 
 
 def _multi_tool_history() -> list[AgentItem]:
@@ -135,7 +166,204 @@ def test_full_history_preserves_items_order_and_statistics():
     assert compiled.dropped_units == 0
     assert compiled.strategy == "FullHistory"
     assert compiled.history_token_budget is None
+    assert compiled.projected_tool_results == 0
+    assert compiled.compacted_tool_results == 0
+    assert compiled.raw_tool_result_chars == 0
+    assert compiled.projected_tool_result_chars == 0
     assert builder.build(history) == history
+
+
+def test_small_tool_result_is_unchanged_with_projection_statistics():
+    history = [
+        ToolCall(name="add", arguments={}, call_id="1"),
+        ToolResult(name="add", content="42", call_id="1"),
+    ]
+
+    compiled = ContextBuilder().compile(history)
+    projected = compiled.items[1]
+
+    assert isinstance(projected, ToolResult)
+    assert projected.content == "42"
+    assert compiled.projected_tool_results == 1
+    assert compiled.compacted_tool_results == 0
+    assert compiled.raw_tool_result_chars == 2
+    assert compiled.projected_tool_result_chars == 2
+
+
+def test_large_tool_result_projection_does_not_mutate_session():
+    raw_content = "head" + "x" * 500 + "tail"
+    session = Session(
+        items=[
+            ToolCall(
+                name="read_file",
+                arguments={"path": "large.txt"},
+                call_id="1",
+            ),
+            ToolResult(
+                name="read_file",
+                content=raw_content,
+                call_id="1",
+                is_error=True,
+            ),
+        ]
+    )
+    before = deepcopy(session.snapshot())
+    builder = ContextBuilder(
+        tool_result_projector=(
+            DeterministicToolResultProjector(
+                max_chars=100,
+                head_chars=20,
+                tail_chars=20,
+            )
+        )
+    )
+
+    compiled = builder.compile(session.snapshot())
+    projected = compiled.items[1]
+
+    assert isinstance(projected, ToolResult)
+    assert projected.content != raw_content
+    assert projected.name == "read_file"
+    assert projected.call_id == "1"
+    assert projected.is_error is True
+    assert compiled.projected_tool_results == 1
+    assert compiled.compacted_tool_results == 1
+    assert compiled.raw_tool_result_chars == len(raw_content)
+    assert compiled.projected_tool_result_chars == len(
+        projected.content
+    )
+    assert session.snapshot() == before
+    assert session.items[1].content == raw_content
+
+
+def test_projector_cannot_mutate_raw_session_result_in_place():
+    session = Session(
+        items=[
+            ToolCall(name="read_file", arguments={}, call_id="1"),
+            ToolResult(
+                name="read_file",
+                content="raw output",
+                call_id="1",
+            ),
+        ]
+    )
+
+    compiled = ContextBuilder(
+        tool_result_projector=MutatingToolResultProjector()
+    ).compile(session.snapshot())
+
+    assert compiled.items[1].content == "mutated projection"
+    assert session.items[1].content == "raw output"
+
+
+@pytest.mark.parametrize(
+    "builder",
+    [
+        ContextBuilder(
+            tool_result_projector=FixedToolResultProjector()
+        ),
+        RecentContextBuilder(
+            max_items=10,
+            tool_result_projector=FixedToolResultProjector(),
+        ),
+        TokenBudgetContextBuilder(
+            ContextBudget(max_estimated_tokens=100),
+            ModelContentLengthEstimator(),
+            FixedToolResultProjector(),
+        ),
+    ],
+)
+def test_all_context_strategies_use_replaceable_projector(builder):
+    history = [
+        Message(role="user", content="inspect"),
+        ToolCall(
+            name="read_file",
+            arguments={},
+            call_id="1",
+        ),
+        ToolResult(
+            name="read_file",
+            content="raw output",
+            call_id="1",
+        ),
+        Message(role="assistant", content="done"),
+    ]
+
+    compiled = builder.compile(history)
+    result = next(
+        item
+        for item in compiled.items
+        if isinstance(item, ToolResult)
+    )
+
+    assert result.content == "fixed projection"
+    assert compiled.compacted_tool_results == 1
+
+
+def test_projection_turns_m6_budget_failure_into_success():
+    raw_content = "x" * 1_000
+    session = Session(
+        items=[
+            ToolCall(
+                name="read_file",
+                arguments={},
+                call_id="1",
+            ),
+            ToolResult(
+                name="read_file",
+                content=raw_content,
+                call_id="1",
+            ),
+        ]
+    )
+    before = deepcopy(session.snapshot())
+    budget = ContextBudget(max_estimated_tokens=200)
+
+    with pytest.raises(ContextBudgetExceeded):
+        TokenBudgetContextBuilder(
+            budget,
+            ModelContentLengthEstimator(),
+            IdentityToolResultProjector(),
+        ).compile(session.snapshot())
+
+    compiled = TokenBudgetContextBuilder(
+        budget,
+        ModelContentLengthEstimator(),
+        DeterministicToolResultProjector(
+            max_chars=100,
+            head_chars=20,
+            tail_chars=20,
+        ),
+    ).compile(session.snapshot())
+
+    assert compiled.estimated_tokens <= 200
+    assert compiled.compacted_tool_results == 1
+    assert compiled.items[1].content != raw_content
+    assert session.snapshot() == before
+    assert session.items[1].content == raw_content
+
+
+def test_budget_still_fails_when_projected_unit_is_too_large():
+    history = [
+        ToolCall(name="read_file", arguments={}, call_id="1"),
+        ToolResult(
+            name="read_file",
+            content="x" * 1_000,
+            call_id="1",
+        ),
+    ]
+    builder = TokenBudgetContextBuilder(
+        ContextBudget(max_estimated_tokens=10),
+        ModelContentLengthEstimator(),
+        DeterministicToolResultProjector(
+            max_chars=100,
+            head_chars=20,
+            tail_chars=20,
+        ),
+    )
+
+    with pytest.raises(ContextBudgetExceeded):
+        builder.compile(history)
 
 
 def test_recent_context_keeps_recent_user_turn():

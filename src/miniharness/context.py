@@ -10,6 +10,10 @@ from miniharness.messages import (
     ToolCall,
     ToolResult,
 )
+from miniharness.tool_result_projection import (
+    DeterministicToolResultProjector,
+    ToolResultProjector,
+)
 
 
 class ContextCompileError(RuntimeError):
@@ -78,6 +82,18 @@ class CompiledContext:
     dropped_units: int
     strategy: str
     history_token_budget: int | None = None
+    projected_tool_results: int = 0
+    compacted_tool_results: int = 0
+    raw_tool_result_chars: int = 0
+    projected_tool_result_chars: int = 0
+
+
+@dataclass(frozen=True)
+class _UnitProjectionStats:
+    projected_tool_results: int = 0
+    compacted_tool_results: int = 0
+    raw_tool_result_chars: int = 0
+    projected_tool_result_chars: int = 0
 
 
 class ContextBuilder:
@@ -86,23 +102,46 @@ class ContextBuilder:
     def __init__(
         self,
         token_estimator: TokenEstimator | None = None,
+        tool_result_projector: ToolResultProjector | None = None,
     ) -> None:
         self.token_estimator = (
             token_estimator
             if token_estimator is not None
             else ApproximateTokenEstimator()
         )
+        self.tool_result_projector = (
+            tool_result_projector
+            if tool_result_projector is not None
+            else DeterministicToolResultProjector()
+        )
+
+    def _prepare(
+        self,
+        history: Sequence[AgentItem],
+    ) -> tuple[
+        list[ContextUnit],
+        list[int],
+        list[_UnitProjectionStats],
+    ]:
+        raw_units = _group_context_units(history)
+        units, projection_stats = _project_context_units(
+            raw_units,
+            self.tool_result_projector,
+        )
+        costs = _estimate_units(units, self.token_estimator)
+
+        return units, costs, projection_stats
 
     def compile(
         self,
         history: Sequence[AgentItem],
     ) -> CompiledContext:
-        units = _group_context_units(history)
-        costs = _estimate_units(units, self.token_estimator)
+        units, costs, projection_stats = self._prepare(history)
 
         return _compiled_context(
             units,
             costs,
+            projection_stats,
             start=0,
             strategy=self.strategy,
         )
@@ -122,21 +161,24 @@ class RecentContextBuilder(ContextBuilder):
         self,
         max_items: int = 20,
         token_estimator: TokenEstimator | None = None,
+        tool_result_projector: ToolResultProjector | None = None,
     ) -> None:
         if max_items <= 0:
             raise ValueError(
                 "max_items must be greater than 0"
             )
 
-        super().__init__(token_estimator)
+        super().__init__(
+            token_estimator,
+            tool_result_projector,
+        )
         self.max_items = max_items
 
     def compile(
         self,
         history: Sequence[AgentItem],
     ) -> CompiledContext:
-        units = _group_context_units(history)
-        costs = _estimate_units(units, self.token_estimator)
+        units, costs, projection_stats = self._prepare(history)
         total_items = sum(len(unit.items) for unit in units)
 
         if total_items <= self.max_items:
@@ -155,6 +197,7 @@ class RecentContextBuilder(ContextBuilder):
         return _compiled_context(
             units,
             costs,
+            projection_stats,
             start=start,
             strategy=self.strategy,
         )
@@ -167,16 +210,19 @@ class TokenBudgetContextBuilder(ContextBuilder):
         self,
         budget: ContextBudget,
         token_estimator: TokenEstimator | None = None,
+        tool_result_projector: ToolResultProjector | None = None,
     ) -> None:
-        super().__init__(token_estimator)
+        super().__init__(
+            token_estimator,
+            tool_result_projector,
+        )
         self.budget = budget
 
     def compile(
         self,
         history: Sequence[AgentItem],
     ) -> CompiledContext:
-        units = _group_context_units(history)
-        costs = _estimate_units(units, self.token_estimator)
+        units, costs, projection_stats = self._prepare(history)
         start = len(units)
         estimated_tokens = 0
 
@@ -203,6 +249,7 @@ class TokenBudgetContextBuilder(ContextBuilder):
         return _compiled_context(
             units,
             costs,
+            projection_stats,
             start=start,
             strategy=self.strategy,
             history_token_budget=(
@@ -311,15 +358,96 @@ def _estimate_units(
     return costs
 
 
+def _project_context_units(
+    units: Sequence[ContextUnit],
+    projector: ToolResultProjector,
+) -> tuple[list[ContextUnit], list[_UnitProjectionStats]]:
+    projected_units = []
+    unit_stats = []
+
+    for unit in units:
+        projected_items: list[AgentItem] = []
+        projected_tool_results = 0
+        compacted_tool_results = 0
+        raw_tool_result_chars = 0
+        projected_tool_result_chars = 0
+
+        for item in unit.items:
+            if not isinstance(item, ToolResult):
+                projected_items.append(item)
+                continue
+
+            projection_input = ToolResult(
+                name=item.name,
+                content=item.content,
+                call_id=item.call_id,
+                is_error=item.is_error,
+            )
+            projected = projector.project(projection_input)
+            _validate_projected_tool_result(item, projected)
+            projected_items.append(projected)
+            projected_tool_results += 1
+            raw_tool_result_chars += len(item.content)
+            projected_tool_result_chars += len(
+                projected.content
+            )
+
+            if projected.content != item.content:
+                compacted_tool_results += 1
+
+        projected_units.append(
+            ContextUnit(items=tuple(projected_items))
+        )
+        unit_stats.append(
+            _UnitProjectionStats(
+                projected_tool_results=projected_tool_results,
+                compacted_tool_results=compacted_tool_results,
+                raw_tool_result_chars=raw_tool_result_chars,
+                projected_tool_result_chars=(
+                    projected_tool_result_chars
+                ),
+            )
+        )
+
+    return projected_units, unit_stats
+
+
+def _validate_projected_tool_result(
+    raw: ToolResult,
+    projected: ToolResult,
+) -> None:
+    if not isinstance(projected, ToolResult):
+        raise ContextCompileError(
+            "ToolResultProjector must return a ToolResult."
+        )
+
+    if (
+        projected.name != raw.name
+        or projected.call_id != raw.call_id
+        or projected.is_error is not raw.is_error
+    ):
+        raise ContextCompileError(
+            "ToolResultProjector must preserve name, call_id, "
+            "and is_error."
+        )
+
+    if not isinstance(projected.content, str):
+        raise ContextCompileError(
+            "Projected ToolResult content must be text."
+        )
+
+
 def _compiled_context(
     units: Sequence[ContextUnit],
     costs: Sequence[int],
+    projection_stats: Sequence[_UnitProjectionStats],
     *,
     start: int,
     strategy: str,
     history_token_budget: int | None = None,
 ) -> CompiledContext:
     selected_units = units[start:]
+    selected_stats = projection_stats[start:]
 
     return CompiledContext(
         items=[
@@ -332,6 +460,22 @@ def _compiled_context(
         included_units=len(selected_units),
         dropped_units=start,
         strategy=strategy,
+        projected_tool_results=sum(
+            stats.projected_tool_results
+            for stats in selected_stats
+        ),
+        compacted_tool_results=sum(
+            stats.compacted_tool_results
+            for stats in selected_stats
+        ),
+        raw_tool_result_chars=sum(
+            stats.raw_tool_result_chars
+            for stats in selected_stats
+        ),
+        projected_tool_result_chars=sum(
+            stats.projected_tool_result_chars
+            for stats in selected_stats
+        ),
         history_token_budget=history_token_budget,
     )
 

@@ -20,6 +20,7 @@ _TEXT = {
         "estimated_tokens": "estimated history tokens",
         "units": "units",
         "history_budget": "history token budget",
+        "compacted_results": "tool outputs compacted",
         "context_build_failed": "✗ Context build failed",
         "item_unit": "items",
         "separator": ": ",
@@ -47,6 +48,7 @@ _TEXT = {
         "estimated_tokens": "估算历史 tokens",
         "units": "单元",
         "history_budget": "历史 token 预算",
+        "compacted_results": "工具输出压缩",
         "context_build_failed": "✗ 上下文构建失败",
         "item_unit": "项",
         "separator": "：",
@@ -124,6 +126,11 @@ class RichTerminalRenderer:
                 f"{text['separator']}"
                 f"{data['included_units']}/"
                 f"{data['total_units']}"
+            )
+            self._print(
+                f"  {text['compacted_results']}"
+                f"{text['separator']}"
+                f"{data['compacted_tool_results']}"
             )
 
             if "history_token_budget" in data:

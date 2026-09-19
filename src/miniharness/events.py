@@ -34,6 +34,10 @@ class AgentEventData(TypedDict, total=False):
     included_units: int
     dropped_units: int
     history_token_budget: int
+    projected_tool_results: int
+    compacted_tool_results: int
+    raw_tool_result_chars: int
+    projected_tool_result_chars: int
     output_kind: Literal["message", "tool_calls"]
     tool_call_count: int
     name: str

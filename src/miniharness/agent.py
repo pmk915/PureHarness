@@ -158,6 +158,18 @@ class Agent:
                     compiled_context.included_units
                 ),
                 "dropped_units": compiled_context.dropped_units,
+                "projected_tool_results": (
+                    compiled_context.projected_tool_results
+                ),
+                "compacted_tool_results": (
+                    compiled_context.compacted_tool_results
+                ),
+                "raw_tool_result_chars": (
+                    compiled_context.raw_tool_result_chars
+                ),
+                "projected_tool_result_chars": (
+                    compiled_context.projected_tool_result_chars
+                ),
             }
 
             if compiled_context.history_token_budget is not None:

@@ -14,6 +14,9 @@ from miniharness.session import Session
 from miniharness.session_store import JsonlSessionStore
 from miniharness.tool_executor import ToolExecutor
 from miniharness.tool_policy import PolicyDecision
+from miniharness.tool_result_projection import (
+    DeterministicToolResultProjector,
+)
 
 class FailingModel:
     def generate(self, messages, tools):
@@ -138,6 +141,10 @@ def test_agent_records_lifecycle_events():
     assert context_built.data["total_units"] == 1
     assert context_built.data["included_units"] == 1
     assert context_built.data["dropped_units"] == 0
+    assert context_built.data["projected_tool_results"] == 0
+    assert context_built.data["compacted_tool_results"] == 0
+    assert context_built.data["raw_tool_result_chars"] == 0
+    assert context_built.data["projected_tool_result_chars"] == 0
     assert "history_token_budget" not in context_built.data
 
     model_completed = agent.events[4]
@@ -740,8 +747,77 @@ def test_agent_sends_compiled_context_items_and_emits_statistics():
         "total_units": 3,
         "included_units": 2,
         "dropped_units": 1,
+        "projected_tool_results": 0,
+        "compacted_tool_results": 0,
+        "raw_tool_result_chars": 0,
+        "projected_tool_result_chars": 0,
         "history_token_budget": 5,
     }
+
+
+def test_agent_sends_projected_tool_result_without_mutating_session():
+    raw_content = "start" + "x" * 500 + "finish"
+    session = Session(
+        items=[
+            ToolCall(
+                name="read_file",
+                arguments={"path": "large.txt"},
+                call_id="call-1",
+            ),
+            ToolResult(
+                name="read_file",
+                content=raw_content,
+                call_id="call-1",
+                is_error=True,
+            ),
+        ]
+    )
+    model = RecordingModel()
+    agent = Agent(
+        model=model,
+        session=session,
+        context_builder=ContextBuilder(
+            tool_result_projector=(
+                DeterministicToolResultProjector(
+                    max_chars=100,
+                    head_chars=20,
+                    tail_chars=20,
+                )
+            )
+        ),
+    )
+
+    assert agent.run("continue") == "done"
+
+    model_result = next(
+        item
+        for item in model.contexts[0]
+        if isinstance(item, ToolResult)
+    )
+    session_result = session.items[1]
+
+    assert isinstance(session_result, ToolResult)
+    assert model_result.content != raw_content
+    assert model_result.content.startswith(raw_content[:20])
+    assert model_result.content.endswith(raw_content[-20:])
+    assert model_result.name == session_result.name
+    assert model_result.call_id == session_result.call_id
+    assert model_result.is_error is session_result.is_error
+    assert session_result.content == raw_content
+
+    context_built = next(
+        event
+        for event in agent.events
+        if event.type == "context_built"
+    )
+    assert context_built.data["projected_tool_results"] == 1
+    assert context_built.data["compacted_tool_results"] == 1
+    assert context_built.data["raw_tool_result_chars"] == len(
+        raw_content
+    )
+    assert context_built.data["projected_tool_result_chars"] == len(
+        model_result.content
+    )
 
 
 def test_context_budget_failure_stops_before_model_call():
