@@ -23,6 +23,9 @@ from miniharness.tool_result_projection import (
     DeterministicToolResultProjector,
     IdentityToolResultProjector,
 )
+from miniharness.trajectory_compaction import (
+    IdentityTrajectoryCompactor,
+)
 
 
 class ContentCostEstimator:
@@ -481,6 +484,7 @@ def test_token_budget_never_splits_multi_tool_step():
     builder = TokenBudgetContextBuilder(
         ContextBudget(max_estimated_tokens=8),
         estimator,
+        trajectory_compactor=IdentityTrajectoryCompactor(),
     )
 
     compiled = builder.compile(history)

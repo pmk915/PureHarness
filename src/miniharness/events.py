@@ -46,6 +46,14 @@ class AgentEventData(TypedDict, total=False):
     compacted_tool_results: int
     raw_tool_result_chars: int
     projected_tool_result_chars: int
+    trajectory_compacted: bool
+    compacted_source_units: int
+    compacted_tool_actions: int
+    original_trajectory_estimated_tokens: int
+    compacted_trajectory_estimated_tokens: int
+    recent_raw_units: int
+    recent_raw_estimated_tokens: int
+    trajectory_compaction_strategy: str
     output_kind: Literal["message", "tool_calls"]
     tool_call_count: int
     name: str

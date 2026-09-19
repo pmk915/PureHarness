@@ -2,7 +2,7 @@
 
 This document separates the implementation that exists today from the intended
 architecture. Sections marked **Current** describe repository behavior through
-the M8 Deterministic TaskState v1 milestone. Sections marked **Target** describe
+the M9 Deterministic Trajectory Compaction v1 milestone. Sections marked **Target** describe
 direction, not implemented APIs.
 
 ## 1. Project positioning
@@ -126,6 +126,11 @@ ToolResultProjector
 TokenEstimator (model-facing representation)
         |
         v
+TrajectoryCompactor
+  |-- IdentityTrajectoryCompactor
+  `-- DeterministicToolTrajectoryCompactor
+        |
+        v
 FullHistory | Recent | TokenBudget strategy
         |
         v
@@ -180,6 +185,43 @@ oversized unit fit a `TokenBudget` without weakening the budget. If the newest
 atomic unit remains too large after projection, compilation still raises
 `ContextBudgetExceeded` and does not split or repeatedly truncate the unit.
 
+After projection and its first estimate, `TrajectoryCompactor` provides the M9
+replaceable boundary. `IdentityTrajectoryCompactor` disables trajectory
+compaction for benchmarks. The default
+`DeterministicToolTrajectoryCompactor` performs no work at or below its
+high-water trigger. Above it, the compactor walks complete projected units
+backward by estimated tokens to reserve a recent raw suffix. The newest unit is
+kept whole even when it alone exceeds the reserve. Every unit is therefore
+entirely OLD or RECENT; multi-tool units are never split.
+
+Only complete OLD ToolCall/ToolResult units are eligible. Each eligible unit is
+replaced in place, and only when the replacement is smaller, by one explicit
+system-role message headed `[MiniHarness Compacted Tool History]`. Its stable
+structural lines retain tool name, success/failure, and bounded safe targets:
+known path tools use `path`, `search_text` uses bounded query/path fields, and
+`run_command` uses at most six bounded/redacted argv entries. Successful output
+bodies and patch/file content are omitted. Failed actions may include only a
+bounded generic tail. Unpaired calls, all User and Assistant messages, and all
+RECENT units remain unchanged. Multiple compact blocks are intentionally kept
+where natural-language messages separate tool activity, preserving chronology.
+
+FullHistory and Recent use centralized absolute defaults: a 12,000 estimated
+token high-water trigger and a 4,000-token recent raw reserve. TokenBudget uses
+a centralized budget-relative default: a trigger at integer 80% of the history
+budget and a recent reserve at integer one third, with safe minimums for tiny
+budgets. Explicit compactor injection overrides these defaults. These estimates
+are provider-neutral, and the compacted representation is re-estimated using
+the same `TokenEstimator`.
+
+The authoritative TokenBudget suffix selection runs after M9 and can still
+drop complete old units—including old natural-language messages—when required
+by the hard budget. M9 itself never rewrites or drops those messages. If the
+newest indivisible post-projection/post-compaction unit cannot fit, the existing
+`ContextBudgetExceeded` behavior remains. Deterministic tool compaction reduces
+historical cost but does not guarantee that every trajectory fits every budget;
+large natural-language history or a huge recent atomic unit can still prevent
+that.
+
 `TokenEstimator` is a replaceable protocol over a sequence of `AgentItem`s. The
 default `ApproximateTokenEstimator` deterministically serializes Message
 content, ToolCall names/arguments, and projected ToolResult content, then
@@ -187,7 +229,10 @@ applies a simple character heuristic. `CompiledContext` reports the selected
 model-facing items, estimated history tokens, total/included/dropped unit
 counts, strategy, optional history budget, and aggregate selected-result
 projection statistics: projected/compacted result counts and raw/projected
-character counts. These are approximate **historical trajectory** tokens only:
+character counts. M9 additionally reports whether trajectory compaction ran,
+source-unit/action counts, original and compacted trajectory estimates, recent
+raw unit/token estimates, and the compactor strategy. These are approximate
+**historical trajectory** tokens only:
 system instructions, tool definitions, provider wrappers, and output-token
 reservation are deliberately outside the current budget.
 
@@ -274,7 +319,7 @@ Event payloads use the following current contract:
 | --- | --- |
 | `agent_started` | `history_item_count` before the new user message |
 | `context_build_started` | `step`, `history_item_count` |
-| `context_built` | `step`, history/final-context/trajectory counts, strategy, separate estimated history and TaskState tokens, safe TaskState aggregate counts, total/included/dropped units, projected/compacted result counts, raw/projected result character counts, optional history budget |
+| `context_built` | `step`, history/final-context/trajectory counts, strategy, separate estimated history and TaskState tokens, safe TaskState aggregate counts, total/included/dropped units, projected/compacted result counts, raw/projected result character counts, aggregate trajectory-compaction statistics, optional history budget |
 | `context_build_failed` | `step`, `reason`, `error_type` |
 | `model_started` | `step` |
 | `model_completed` | `step`, `output_kind`, `tool_call_count` |
@@ -301,7 +346,8 @@ and Rich is provided by the `cli` optional dependency. The Agent neither imports
 Rich nor invokes terminal APIs. A renderer can be added or removed without
 changing runtime execution. Its context summary includes one concise count of
 compacted tool outputs and one concise TaskState line with modified-file and
-recent-error counts.
+recent-error counts. When M9 actually replaces old tool units, it adds exactly
+one concise trajectory-compaction line; it never prints the derived history.
 
 ### Coding tools
 
@@ -464,9 +510,10 @@ Simple data objects should remain simple.
 
 Capabilities with plausible alternative implementations belong behind narrow
 ports. `Model`, `SessionStore`, `ExecutionBackend`, `ToolPolicy`,
-`TokenEstimator`, and `ToolResultProjector` are protocol-shaped ports. Context
-compilation strategies and result projection are replaceable by constructor
-injection, and `ToolExecutor` is the small
+`TokenEstimator`, `ToolResultProjector`, and `TrajectoryCompactor` are
+protocol-shaped ports. Context compilation strategies, result projection, and
+trajectory compaction are replaceable by constructor injection, and
+`ToolExecutor` is the small
 policy-enforced invocation service. `EventSink` remains a planned port.
 
 Adapters implement those ports: for example, DeepSeek for `Model`, the current
@@ -534,10 +581,11 @@ Current limitations are deliberate: runtime facts are not semantic task
 understanding; successful arbitrary commands may change files without appearing
 in TaskState; paths are based on trusted structured tool arguments rather than a
 workspace rescan; file collections are not yet capped; token estimates remain
-provider-neutral approximations. There is no old-trajectory compaction,
-selective tool exposure, automatic checkpointing, durable runtime event log, or
-replay. M9 old-trajectory compaction and M10 selective tool exposure remain
-future boundaries.
+provider-neutral approximations. M9 compacts only old complete tool execution,
+not natural-language history, and it is an ephemeral context view rather than a
+persisted summary. There is no selective tool exposure, automatic checkpointing,
+durable runtime event log, or replay. M10 selective tool exposure remains a
+future boundary.
 
 ## 7. Tool definition and execution
 
@@ -654,8 +702,9 @@ how a command runs.
   oversized model-facing ToolResult text without losing raw Session history.
 - **M8 — Deterministic TaskState v1:** implemented; rebuild bounded runtime-fact
   state from raw Session and prepend a non-persistent model-facing state view.
-- **M9 — Old-trajectory compaction:** compact earlier trajectory without
-  replacing durable Session history.
+- **M9 — Deterministic Trajectory Compaction v1:** implemented; replace complete
+  old tool-execution units with smaller structural context while preserving
+  recent units, natural-language messages, and durable raw Session history.
 - **M10 — Selective Tool Exposure:** control which tool definitions are available
   to each inference.
 - **M11 — Resume / RunRecord / Replay:** extend beyond M3's Session-level

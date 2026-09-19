@@ -44,6 +44,13 @@ product clone, a multi-agent framework, or an unrelated collection of tools.
     second persistence source of truth.
 17. Do not infer structured state from arbitrary shell text or natural-language
     semantics without an explicit architecture change.
+18. Deterministic trajectory compaction is an ephemeral model-facing view;
+    never write compacted blocks into Session or persistence.
+19. M9 compaction may replace only complete old tool-execution units. Preserve
+    User and Assistant messages and the token-selected recent window raw.
+20. Apply ToolResult projection before trajectory compaction, estimate the
+    actual representation at each boundary, and keep TokenBudget as the final
+    hard constraint.
 
 ## Development workflow
 

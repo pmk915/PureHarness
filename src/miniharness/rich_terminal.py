@@ -21,6 +21,9 @@ _TEXT = {
         "units": "units",
         "history_budget": "history token budget",
         "compacted_results": "tool outputs compacted",
+        "trajectory_compacted": "trajectory compacted",
+        "old_units": "old units",
+        "estimated_token_unit": "estimated tokens",
         "task_state": "task state",
         "modified_files": "modified files",
         "recent_errors": "recent errors",
@@ -52,6 +55,9 @@ _TEXT = {
         "units": "单元",
         "history_budget": "历史 token 预算",
         "compacted_results": "工具输出压缩",
+        "trajectory_compacted": "轨迹已压缩",
+        "old_units": "个旧单元",
+        "estimated_token_unit": "估算 tokens",
         "task_state": "任务状态",
         "modified_files": "个修改文件",
         "recent_errors": "个近期错误",
@@ -152,6 +158,16 @@ class RichTerminalRenderer:
                     f"  {text['history_budget']}"
                     f"{text['separator']}"
                     f"{data['history_token_budget']}"
+                )
+
+            if data.get("trajectory_compacted", False):
+                self._print(
+                    f"  {text['trajectory_compacted']}"
+                    f"{text['separator']}"
+                    f"{data['compacted_source_units']} "
+                    f"{text['old_units']} → "
+                    f"{data['compacted_trajectory_estimated_tokens']} "
+                    f"{text['estimated_token_unit']}"
                 )
 
         elif event.type == "context_build_failed":

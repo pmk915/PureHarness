@@ -17,6 +17,10 @@ from miniharness.tool_result_projection import (
     DeterministicToolResultProjector,
     IdentityToolResultProjector,
 )
+from miniharness.trajectory_compaction import (
+    DeterministicToolTrajectoryCompactor,
+    IdentityTrajectoryCompactor,
+)
 
 
 def _tool_interaction(
@@ -332,6 +336,41 @@ def test_task_state_is_independent_of_context_projection():
 
     assert identity_state == before
     assert compacted_state == before
+
+
+def test_task_state_is_independent_of_trajectory_compaction():
+    raw_content = "start" + "x" * 1_000 + "finish"
+    session = Session(
+        items=[
+            *_tool_interaction(
+                "read_file",
+                call_id="1",
+                arguments={"path": "a.py"},
+                content=raw_content,
+            ),
+            Message(role="user", content="continue"),
+        ]
+    )
+    reducer = TaskStateReducer()
+    before = reducer.reduce(session.snapshot())
+
+    ContextBuilder(
+        trajectory_compactor=IdentityTrajectoryCompactor()
+    ).compile(session.snapshot())
+    identity_state = reducer.reduce(session.snapshot())
+    ContextBuilder(
+        trajectory_compactor=(
+            DeterministicToolTrajectoryCompactor(
+                compaction_trigger_tokens=100,
+                recent_raw_tokens=20,
+            )
+        )
+    ).compile(session.snapshot())
+    compacted_state = reducer.reduce(session.snapshot())
+
+    assert identity_state == before
+    assert compacted_state == before
+    assert session.items[1].content == raw_content
 
 
 def test_task_state_rebuilds_after_jsonl_resume(tmp_path):

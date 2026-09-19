@@ -18,6 +18,14 @@ from miniharness.tool_history import (
     ToolHistoryError,
     match_tool_interactions,
 )
+from miniharness.trajectory_compaction import (
+    CompactedTrajectory,
+    DeterministicToolTrajectoryCompactor,
+    ModelContextUnit,
+    TrajectoryCompactionError,
+    TrajectoryCompactor,
+    default_compactor_for_history_budget,
+)
 
 
 class ContextCompileError(RuntimeError):
@@ -90,6 +98,14 @@ class CompiledContext:
     compacted_tool_results: int = 0
     raw_tool_result_chars: int = 0
     projected_tool_result_chars: int = 0
+    trajectory_compacted: bool = False
+    compacted_source_units: int = 0
+    compacted_tool_actions: int = 0
+    original_trajectory_estimated_tokens: int = 0
+    compacted_trajectory_estimated_tokens: int = 0
+    recent_raw_units: int = 0
+    recent_raw_estimated_tokens: int = 0
+    trajectory_compaction_strategy: str = "Identity"
 
 
 @dataclass(frozen=True)
@@ -107,6 +123,7 @@ class ContextBuilder:
         self,
         token_estimator: TokenEstimator | None = None,
         tool_result_projector: ToolResultProjector | None = None,
+        trajectory_compactor: TrajectoryCompactor | None = None,
     ) -> None:
         self.token_estimator = (
             token_estimator
@@ -118,34 +135,66 @@ class ContextBuilder:
             if tool_result_projector is not None
             else DeterministicToolResultProjector()
         )
+        self.trajectory_compactor = (
+            trajectory_compactor
+            if trajectory_compactor is not None
+            else DeterministicToolTrajectoryCompactor()
+        )
 
     def _prepare(
         self,
         history: Sequence[AgentItem],
-    ) -> tuple[
-        list[ContextUnit],
-        list[int],
-        list[_UnitProjectionStats],
-    ]:
+    ) -> CompactedTrajectory:
         raw_units = _group_context_units(history)
         units, projection_stats = _project_context_units(
             raw_units,
             self.tool_result_projector,
         )
         costs = _estimate_units(units, self.token_estimator)
+        model_units = [
+            ModelContextUnit(
+                items=unit.items,
+                estimated_tokens=cost,
+                projected_tool_results=(
+                    stats.projected_tool_results
+                ),
+                compacted_tool_results=(
+                    stats.compacted_tool_results
+                ),
+                raw_tool_result_chars=(
+                    stats.raw_tool_result_chars
+                ),
+                projected_tool_result_chars=(
+                    stats.projected_tool_result_chars
+                ),
+            )
+            for unit, cost, stats in zip(
+                units,
+                costs,
+                projection_stats,
+                strict=True,
+            )
+        ]
 
-        return units, costs, projection_stats
+        try:
+            trajectory = self.trajectory_compactor.compact(
+                model_units,
+                self.token_estimator,
+            )
+        except (ToolHistoryError, TrajectoryCompactionError) as exc:
+            raise ContextCompileError(str(exc)) from exc
+
+        _validate_compacted_trajectory(trajectory)
+        return trajectory
 
     def compile(
         self,
         history: Sequence[AgentItem],
     ) -> CompiledContext:
-        units, costs, projection_stats = self._prepare(history)
+        trajectory = self._prepare(history)
 
         return _compiled_context(
-            units,
-            costs,
-            projection_stats,
+            trajectory,
             start=0,
             strategy=self.strategy,
         )
@@ -173,6 +222,7 @@ class RecentContextBuilder(ContextBuilder):
         max_items: int = 20,
         token_estimator: TokenEstimator | None = None,
         tool_result_projector: ToolResultProjector | None = None,
+        trajectory_compactor: TrajectoryCompactor | None = None,
     ) -> None:
         if max_items <= 0:
             raise ValueError(
@@ -182,6 +232,7 @@ class RecentContextBuilder(ContextBuilder):
         super().__init__(
             token_estimator,
             tool_result_projector,
+            trajectory_compactor,
         )
         self.max_items = max_items
 
@@ -189,7 +240,8 @@ class RecentContextBuilder(ContextBuilder):
         self,
         history: Sequence[AgentItem],
     ) -> CompiledContext:
-        units, costs, projection_stats = self._prepare(history)
+        trajectory = self._prepare(history)
+        units = trajectory.units
         total_items = sum(len(unit.items) for unit in units)
 
         if total_items <= self.max_items:
@@ -206,9 +258,7 @@ class RecentContextBuilder(ContextBuilder):
                 start -= 1
 
         return _compiled_context(
-            units,
-            costs,
-            projection_stats,
+            trajectory,
             start=start,
             strategy=self.strategy,
         )
@@ -222,10 +272,17 @@ class TokenBudgetContextBuilder(ContextBuilder):
         budget: ContextBudget,
         token_estimator: TokenEstimator | None = None,
         tool_result_projector: ToolResultProjector | None = None,
+        trajectory_compactor: TrajectoryCompactor | None = None,
     ) -> None:
+        if trajectory_compactor is None:
+            trajectory_compactor = default_compactor_for_history_budget(
+                budget.max_estimated_tokens
+            )
+
         super().__init__(
             token_estimator,
             tool_result_projector,
+            trajectory_compactor,
         )
         self.budget = budget
 
@@ -233,12 +290,13 @@ class TokenBudgetContextBuilder(ContextBuilder):
         self,
         history: Sequence[AgentItem],
     ) -> CompiledContext:
-        units, costs, projection_stats = self._prepare(history)
+        trajectory = self._prepare(history)
+        units = trajectory.units
         start = len(units)
         estimated_tokens = 0
 
         while start > 0:
-            cost = costs[start - 1]
+            cost = units[start - 1].estimated_tokens
 
             if (
                 estimated_tokens + cost
@@ -258,9 +316,7 @@ class TokenBudgetContextBuilder(ContextBuilder):
             estimated_tokens += cost
 
         return _compiled_context(
-            units,
-            costs,
-            projection_stats,
+            trajectory,
             start=start,
             strategy=self.strategy,
             history_token_budget=(
@@ -412,16 +468,18 @@ def _validate_projected_tool_result(
 
 
 def _compiled_context(
-    units: Sequence[ContextUnit],
-    costs: Sequence[int],
-    projection_stats: Sequence[_UnitProjectionStats],
+    trajectory: CompactedTrajectory,
     *,
     start: int,
     strategy: str,
     history_token_budget: int | None = None,
 ) -> CompiledContext:
+    units = trajectory.units
     selected_units = units[start:]
-    selected_stats = projection_stats[start:]
+    total_units = sum(unit.source_unit_count for unit in units)
+    included_units = sum(
+        unit.source_unit_count for unit in selected_units
+    )
 
     return CompiledContext(
         items=[
@@ -429,32 +487,144 @@ def _compiled_context(
             for unit in selected_units
             for item in unit.items
         ],
-        estimated_tokens=sum(costs[start:]),
-        total_units=len(units),
-        included_units=len(selected_units),
-        dropped_units=start,
+        estimated_tokens=sum(
+            unit.estimated_tokens for unit in selected_units
+        ),
+        total_units=total_units,
+        included_units=included_units,
+        dropped_units=total_units - included_units,
         strategy=strategy,
         projected_tool_results=sum(
-            stats.projected_tool_results
-            for stats in selected_stats
+            unit.projected_tool_results
+            for unit in selected_units
         ),
         compacted_tool_results=sum(
-            stats.compacted_tool_results
-            for stats in selected_stats
+            unit.compacted_tool_results
+            for unit in selected_units
         ),
         raw_tool_result_chars=sum(
-            stats.raw_tool_result_chars
-            for stats in selected_stats
+            unit.raw_tool_result_chars
+            for unit in selected_units
         ),
         projected_tool_result_chars=sum(
-            stats.projected_tool_result_chars
-            for stats in selected_stats
+            unit.projected_tool_result_chars
+            for unit in selected_units
         ),
         history_token_budget=history_token_budget,
+        trajectory_compacted=trajectory.trajectory_compacted,
+        compacted_source_units=trajectory.compacted_source_units,
+        compacted_tool_actions=trajectory.compacted_tool_actions,
+        original_trajectory_estimated_tokens=(
+            trajectory.original_estimated_tokens
+        ),
+        compacted_trajectory_estimated_tokens=(
+            trajectory.compacted_estimated_tokens
+        ),
+        recent_raw_units=trajectory.recent_raw_units,
+        recent_raw_estimated_tokens=(
+            trajectory.recent_raw_estimated_tokens
+        ),
+        trajectory_compaction_strategy=trajectory.strategy,
     )
 
 
-def _is_user_message(unit: ContextUnit) -> bool:
+def _validate_compacted_trajectory(
+    trajectory: CompactedTrajectory,
+) -> None:
+    if not isinstance(trajectory, CompactedTrajectory):
+        raise ContextCompileError(
+            "TrajectoryCompactor must return CompactedTrajectory."
+        )
+
+    if not isinstance(trajectory.units, tuple):
+        raise ContextCompileError(
+            "CompactedTrajectory units must be a tuple."
+        )
+
+    for unit in trajectory.units:
+        if not isinstance(unit, ModelContextUnit):
+            raise ContextCompileError(
+                "CompactedTrajectory must contain ModelContextUnit "
+                "values."
+            )
+
+        _validate_non_negative_integer(
+            "ModelContextUnit estimated_tokens",
+            unit.estimated_tokens,
+        )
+
+        if (
+            not isinstance(unit.source_unit_count, int)
+            or isinstance(unit.source_unit_count, bool)
+            or unit.source_unit_count <= 0
+        ):
+            raise ContextCompileError(
+                "ModelContextUnit source_unit_count must be a "
+                "positive integer."
+            )
+
+        for name in (
+            "projected_tool_results",
+            "compacted_tool_results",
+            "raw_tool_result_chars",
+            "projected_tool_result_chars",
+        ):
+            _validate_non_negative_integer(
+                f"ModelContextUnit {name}",
+                getattr(unit, name),
+            )
+
+    for name in (
+        "compacted_source_units",
+        "compacted_tool_actions",
+        "original_estimated_tokens",
+        "compacted_estimated_tokens",
+        "recent_raw_units",
+        "recent_raw_estimated_tokens",
+    ):
+        _validate_non_negative_integer(
+            f"CompactedTrajectory {name}",
+            getattr(trajectory, name),
+        )
+
+    if not isinstance(trajectory.trajectory_compacted, bool):
+        raise ContextCompileError(
+            "CompactedTrajectory trajectory_compacted must be bool."
+        )
+
+    if not isinstance(trajectory.strategy, str) or not trajectory.strategy:
+        raise ContextCompileError(
+            "CompactedTrajectory strategy must be non-empty text."
+        )
+
+    actual_tokens = sum(
+        unit.estimated_tokens for unit in trajectory.units
+    )
+    if actual_tokens != trajectory.compacted_estimated_tokens:
+        raise ContextCompileError(
+            "CompactedTrajectory token total does not match its units."
+        )
+
+    if trajectory.trajectory_compacted != (
+        trajectory.compacted_source_units > 0
+    ):
+        raise ContextCompileError(
+            "CompactedTrajectory compaction metrics are inconsistent."
+        )
+
+
+def _validate_non_negative_integer(name: str, value: int) -> None:
+    if (
+        not isinstance(value, int)
+        or isinstance(value, bool)
+        or value < 0
+    ):
+        raise ContextCompileError(
+            f"{name} must be a non-negative integer."
+        )
+
+
+def _is_user_message(unit: ContextUnit | ModelContextUnit) -> bool:
     return (
         len(unit.items) == 1
         and isinstance(unit.items[0], Message)

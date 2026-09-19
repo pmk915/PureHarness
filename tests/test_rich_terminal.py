@@ -105,6 +105,54 @@ def test_rich_terminal_renders_context_build_failure():
     assert "Context build failed" in output.getvalue()
 
 
+@pytest.mark.parametrize(
+    ("locale", "expected"),
+    [
+        (
+            "en",
+            "trajectory compacted: 3 old units → 90 estimated tokens",
+        ),
+        (
+            "zh-CN",
+            "轨迹已压缩：3 个旧单元 → 90 估算 tokens",
+        ),
+    ],
+)
+def test_rich_terminal_renders_one_compaction_line(locale, expected):
+    output = StringIO()
+    renderer = RichTerminalRenderer(
+        locale=locale,
+        console=Console(
+            file=output,
+            force_terminal=False,
+            color_system=None,
+        ),
+    )
+    renderer(
+        AgentEvent(
+            type="context_built",
+            data={
+                "history_item_count": 10,
+                "context_item_count": 5,
+                "context_strategy": "FullHistory",
+                "estimated_history_tokens": 100,
+                "included_units": 5,
+                "total_units": 5,
+                "compacted_tool_results": 1,
+                "files_modified_count": 0,
+                "recent_errors_count": 0,
+                "trajectory_compacted": True,
+                "compacted_source_units": 3,
+                "compacted_trajectory_estimated_tokens": 90,
+            },
+        )
+    )
+
+    rendered = output.getvalue()
+    assert expected in rendered
+    assert rendered.count(expected) == 1
+
+
 def test_broken_renderer_does_not_stop_other_observers():
     class BrokenRenderer:
         def __call__(self, event):

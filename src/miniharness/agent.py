@@ -212,6 +212,30 @@ class Agent:
                 "projected_tool_result_chars": (
                     compiled_context.projected_tool_result_chars
                 ),
+                "trajectory_compacted": (
+                    compiled_context.trajectory_compacted
+                ),
+                "compacted_source_units": (
+                    compiled_context.compacted_source_units
+                ),
+                "compacted_tool_actions": (
+                    compiled_context.compacted_tool_actions
+                ),
+                "original_trajectory_estimated_tokens": (
+                    compiled_context.original_trajectory_estimated_tokens
+                ),
+                "compacted_trajectory_estimated_tokens": (
+                    compiled_context.compacted_trajectory_estimated_tokens
+                ),
+                "recent_raw_units": (
+                    compiled_context.recent_raw_units
+                ),
+                "recent_raw_estimated_tokens": (
+                    compiled_context.recent_raw_estimated_tokens
+                ),
+                "trajectory_compaction_strategy": (
+                    compiled_context.trajectory_compaction_strategy
+                ),
             }
 
             if compiled_context.history_token_budget is not None:

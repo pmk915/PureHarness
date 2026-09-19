@@ -782,6 +782,16 @@ def test_agent_sends_compiled_context_items_and_emits_statistics():
         "compacted_tool_results": 0,
         "raw_tool_result_chars": 0,
         "projected_tool_result_chars": 0,
+        "trajectory_compacted": False,
+        "compacted_source_units": 0,
+        "compacted_tool_actions": 0,
+        "original_trajectory_estimated_tokens": 15,
+        "compacted_trajectory_estimated_tokens": 15,
+        "recent_raw_units": 1,
+        "recent_raw_estimated_tokens": 2,
+        "trajectory_compaction_strategy": (
+            "DeterministicOldTools"
+        ),
         "history_token_budget": 5,
     }
 
