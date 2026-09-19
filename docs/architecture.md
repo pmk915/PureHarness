@@ -2,8 +2,8 @@
 
 This document separates the implementation that exists today from the intended
 architecture. Sections marked **Current** describe repository behavior through
-the M9 Deterministic Trajectory Compaction v1 milestone. Sections marked **Target** describe
-direction, not implemented APIs.
+the M10 Selective Tool Exposure v1 milestone. Sections marked **Target**
+describe direction, not implemented APIs.
 
 ## 1. Project positioning
 
@@ -28,10 +28,13 @@ over a broad framework or a coding-agent product.
 ```text
                              +-> TaskStateReducer -> system state view --+
 user input -> Agent -> Session.snapshot()                                +-> Model
-  |                          +-> Context compiler -> trajectory view ----+
-  |                                                                      |
-  |                                            Message or ToolCall(s) <--+
-  +-> ToolExecutor -> ToolRegistry lookup -> ToolPolicy -> Tool callable
+  |                          +-> Context compiler -> trajectory view ----+    ^
+  |                                                                           |
+  |              ToolRegistry -> ToolSelector -> selected tool schemas -------+
+  |                                                                           |
+  |                                            Message or ToolCall(s) <--------+
+  +-> exposure validation -> ToolExecutor -> ToolRegistry lookup
+                                      -> ToolPolicy -> Tool callable
   +-> Session + RunTrace + AgentEvent listeners
 
 External lifecycle -> SessionStore <-> Session -> Agent
@@ -52,10 +55,16 @@ compilation error, `ModelError`, or exhaustion of the step limit fails the run
 with a recorded end reason. The session remains across calls to `run`; an
 existing `Session` can be supplied to `Agent`.
 
+For every inference, after TaskState and trajectory compilation, the Agent asks
+the injected `ToolSelector` for a model-facing view of the complete registry.
+It validates and measures that view before emitting `model_started`. A model
+call to a tool absent from that inference's view becomes an error ToolResult
+before ToolExecutor is reached; this is protocol consistency, not authorization.
+
 ### Model
 
 `Model` is a structural `Protocol` with a synchronous `generate` method. It
-receives context items and the registered `Tool` objects, then returns either an
+receives context items and the selected `Tool` objects, then returns either an
 assistant `Message` or a list of `ToolCall` objects. `EchoModel` and `AddModel`
 are small local implementations used by tests and examples.
 
@@ -71,10 +80,26 @@ the Python callable that executes the tool. M2 adds explicit `category`,
 read-only defaults for backward compatibility. `RiskLevel` contains only
 `READ`, `WRITE`, `EXECUTE`, and the reserved `DESTRUCTIVE` value.
 
-`ToolRegistry` only registers tools by name, looks them up, and lists them for the
-model. Registration replaces an existing tool with the same name. It does not
-execute tools, select tools, enforce policy, inspect model context, or choose an
-execution backend.
+`ToolRegistry` only registers tools by name, looks them up, and lists its full
+capability set. Registration replaces an existing tool with the same name. It
+does not execute tools, select tools, enforce policy, inspect model context, or
+choose an execution backend.
+
+`ToolSelector` is the narrow per-inference visibility port. Its input is the
+registry-ordered complete Tool sequence plus a frozen
+`ToolSelectionContext(step, task_state)`. The context makes future deterministic
+selectors possible without changing the port, but both M10 implementations
+ignore TaskState: `AllToolsSelector` preserves the pre-M10 all-tools behavior,
+and `StaticToolSelector` selects an explicit set of names. Static configuration
+with unknown names fails; an empty set intentionally produces tool-free model
+inference. No profiles, request keywords, semantic classification, model calls,
+embeddings, policy lookup, or backend inspection are used.
+
+Every selector result is validated against the exact registered Tool instances,
+rejects duplicates and unregistered objects, and is normalized back to registry
+order. Selection therefore never mutates or filters the registry itself. Whole
+Tool definitions are the atomic exposure unit; descriptions and parameter
+schemas are never truncated or rewritten.
 
 `ToolExecutor` is the canonical runtime path from an Agent tool call to a tool
 implementation. It looks up the tool, asks the injected `ToolPolicy` to evaluate
@@ -102,6 +127,12 @@ does not combine them into extra rules.
 it safely means the tool is not executed. Tool policy remains independent of
 backend selection. Command-based tool callables may delegate to the separately
 injected `ExecutionBackend` port only after policy authorization.
+
+ToolSelector and ToolPolicy are deliberately orthogonal: hidden does not mean
+policy-denied, and exposed does not mean authorized. Calls to exposed tools
+still resolve through the complete registry and pass through ToolExecutor and
+ToolPolicy. A hidden call is rejected before that path only because the model
+violated the schema contract it received.
 
 ### Context compiler
 
@@ -236,6 +267,15 @@ raw unit/token estimates, and the compactor strategy. These are approximate
 system instructions, tool definitions, provider wrappers, and output-token
 reservation are deliberately outside the current budget.
 
+M10 measures selected Tool schemas separately. It serializes each complete
+model-facing function definition (`type`, `name`, `description`, and
+`parameters`) as Unicode-safe stable JSON with sorted object keys, then applies
+the same provider-neutral character heuristic used for trajectory estimates.
+`estimated_tool_schema_tokens` remains separate from TaskState and history
+estimates. Selection also reports registered/exposed counts, the all-tools
+schema estimate, and estimated savings. None of these fields is an exact
+provider input-token count.
+
 `CompiledContext.items` remains the trajectory view and does not mix in
 TaskState. Immediately before a model call, the Agent prepends one derived
 `Message(role="system")` rendered from TaskState. That message is estimated
@@ -243,6 +283,12 @@ separately through the same `TokenEstimator` as
 `estimated_task_state_tokens`; `estimated_history_tokens` and an optional
 history budget retain their trajectory-only meanings. M8 intentionally has no
 unified provider-request budget allocator.
+
+Tool selection does not belong to `CompiledContext`. Model request preparation
+keeps three independently measurable components: the derived TaskState message,
+the compiled trajectory, and selected complete Tool schemas. It does not label
+their sum as exact input tokens because provider wrappers, instructions,
+tokenization, and output reservation remain outside these estimates.
 
 ### Session
 
@@ -283,8 +329,8 @@ checkpoint policy remain future work.
 ### Trace
 
 `RunTrace` is a per-run record of step outputs, associated tool results, and an
-end reason (`completed`, `max_steps_exceeded`, `context_error`, or
-`model_error`). It is reset for
+end reason (`completed`, `max_steps_exceeded`, `context_error`, `model_error`,
+or `tool_selection_error`). It is reset for
 each `Agent.run` call, unlike the conversation session. It is useful runtime
 evidence, but it is not currently a durable `RunRecord`.
 
@@ -297,7 +343,7 @@ delivered to callable listeners:
 ```text
 agent_started
   context_build_started -> context_built | context_build_failed
-  model_started -> model_completed | model_failed
+  selection -> model_started -> model_completed | model_failed
   tool_policy_evaluated                (zero or more tools)
     ALLOW -> tool_started -> tool_completed
     DENY | REQUIRE_APPROVAL -> no tool execution event
@@ -311,7 +357,9 @@ model-visible `ToolResult(is_error=True)` without `tool_started` or
 `tool_completed`, because tool execution never began. Events describe runtime
 execution while ToolResult describes the observation supplied to the model.
 `context_build_failed` is followed by `agent_failed`, and no model request is
-made with partial or malformed context.
+made with partial or malformed context. Invalid selector configuration/output
+emits `agent_failed(reason="tool_selection_error")` without `model_started` or a
+model request; M10 adds no retry behavior.
 
 Event payloads use the following current contract:
 
@@ -321,7 +369,7 @@ Event payloads use the following current contract:
 | `context_build_started` | `step`, `history_item_count` |
 | `context_built` | `step`, history/final-context/trajectory counts, strategy, separate estimated history and TaskState tokens, safe TaskState aggregate counts, total/included/dropped units, projected/compacted result counts, raw/projected result character counts, aggregate trajectory-compaction statistics, optional history budget |
 | `context_build_failed` | `step`, `reason`, `error_type` |
-| `model_started` | `step` |
+| `model_started` | `step`, selector strategy, registered/exposed counts, selected/all schema-token estimates, estimated savings |
 | `model_completed` | `step`, `output_kind`, `tool_call_count` |
 | `model_failed` | `step`, `reason`, `error_type` |
 | `tool_policy_evaluated` | `step`, `name`, `call_id`, `risk_level`, `decision` |
@@ -334,7 +382,8 @@ Policy events contain no arguments. `arguments_preview` is deterministic,
 limited to eight fields and 120 characters
 per value, and recursively redacts obvious sensitive keys. Events do not include
 complete tool results, model reasoning, or hidden chain-of-thought. Result
-character count is metadata, not content.
+character count is metadata, not content. Selection metrics contain no Tool
+names, descriptions, parameter schemas, or user text.
 
 Listener exceptions are caught, stored in `listener_errors`, and do not stop the
 run or block later listeners. The callable listener API is the current event
@@ -348,6 +397,8 @@ changing runtime execution. Its context summary includes one concise count of
 compacted tool outputs and one concise TaskState line with modified-file and
 recent-error counts. When M9 actually replaces old tool units, it adds exactly
 one concise trajectory-compaction line; it never prints the derived history.
+For each `model_started`, it adds one concise selected/all tool count and
+approximate schema-token line without listing tool names or schemas.
 
 ### Coding tools
 
@@ -510,10 +561,10 @@ Simple data objects should remain simple.
 
 Capabilities with plausible alternative implementations belong behind narrow
 ports. `Model`, `SessionStore`, `ExecutionBackend`, `ToolPolicy`,
-`TokenEstimator`, `ToolResultProjector`, and `TrajectoryCompactor` are
-protocol-shaped ports. Context compilation strategies, result projection, and
-trajectory compaction are replaceable by constructor injection, and
-`ToolExecutor` is the small
+`TokenEstimator`, `ToolResultProjector`, `TrajectoryCompactor`, and
+`ToolSelector` are protocol-shaped ports. Context compilation strategies,
+result projection, trajectory compaction, and tool exposure are replaceable by
+constructor injection, and `ToolExecutor` is the small
 policy-enforced invocation service. `EventSink` remains a planned port.
 
 Adapters implement those ports: for example, DeepSeek for `Model`, the current
@@ -583,16 +634,19 @@ in TaskState; paths are based on trusted structured tool arguments rather than a
 workspace rescan; file collections are not yet capped; token estimates remain
 provider-neutral approximations. M9 compacts only old complete tool execution,
 not natural-language history, and it is an ephemeral context view rather than a
-persisted summary. There is no selective tool exposure, automatic checkpointing,
-durable runtime event log, or replay. M10 selective tool exposure remains a
-future boundary.
+persisted summary. M10 selectors are static/configuration-driven and do not
+infer required tools from TaskState. There is no automatic checkpointing,
+durable runtime event log, or replay.
 
 ## 7. Tool definition and execution
 
-**Current:** the flow is effectively:
+**Current:** model exposure and execution are separate flows:
 
 ```text
-ToolCall -> ToolExecutor -> ToolRegistry lookup -> ToolPolicy
+ToolRegistry -> ToolSelector -> selected complete schemas -> Model
+
+Model ToolCall -> exposure validation -> ToolExecutor
+                                      -> ToolRegistry lookup -> ToolPolicy
                                         |
                                      ALLOW only
                                         v
@@ -603,12 +657,13 @@ command Tool.function -> ExecutionBackend -> CommandResult
 
 The same `Tool` object carries the model-facing definition, capability metadata,
 and executable callable. `ToolExecutor` is the only production runtime invoker;
-the registry remains discovery and lookup only. The default policy consumes
+the registry remains the complete discovery and lookup source. The selector
+chooses only the model-visible view. The default policy consumes
 existing risk metadata without duplicating it. Command-based coding tools
 delegate process execution through `ExecutionBackend`; other tools retain their
 existing direct callable implementations. The Agent catches execution and policy
-exceptions and turns them into error results. There is no selective exposure
-consumer yet.
+exceptions and turns them into error results. `AllToolsSelector` and
+`StaticToolSelector` provide benchmark-ready visibility baselines.
 
 **Target:** responsibilities should evolve, milestone by milestone, toward:
 
@@ -617,10 +672,10 @@ ToolSpec -> ToolSelector -> ToolExecutor -> ToolPolicy -> Tool -> ExecutionBacke
 ```
 
 `ToolSpec` describes an available operation. Selection limits what the model can
-see. Policy allows, denies, or requests approval. The implemented executor
-manages authorized invocation, while the implemented backend port provides the
-process-execution replacement point. Separate `ToolSpec` and `ToolSelector`
-concepts remain future work.
+see. Policy allows, denies, or requests approval. The implemented selector
+still consumes the current combined Tool object; splitting ToolSpec remains
+future work. The implemented executor manages authorized invocation, while the
+implemented backend port provides the process-execution replacement point.
 
 ## 8. Failure isolation
 
@@ -658,6 +713,11 @@ The default policy allows `EXECUTE` because tests and builds are a core coding
 workflow; it does not parse argv, use command blacklists, or prove that an
 arbitrary command is safe. A destructive command passed to an allowed
 `run_command` tool can still damage the writable workspace.
+
+Selective exposure is not a security boundary. A hidden-tool call is rejected
+for model/runtime contract consistency, but authorization of every exposed call
+still belongs to ToolPolicy. Selector configuration must not be used as proof
+that an operation is safe.
 
 Command-based coding tools use the replaceable `ExecutionBackend` port. The
 default `LocalExecutionBackend` invokes a host subprocess, inherits the host
@@ -705,8 +765,9 @@ how a command runs.
 - **M9 — Deterministic Trajectory Compaction v1:** implemented; replace complete
   old tool-execution units with smaller structural context while preserving
   recent units, natural-language messages, and durable raw Session history.
-- **M10 — Selective Tool Exposure:** control which tool definitions are available
-  to each inference.
+- **M10 — Selective Tool Exposure v1:** implemented; choose and measure complete
+  model-facing Tool definitions per inference while preserving ToolPolicy as
+  the independent authorization boundary.
 - **M11 — Resume / RunRecord / Replay:** extend beyond M3's Session-level
   save/load continuation to make runtime executions recoverable and inspectable
   across process lifecycles.
@@ -731,3 +792,8 @@ limitations, and a v0.1 interview release.
 
 These exclusions keep implementation effort focused on a reliable, measurable,
 inspectable single-agent runtime.
+
+Future selector benchmarks should compare AllTools, Static, and later smarter
+strategies using task success, schema cost, selection mistakes, and
+required-tool recall: whether every capability actually required for task
+success was exposed. M10 does not implement an oracle or benchmark scorer.

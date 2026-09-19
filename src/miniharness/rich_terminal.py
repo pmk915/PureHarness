@@ -31,6 +31,9 @@ _TEXT = {
         "item_unit": "items",
         "separator": ": ",
         "model_started": "● Requesting model...",
+        "tools_exposed": "tools exposed",
+        "schema_approx": "~",
+        "schema_tokens": "schema tokens",
         "model_completed": "✓ Model response received",
         "tool_calls": "tool calls",
         "tool_policy_evaluated": "◆ Tool policy evaluated",
@@ -65,6 +68,9 @@ _TEXT = {
         "item_unit": "项",
         "separator": "：",
         "model_started": "● 正在请求模型...",
+        "tools_exposed": "工具暴露",
+        "schema_approx": "约 ",
+        "schema_tokens": "schema tokens",
         "model_completed": "✓ 已收到模型响应",
         "tool_calls": "工具调用",
         "tool_policy_evaluated": "◆ 工具策略已评估",
@@ -175,6 +181,17 @@ class RichTerminalRenderer:
 
         elif event.type == "model_started":
             self._print(text["model_started"])
+
+            if "registered_tool_count" in data:
+                self._print(
+                    f"  {text['tools_exposed']}"
+                    f"{text['separator']}"
+                    f"{data['exposed_tool_count']}/"
+                    f"{data['registered_tool_count']} · "
+                    f"{text['schema_approx']}"
+                    f"{data['estimated_tool_schema_tokens']} "
+                    f"{text['schema_tokens']}"
+                )
 
         elif event.type == "model_completed":
             self._print(text["model_completed"])

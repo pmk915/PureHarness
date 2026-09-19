@@ -9,6 +9,7 @@ RunEndReason = Literal[
     "max_steps_exceeded",
     "model_error",
     "context_error",
+    "tool_selection_error",
 ]
 
 @dataclass

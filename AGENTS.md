@@ -51,6 +51,12 @@ product clone, a multi-agent framework, or an unrelated collection of tools.
 20. Apply ToolResult projection before trajectory compaction, estimate the
     actual representation at each boundary, and keep TokenBudget as the final
     hard constraint.
+21. ToolSelector controls per-inference model visibility only; ToolPolicy
+    remains the authorization boundary for exposed calls.
+22. All production model-facing Tool definitions must pass through
+    ToolSelector while ToolRegistry remains the complete capability source.
+23. Reject calls to non-exposed tools as protocol inconsistency before
+    execution; do not treat exposure as authorization or policy.
 
 ## Development workflow
 

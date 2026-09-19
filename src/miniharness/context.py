@@ -18,6 +18,7 @@ from miniharness.tool_history import (
     ToolHistoryError,
     match_tool_interactions,
 )
+from miniharness.token_estimation import approximate_text_tokens
 from miniharness.trajectory_compaction import (
     CompactedTrajectory,
     DeterministicToolTrajectoryCompactor,
@@ -67,7 +68,7 @@ class ApproximateTokenEstimator:
             default=str,
         )
 
-        return max(1, (len(serialized) + 3) // 4)
+        return approximate_text_tokens(serialized)
 
 
 @dataclass(frozen=True)

@@ -2,6 +2,14 @@ from miniharness.messages import AgentItem, Message, ToolCall, ToolResult
 from miniharness.model import Model, ModelError
 from miniharness.tool_executor import ToolExecutor
 from miniharness.tool_policy import PolicyDecision
+from miniharness.tool_selection import (
+    AllToolsSelector,
+    ToolNotExposedError,
+    ToolSelectionContext,
+    ToolSelectionError,
+    ToolSelector,
+    prepare_tool_selection,
+)
 from miniharness.tools import Tool, ToolRegistry
 from miniharness.trace import RunTrace, StepTrace
 from miniharness.events import AgentEvent, safe_arguments_preview
@@ -32,6 +40,7 @@ class Agent:
         session: Session | None = None,
         tool_executor: ToolExecutor | None = None,
         task_state_reducer: TaskStateReducer | None = None,
+        tool_selector: ToolSelector | None = None,
     ):
         self.model = model
         if tool_executor is None:
@@ -67,6 +76,11 @@ class Agent:
             task_state_reducer
             if task_state_reducer is not None
             else TaskStateReducer()
+        )
+        self.tool_selector = (
+            tool_selector
+            if tool_selector is not None
+            else AllToolsSelector()
         )
 
 
@@ -250,11 +264,58 @@ class Agent:
                 )
             )
 
+            try:
+                tool_selection = prepare_tool_selection(
+                    self.tools.list_tools(),
+                    self.tool_selector,
+                    ToolSelectionContext(
+                        step=step,
+                        task_state=task_state,
+                    ),
+                )
+            except ToolSelectionError as exc:
+                self.trace.end_reason = "tool_selection_error"
+
+                self._emit(
+                    AgentEvent(
+                        type="agent_failed",
+                        data={
+                            "reason": "tool_selection_error",
+                            "error_type": type(exc).__name__,
+                            "step_count": len(self.trace.steps),
+                        },
+                    )
+                )
+
+                raise
+
+            exposed_tool_names = frozenset(
+                tool.name for tool in tool_selection.tools
+            )
+
             self._emit(
                 AgentEvent(
                     type="model_started",
                     data={
                         "step": step,
+                        "registered_tool_count": (
+                            tool_selection.registered_tool_count
+                        ),
+                        "exposed_tool_count": (
+                            tool_selection.exposed_tool_count
+                        ),
+                        "estimated_tool_schema_tokens": (
+                            tool_selection.estimated_tool_schema_tokens
+                        ),
+                        "estimated_all_tool_schema_tokens": (
+                            tool_selection.estimated_all_tool_schema_tokens
+                        ),
+                        "estimated_tool_schema_tokens_saved": (
+                            tool_selection.estimated_tool_schema_tokens_saved
+                        ),
+                        "selector_strategy": (
+                            tool_selection.selector_strategy
+                        ),
                     },
                 )
             )
@@ -262,7 +323,7 @@ class Agent:
             try:
                 output = self.model.generate(
                     model_context,
-                    self.tools.list_tools(),
+                    list(tool_selection.tools),
                 )
             except ModelError as exc:
                 self.trace.end_reason = "model_error"
@@ -391,6 +452,14 @@ class Agent:
                         )
 
                     try:
+                        if (
+                            tool_call.name
+                            not in exposed_tool_names
+                        ):
+                            raise ToolNotExposedError(
+                                tool_call.name
+                            )
+
                         result = self.tool_executor.execute(
                             tool_call.name,
                             tool_call.arguments,
