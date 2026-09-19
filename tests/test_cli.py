@@ -9,6 +9,14 @@ from miniharness.messages import Message, ToolCall
 from miniharness.model import ModelError
 
 
+@pytest.fixture(autouse=True)
+def isolated_miniharness_home(tmp_path, monkeypatch):
+    monkeypatch.setenv(
+        "MINIHARNESS_HOME",
+        str(tmp_path / "miniharness-home"),
+    )
+
+
 class MultiTurnModel:
     def __init__(self):
         self.contexts = []
@@ -71,6 +79,8 @@ def test_cli_help(capsys):
     assert "run" in output
     assert "inspect" in output
     assert "benchmark" in output
+    assert "sessions" in output
+    assert "resume" in output
 
 
 def test_interactive_session_is_multi_turn_and_supports_commands(tmp_path):

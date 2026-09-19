@@ -37,6 +37,11 @@ class FailingModel:
         raise ModelError("simulated model failure")
 
 
+class InterruptingModel:
+    def generate(self, messages, tools):
+        raise KeyboardInterrupt
+
+
 class FixedEstimator:
     def __init__(self, cost: int) -> None:
         self.cost = cost
@@ -265,6 +270,63 @@ def test_failed_model_attempt_counts_and_serializes():
     assert record.model_call_count == 1
     assert record.step_count == 0
     assert RunRecord.from_json(record.to_json()) == record
+
+
+def test_interrupted_run_is_finalized_and_rolls_back_session_state():
+    existing = Message(role="assistant", content="durable history")
+    session = Session(items=[existing])
+    agent = Agent(
+        model=InterruptingModel(),
+        session=session,
+        session_id="session-interrupted",
+        run_id_factory=lambda: "run-interrupted",
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        agent.run("new request")
+
+    record = agent.last_run_record
+    assert record is not None
+    assert record.run_id == "run-interrupted"
+    assert record.session_id == "session-interrupted"
+    assert record.end_reason == "interrupted"
+    assert record.model_call_count == 1
+    assert record.step_count == 0
+    assert session.items == [existing]
+    assert RunRecord.from_json(record.to_json()) == record
+    assert agent.events[-1].type == "agent_interrupted"
+    assert agent.events[-1].data["reason"] == "interrupted"
+
+
+def test_interrupted_tool_is_not_left_pending_in_session():
+    def uncertain_side_effect():
+        raise KeyboardInterrupt
+
+    tool = Tool(
+        name="interrupting_tool",
+        description="Interrupt while executing.",
+        parameters={"type": "object", "properties": {}},
+        function=uncertain_side_effect,
+    )
+    registry = ToolRegistry()
+    registry.register(tool)
+    agent = Agent(
+        model=ToolThenMessageModel("interrupting_tool"),
+        tools=registry,
+        session_id="session-interrupted-tool",
+        run_id_factory=lambda: "run-interrupted-tool",
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        agent.run("run uncertain tool")
+
+    record = agent.last_run_record
+    assert record is not None
+    assert record.end_reason == "interrupted"
+    assert record.tool_call_count == 1
+    assert record.tool_execution_count == 0
+    assert record.step_count == 0
+    assert agent.session.items == []
 
 
 def test_context_failure_has_record_without_model_call():

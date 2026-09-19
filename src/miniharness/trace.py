@@ -11,6 +11,7 @@ RunEndReason = Literal[
     "model_error",
     "context_error",
     "tool_selection_error",
+    "interrupted",
 ]
 
 RUN_END_REASONS = frozenset(
@@ -20,6 +21,7 @@ RUN_END_REASONS = frozenset(
         "model_error",
         "context_error",
         "tool_selection_error",
+        "interrupted",
     }
 )
 

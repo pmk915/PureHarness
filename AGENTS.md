@@ -74,6 +74,10 @@ product clone, a multi-agent framework, or an unrelated collection of tools.
 31. The CLI is a thin adapter over runtime interfaces; the kernel must not
     import CLI code, and one interactive Session may contain multiple distinct
     Agent runs and RunRecords.
+32. Durable resume restores raw Session state and waits for a new user turn; it
+    must never replay historical model calls, tools, or side effects.
+33. Interrupted runs finalize explicit evidence but must not commit a partial
+    tool-execution unit into Session or automatically retry an uncertain tool.
 
 ## Development workflow
 
@@ -89,18 +93,24 @@ product clone, a multi-agent framework, or an unrelated collection of tools.
 
 ## Verified commands
 
-The project requires Python 3.11 or newer. It has no committed lock file or test
-extra, so install the package and pytest explicitly:
+The project requires Python 3.11 or newer. It has no committed lock file; use
+the small development extra for pytest:
 
 ```bash
 python -m venv .venv
-.venv/bin/python -m pip install -e . pytest
+.venv/bin/python -m pip install -e '.[dev]'
 ```
 
 Install the optional Rich terminal renderer when working on CLI presentation:
 
 ```bash
 .venv/bin/python -m pip install -e '.[cli]'
+```
+
+Install both for full CLI development:
+
+```bash
+.venv/bin/python -m pip install -e '.[cli,dev]'
 ```
 
 Run the configured full test suite from the repository root:

@@ -109,6 +109,28 @@ def test_rich_terminal_renders_context_build_failure():
     assert "Context build failed" in output.getvalue()
 
 
+def test_rich_terminal_renders_interruption_separately_from_failure():
+    output = StringIO()
+    renderer = RichTerminalRenderer(
+        console=Console(
+            file=output,
+            force_terminal=False,
+            color_system=None,
+        )
+    )
+
+    renderer(
+        AgentEvent(
+            type="agent_interrupted",
+            data={"reason": "interrupted", "step_count": 0},
+        )
+    )
+
+    rendered = output.getvalue()
+    assert "Agent interrupted" in rendered
+    assert "Agent failed" not in rendered
+
+
 @pytest.mark.parametrize(
     ("locale", "expected"),
     [

@@ -17,6 +17,7 @@ AgentEventType = Literal[
     "tool_started",
     "tool_completed",
     "agent_completed",
+    "agent_interrupted",
     "agent_failed",
 ]
 

@@ -102,6 +102,8 @@ class Agent:
             else lambda: str(uuid4())
         )
         self.last_run_record: RunRecord | None = None
+        self._active_record_builder: RunRecordBuilder | None = None
+        self._active_session_size: int | None = None
 
 
     @property
@@ -127,14 +129,43 @@ class Agent:
 
 
     def run(self, user_input: str) -> str:
+        try:
+            return self._run(user_input)
+        except KeyboardInterrupt:
+            if self.trace.end_reason is None:
+                if self._active_session_size is not None:
+                    del self.session.items[self._active_session_size:]
+                self.trace.end_reason = "interrupted"
+                if self._active_record_builder is not None:
+                    self._finalize_run_record(
+                        self._active_record_builder
+                    )
+                self._emit(
+                    AgentEvent(
+                        type="agent_interrupted",
+                        data={
+                            "reason": "interrupted",
+                            "step_count": len(self.trace.steps),
+                        },
+                    )
+                )
+            raise
+        finally:
+            self._active_record_builder = None
+            self._active_session_size = None
+
+
+    def _run(self, user_input: str) -> str:
         self.trace = RunTrace()
         self.events = []
         self.listener_errors = []
         self.last_run_record = None
+        self._active_session_size = len(self.session.items)
         record_builder = RunRecordBuilder(
             run_id=self._run_id_factory(),
             session_id=self.session_id,
         )
+        self._active_record_builder = record_builder
 
         self._emit(
             AgentEvent(

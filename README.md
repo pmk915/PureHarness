@@ -25,8 +25,8 @@ project deliberately favors explicit Python components over a broad framework.
           |            |            |
       TaskState    Events/Trace   ToolPolicy
                        |            |
-                   RunRecord   ExecutionBackend
-                                  /       \
+             Durable Session   ExecutionBackend
+                 + RunRecord       /       \
                                Local     Docker
 
              External Benchmark + Verifier
@@ -62,8 +62,10 @@ cd /path/to/workspace
 /path/to/miniharness/.venv/bin/miniharness
 ```
 
-One interactive process keeps one Session across multiple `Agent.run()` calls.
-Use `/help`, `/status`, or `/exit`; Ctrl+D exits cleanly. To retain one
+One interactive conversation keeps one Session across multiple `Agent.run()`
+calls and process restarts. Use `/help`, `/status`, or `/exit`; Ctrl+D exits
+cleanly. Sessions are stored under `~/.miniharness/sessions` by default. Set
+`MINIHARNESS_HOME` to isolate or relocate that state. To export an additional
 RunRecord per turn, pass `--record-dir PATH` before entering the session.
 
 ## Commands
@@ -74,6 +76,17 @@ Run a single task and optionally save its structured evidence:
 miniharness run "fix the failing test" --workspace . --record run.json
 miniharness inspect run.json
 ```
+
+Discover and resume durable interactive sessions:
+
+```bash
+miniharness sessions
+miniharness resume <session-id>
+```
+
+Resume loads prior conversation state passively. It does not call the model or
+re-execute historical tools; the next ordinary user message starts a new Run.
+`/status`, `/help`, and `/exit` remain available without an API key.
 
 Run a deliberately small real-model benchmark experiment:
 
@@ -100,15 +113,21 @@ running the full matrix.
   external trusted benchmark verifier still rejects its work.
 - **Replay is not re-execution.** Observational replay reads RunRecord evidence
   without calling a model, tool, policy, or execution backend again.
+- **Resume is not replay.** Resume restores durable logical conversation state
+  and waits for a new turn; it never repeats historical model or tool work.
 - **Policy is not isolation.** ToolPolicy decides whether a capability may run;
   an ExecutionBackend decides where command execution occurs.
 - **Session is not Run.** A Session spans conversation turns, while every
   `Agent.run()` produces its own RunRecord.
+- **Interrupted is not failed.** Ctrl+C finalizes the current RunRecord as
+  `interrupted`, rolls Session back to its last durable logical boundary, and
+  returns control to the prompt. An uncertain in-flight tool is never resumed
+  or automatically retried.
 
 ## Testing
 
 ```bash
-.venv/bin/python -m pip install -e . pytest
+.venv/bin/python -m pip install -e '.[cli,dev]'
 .venv/bin/python -m pytest
 ```
 
@@ -124,6 +143,7 @@ secrets on the assumption that ToolPolicy alone provides containment. See the
 [security model](docs/security.md) for the exact boundary and current
 limitations.
 
-MiniHarness v0.1 intentionally omits durable interactive resume, crash
-recovery, a full-screen TUI, web services, multi-agent orchestration, and a
-plugin framework.
+MiniHarness intentionally omits exact call-stack continuation, automatic retry
+of interrupted tools, concurrent writers for one session, workspace
+relocation, session branching, a full-screen TUI, web services, multi-agent
+orchestration, and a plugin framework.

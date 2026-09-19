@@ -1,16 +1,33 @@
 import json
 
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
 import miniharness.session_store as session_store_module
+from miniharness.agent import Agent
 from miniharness.messages import Message, ToolCall, ToolResult
+from miniharness.model import EchoModel
 from miniharness.session import Session
 from miniharness.session_store import (
+    DurableSession,
+    JsonlDurableSessionStore,
     JsonlSessionStore,
     MemorySessionStore,
     SessionStore,
     SessionStoreError,
 )
+
+
+def _run_record(session_id: str, run_id: str):
+    agent = Agent(
+        model=EchoModel(),
+        session_id=session_id,
+        run_id_factory=lambda: run_id,
+    )
+    agent.run("hello")
+    assert agent.last_run_record is not None
+    return agent.last_run_record
 
 
 def test_memory_store_save_and_load():
@@ -332,3 +349,146 @@ def test_jsonl_store_preserves_previous_file_when_replace_fails(
 
     assert store.load("task").items == original.items
     assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_durable_store_atomically_round_trips_session_and_run_evidence(
+    tmp_path,
+):
+    now = datetime(2026, 9, 20, 10, 0, tzinfo=timezone.utc)
+    record = _run_record("session-1", "run-1")
+    state = DurableSession(
+        session_id="session-1",
+        created_at=now,
+        updated_at=now + timedelta(minutes=2),
+        workspace=tmp_path.resolve(),
+        model="test-model",
+        session=Session(
+            items=[Message(role="user", content="persisted")]
+        ),
+        run_records=[record],
+    )
+    store = JsonlDurableSessionStore(tmp_path / "sessions")
+
+    store.save(state)
+    loaded = store.load("session-1")
+
+    assert loaded == state
+    assert loaded.session is not state.session
+    assert loaded.run_records[0] == record
+    lines = (
+        tmp_path / "sessions" / "session-1.jsonl"
+    ).read_text(encoding="utf-8").splitlines()
+    assert json.loads(lines[0])["schema_version"] == 1
+    assert json.loads(lines[-1])["type"] == "run_record"
+
+
+def test_durable_store_lists_newest_first_with_derived_run_counts(
+    tmp_path,
+):
+    store = JsonlDurableSessionStore(tmp_path / "sessions")
+    now = datetime(2026, 9, 20, 10, 0, tzinfo=timezone.utc)
+    older = DurableSession(
+        session_id="older",
+        created_at=now,
+        updated_at=now,
+        workspace=tmp_path.resolve(),
+        model="model-a",
+        session=Session(),
+        run_records=[],
+    )
+    newer = DurableSession(
+        session_id="newer",
+        created_at=now,
+        updated_at=now + timedelta(hours=1),
+        workspace=tmp_path.resolve(),
+        model="model-b",
+        session=Session(),
+        run_records=[_run_record("newer", "new-run")],
+    )
+    store.save(older)
+    store.save(newer)
+
+    summaries = store.list_sessions()
+
+    assert [summary.session_id for summary in summaries] == [
+        "newer",
+        "older",
+    ]
+    assert summaries[0].run_count == 1
+    assert summaries[0].last_run_id == "new-run"
+    assert summaries[1].run_count == 0
+
+
+def test_durable_store_rejects_corruption_without_overwriting_file(
+    tmp_path,
+):
+    directory = tmp_path / "sessions"
+    directory.mkdir()
+    path = directory / "broken.jsonl"
+    original = json.dumps(
+        {
+            "type": "durable_session_meta",
+            "schema_version": 99,
+            "session_id": "broken",
+            "created_at": "2026-09-20T10:00:00+00:00",
+            "updated_at": "2026-09-20T10:00:00+00:00",
+            "workspace": str(tmp_path.resolve()),
+            "model": "model",
+        }
+    ) + "\n"
+    path.write_text(original, encoding="utf-8")
+    store = JsonlDurableSessionStore(directory)
+
+    with pytest.raises(
+        SessionStoreError,
+        match="Unsupported durable session schema version: 99",
+    ):
+        store.load("broken")
+
+    assert path.read_text(encoding="utf-8") == original
+
+
+def test_durable_store_preserves_previous_snapshot_on_replace_failure(
+    tmp_path,
+    monkeypatch,
+):
+    store = JsonlDurableSessionStore(tmp_path / "sessions")
+    now = datetime(2026, 9, 20, 10, 0, tzinfo=timezone.utc)
+    original = DurableSession(
+        session_id="session-1",
+        created_at=now,
+        updated_at=now,
+        workspace=tmp_path.resolve(),
+        model="model",
+        session=Session(
+            items=[Message(role="user", content="original")]
+        ),
+        run_records=[],
+    )
+    store.save(original)
+    changed = DurableSession(
+        session_id="session-1",
+        created_at=now,
+        updated_at=now + timedelta(minutes=1),
+        workspace=tmp_path.resolve(),
+        model="model",
+        session=Session(
+            items=[Message(role="user", content="changed")]
+        ),
+        run_records=[],
+    )
+
+    def fail_replace(source, target):
+        raise OSError("replace failed")
+
+    monkeypatch.setattr(
+        session_store_module.os,
+        "replace",
+        fail_replace,
+    )
+
+    with pytest.raises(SessionStoreError, match="replace failed"):
+        store.save(changed)
+
+    assert store.load("session-1") == original
+    assert list((tmp_path / "sessions").glob("*.tmp")) == []

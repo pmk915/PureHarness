@@ -44,6 +44,7 @@ _TEXT = {
         "tool_failed": "✗ Tool failed",
         "model_failed": "✗ Model request failed",
         "agent_completed": "✓ Task completed",
+        "agent_interrupted": "! Agent interrupted",
         "agent_failed": "✗ Agent failed",
         "steps": "steps",
     },
@@ -81,6 +82,7 @@ _TEXT = {
         "tool_failed": "✗ 工具执行失败",
         "model_failed": "✗ 模型请求失败",
         "agent_completed": "✓ 任务完成",
+        "agent_interrupted": "! Agent 执行已中断",
         "agent_failed": "✗ Agent 执行失败",
         "steps": "步骤",
     },
@@ -255,6 +257,9 @@ class RichTerminalRenderer:
                 f"{text['separator']}"
                 f"{data['reason']}"
             )
+
+        elif event.type == "agent_interrupted":
+            self._print(text["agent_interrupted"])
 
     def _print(self, value: str) -> None:
         self.console.print(

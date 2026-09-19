@@ -2,7 +2,7 @@
 
 This document separates the implementation that exists today from the intended
 architecture. Sections marked **Current** describe repository behavior through
-the M13 v0.1 evidence and CLI milestone. Sections marked **Target**
+the M14 durable session runtime milestone. Sections marked **Target**
 describe direction, not implemented APIs.
 
 ## 1. Project positioning
@@ -347,14 +347,37 @@ versions, malformed data, missing sessions, and filesystem failures raise
 `SessionStoreError`. This is snapshot persistence, not an append-only event log.
 TaskState is not persisted: loading this unchanged schema-version-1 Session and
 running the reducer reconstructs it. RunRecord serialization is separate from
-this format. M11 deliberately adds no RunRecord store: callers own storage
-policy for serialized records, and Session files remain Session-only.
+this basic format.
+
+M14 adds `JsonlDurableSessionStore` for CLI lifecycle ownership. It reuses the
+same AgentItem serialization and atomic JSONL replacement boundary, but stores
+one complete durable session asset per file:
+
+```text
+durable metadata (schema, identity, timestamps, workspace, model)
+Session items (raw logical history)
+finalized RunRecords (execution evidence for this session)
+```
+
+Run count and last-run status are derived from the RunRecords rather than
+maintained as duplicate counters. The CLI stores these files under
+`$MINIHARNESS_HOME/sessions`, defaulting to `~/.miniharness/sessions`; Session
+itself does not know that path. Saves flush a temporary file and atomically
+replace the complete prior snapshot, so conversation state and associated run
+evidence cross the commit boundary together. Schema version 1 is strict;
+malformed, inconsistent, or unsupported files fail closed and are not
+overwritten during load.
+
+The CLI writes a new session identity before the first Agent turn. After every
+finalized Run—including `interrupted`—it saves the safe Session state and its
+RunRecord. A hard process crash before that commit leaves the previous complete
+snapshot. Concurrent multi-process writers for one session are not supported.
 
 ### Trace
 
 `RunTrace` is a per-run record of step outputs, associated tool results, and an
 end reason (`completed`, `max_steps_exceeded`, `context_error`, `model_error`,
-or `tool_selection_error`). It is reset for
+`tool_selection_error`, or `interrupted`). It is reset for
 each `Agent.run` call, unlike the conversation session. Explicit `to_dict()` and
 `from_dict()` support make this existing trace the step-level portion of a
 RunRecord rather than introducing another trace system.
@@ -412,6 +435,13 @@ values in recorded step and tool-call order. Entries expose only recorded
 summaries and structured metadata. Replay imports no Agent, Model, Tool,
 ToolExecutor, ToolPolicy, registry, or ExecutionBackend and performs no I/O;
 it cannot rerun or reconstruct prompts, hidden details, or side effects.
+
+On `KeyboardInterrupt`, Agent finalizes the active record with
+`end_reason="interrupted"` and restores Session to its pre-run length. Completed
+step evidence can remain in the RunRecord, but no partial ToolCall is committed
+to durable conversation state. A tool may already have produced an external
+side effect when interruption arrives; the runtime deliberately records no
+guess and never retries or resumes that call automatically.
 
 ### Deterministic benchmark
 
@@ -488,20 +518,24 @@ summaries report success, duration, runtime counts, estimated token totals, and
 compaction counts. Provider-exact usage is intentionally absent because the
 generic Model protocol does not currently expose it.
 
-`miniharness` provides three thin command paths plus interactive mode:
+`miniharness` provides five thin command paths plus interactive mode:
 
 ```text
 miniharness                 one Session, repeated Agent.run() turns
 miniharness run PROMPT      one Agent run
 miniharness inspect PATH    read-only RunRecord inspection
 miniharness benchmark       BenchmarkRunner + ExperimentRunner
+miniharness sessions        discover durable sessions, newest first
+miniharness resume ID       restore a logical Session, then await input
 ```
 
 Interactive `/help`, `/status`, and `/exit` are CLI concerns. Structured Agent
 events feed a terminal renderer, and the renderer never controls execution. A
-Session spans interactive turns, while each turn has a distinct RunRecord.
-Ctrl+D exits cleanly; Ctrl+C is handled at the prompt/run boundary. Durable
-interactive resume and stronger interruption recovery are not v0.1 features.
+Session spans interactive turns and process restarts, while each turn has a
+distinct RunRecord. Resume is passive until a new ordinary message lazily
+creates the provider and Agent with the loaded Session. It invokes no historical
+model or tool work. Ctrl+D exits cleanly; Ctrl+C cancels prompt input or marks
+the active run interrupted before returning to the prompt.
 
 The default command-line provider adapter is DeepSeek, but the Agent continues
 to depend only on the Model protocol. Deterministic tests inject scripted model
@@ -944,8 +978,8 @@ how a command runs.
   the independent authorization boundary.
 - **M11 — RunRecord + Observational Replay:** implemented; capture one
   serializable structured record per run and inspect it deterministically
-  without replaying models, tools, backends, or side effects. Session resume
-  remains the separate M3 lifecycle responsibility.
+  without replaying models, tools, backends, or side effects. Durable Session
+  resume remains a separate lifecycle responsibility implemented in M14.
 - **M12 — Deterministic Context Benchmark:** implemented; compare four explicit
   runtime/context configurations over isolated curated fixtures using an
   external argv oracle, M11 RunRecords, JSONL results, and multidimensional
@@ -954,10 +988,13 @@ how a command runs.
   verifiers, add controlled repeated real-model experiment support and JSONL
   evidence, provide an installed multi-turn CLI, and document/test/package the
   release boundary.
+- **M14 — Durable Session Runtime:** implemented; atomically persist interactive
+  identity, raw Session history, and associated RunRecords; discover and resume
+  sessions without replaying historical execution; formalize interruption.
 
-Post-v0.1 work may address durable interactive session lifecycle, stronger
-interruption semantics, persistent session lookup, resume UX, and crash
-recovery. These are future work, not current capabilities.
+Future work may address concurrent session writers, session migration or
+branching, workspace relocation, and stronger cancellation of synchronous
+provider/backend operations. These are not current capabilities.
 
 ## 11. Non-goals for v0.1
 

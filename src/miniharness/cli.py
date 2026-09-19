@@ -1,6 +1,8 @@
 import argparse
+import os
 
 from collections.abc import Callable, Sequence
+from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
@@ -26,6 +28,13 @@ from miniharness.model import Model, ModelError
 from miniharness.run_record import (
     RunRecord,
     RunRecordSerializationError,
+)
+from miniharness.session import Session
+from miniharness.session_store import (
+    DurableSession,
+    DurableSessionStore,
+    JsonlDurableSessionStore,
+    SessionStoreError,
 )
 from miniharness.tools import ToolRegistry
 
@@ -64,6 +73,8 @@ class PlainTerminalRenderer:
             self.output("[model] request failed")
         elif event.type == "agent_failed":
             self.output(f"[agent] failed: {data['reason']}")
+        elif event.type == "agent_interrupted":
+            self.output("[agent] interrupted")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -114,6 +125,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Inspect a serialized RunRecord JSON file.",
     )
     inspect_parser.add_argument("record", type=Path)
+
+    subparsers.add_parser(
+        "sessions",
+        help="List saved interactive sessions.",
+    )
+
+    resume_parser = subparsers.add_parser(
+        "resume",
+        help="Resume a saved interactive session.",
+    )
+    resume_parser.add_argument("session_id")
 
     benchmark_parser = subparsers.add_parser(
         "benchmark",
@@ -166,6 +188,24 @@ def main(
             return _inspect_record(arguments.record, output_fn)
         if arguments.command == "benchmark":
             return _run_benchmark(arguments, factory, output_fn)
+        durable_store = _create_durable_store()
+        if arguments.command == "sessions":
+            return _list_sessions(durable_store, output_fn)
+        if arguments.command == "resume":
+            state = _load_durable_session(
+                durable_store,
+                arguments.session_id,
+            )
+            return _run_interactive(
+                workspace=state.workspace,
+                model_name=state.model,
+                record_dir=arguments.record_dir,
+                model_factory=factory,
+                input_fn=input_fn,
+                output_fn=output_fn,
+                durable_store=durable_store,
+                durable_state=state,
+            )
         return _run_interactive(
             workspace=arguments.workspace,
             model_name=arguments.model,
@@ -173,6 +213,7 @@ def main(
             model_factory=factory,
             input_fn=input_fn,
             output_fn=output_fn,
+            durable_store=durable_store,
         )
     except KeyboardInterrupt:
         output_fn("Interrupted.")
@@ -193,12 +234,34 @@ def _run_interactive(
     model_factory: ModelFactory,
     input_fn: InputFunction,
     output_fn: OutputFunction,
+    durable_store: DurableSessionStore,
+    durable_state: DurableSession | None = None,
 ) -> int:
-    resolved_workspace = _resolve_workspace(workspace)
-    session_id = str(uuid4())
+    resumed = durable_state is not None
+    if durable_state is None:
+        resolved_workspace = _resolve_workspace(workspace)
+        now = _utc_now()
+        durable_state = DurableSession(
+            session_id=str(uuid4()),
+            created_at=now,
+            updated_at=now,
+            workspace=resolved_workspace,
+            model=model_name,
+            session=Session(),
+            run_records=[],
+        )
+        _save_durable_session(durable_store, durable_state)
+    else:
+        resolved_workspace = _resolve_session_workspace(
+            durable_state.workspace
+        )
+        model_name = durable_state.model
+
+    session_id = durable_state.session_id
     agent: Agent | None = None
-    runs = 0
     output_fn("MiniHarness")
+    if resumed:
+        output_fn(f"Resumed session {session_id}")
     output_fn(f"Workspace: {resolved_workspace}")
     output_fn(f"Model: {model_name}")
     output_fn("Type /help for commands.")
@@ -207,6 +270,7 @@ def _run_interactive(
         try:
             value = input_fn("> ")
         except EOFError:
+            _save_durable_session(durable_store, durable_state)
             output_fn("Goodbye.")
             return 0
         except KeyboardInterrupt:
@@ -217,6 +281,7 @@ def _run_interactive(
         if not prompt:
             continue
         if prompt == "/exit":
+            _save_durable_session(durable_store, durable_state)
             output_fn("Goodbye.")
             return 0
         if prompt == "/help":
@@ -231,7 +296,7 @@ def _run_interactive(
                 session_id=session_id,
                 workspace=resolved_workspace,
                 model_name=model_name,
-                run_count=runs,
+                run_records=durable_state.run_records,
                 output_fn=output_fn,
             )
             continue
@@ -246,6 +311,7 @@ def _run_interactive(
                     model_factory(model_name),
                     session_id=session_id,
                     output_fn=output_fn,
+                    session=durable_state.session,
                 )
             except CLIError as exc:
                 output_fn(f"Error: {exc}")
@@ -256,7 +322,6 @@ def _run_interactive(
                 )
                 continue
 
-        runs += 1
         try:
             response = agent.run(prompt)
         except KeyboardInterrupt:
@@ -267,16 +332,107 @@ def _run_interactive(
         else:
             output_fn(response)
         finally:
-            if record_dir is not None and agent.last_run_record is not None:
+            record = agent.last_run_record
+            if record is not None:
+                durable_state.session = agent.session
+                durable_state.run_records.append(record)
+                durable_state.updated_at = _utc_now()
+                _save_durable_session(
+                    durable_store,
+                    durable_state,
+                )
+            if record_dir is not None and record is not None:
                 destination = (
                     record_dir
-                    / f"{agent.last_run_record.run_id}.json"
+                    / f"{record.run_id}.json"
                 )
                 _write_run_record(
                     destination,
-                    agent.last_run_record,
+                    record,
                 )
                 output_fn(f"Run record: {destination}")
+
+
+def _create_durable_store() -> DurableSessionStore:
+    configured_home = os.environ.get("MINIHARNESS_HOME")
+    if configured_home is None:
+        root = Path.home() / ".miniharness"
+    elif not configured_home:
+        raise CLIError("MINIHARNESS_HOME must not be empty")
+    else:
+        root = Path(configured_home).expanduser()
+
+    try:
+        root = root.resolve()
+    except OSError as exc:
+        raise CLIError(
+            f"Could not resolve MiniHarness home: {root}"
+        ) from exc
+    return JsonlDurableSessionStore(root / "sessions")
+
+
+def _load_durable_session(
+    store: DurableSessionStore,
+    session_id: str,
+) -> DurableSession:
+    try:
+        return store.load(session_id)
+    except SessionStoreError as exc:
+        raise CLIError(str(exc)) from exc
+
+
+def _save_durable_session(
+    store: DurableSessionStore,
+    state: DurableSession,
+) -> None:
+    try:
+        store.save(state)
+    except SessionStoreError as exc:
+        raise CLIError(str(exc)) from exc
+
+
+def _list_sessions(
+    store: DurableSessionStore,
+    output_fn: OutputFunction,
+) -> int:
+    try:
+        summaries = store.list_sessions()
+    except SessionStoreError as exc:
+        raise CLIError(str(exc)) from exc
+
+    if not summaries:
+        output_fn("No saved sessions.")
+        return 0
+
+    output_fn("SESSION ID\tUPDATED (UTC)\tRUNS\tMODEL\tWORKSPACE")
+    for summary in summaries:
+        updated = summary.updated_at.astimezone(timezone.utc).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
+        output_fn(
+            f"{summary.session_id}\t{updated}\t"
+            f"{summary.run_count}\t{summary.model}\t"
+            f"{summary.workspace}"
+        )
+    return 0
+
+
+def _resolve_session_workspace(path: Path) -> Path:
+    try:
+        resolved = path.resolve(strict=True)
+    except OSError as exc:
+        raise CLIError(
+            f"session workspace no longer exists: {path}"
+        ) from exc
+    if not resolved.is_dir():
+        raise CLIError(
+            f"session workspace no longer exists: {path}"
+        )
+    return resolved
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 def _run_once(
@@ -399,6 +555,7 @@ def _create_agent(
     *,
     session_id: str,
     output_fn: OutputFunction,
+    session: Session | None = None,
 ) -> Agent:
     registry = ToolRegistry()
     for tool in create_coding_tools(workspace):
@@ -408,6 +565,7 @@ def _create_agent(
         tools=registry,
         listeners=[PlainTerminalRenderer(output_fn)],
         session_id=session_id,
+        session=session,
     )
 
 
@@ -417,14 +575,18 @@ def _render_status(
     session_id: str,
     workspace: Path,
     model_name: str,
-    run_count: int,
+    run_records: Sequence[RunRecord],
     output_fn: OutputFunction,
 ) -> None:
-    record = None if agent is None else agent.last_run_record
+    record = (
+        agent.last_run_record
+        if agent is not None and agent.last_run_record is not None
+        else (run_records[-1] if run_records else None)
+    )
     output_fn(f"Session ID: {session_id}")
     output_fn(f"Workspace: {workspace}")
     output_fn(f"Model: {model_name}")
-    output_fn(f"Runs in session: {run_count}")
+    output_fn(f"Runs in session: {len(run_records)}")
     output_fn(
         "Last run ID: "
         f"{record.run_id if record is not None else '(none)'}"
