@@ -1,5 +1,10 @@
 from miniharness.messages import AgentItem, Message, ToolCall, ToolResult
 from miniharness.model import Model, ModelError
+from miniharness.run_record import (
+    ModelInvocationRecord,
+    RunRecord,
+    RunRecordBuilder,
+)
 from miniharness.tool_executor import ToolExecutor
 from miniharness.tool_policy import PolicyDecision
 from miniharness.tool_selection import (
@@ -20,6 +25,7 @@ from miniharness.context import (
 
 from collections.abc import Callable
 from time import perf_counter
+from uuid import uuid4
 
 from miniharness.session import Session
 from miniharness.task_state import (
@@ -41,6 +47,8 @@ class Agent:
         tool_executor: ToolExecutor | None = None,
         task_state_reducer: TaskStateReducer | None = None,
         tool_selector: ToolSelector | None = None,
+        session_id: str | None = None,
+        run_id_factory: Callable[[], str] | None = None,
     ):
         self.model = model
         if tool_executor is None:
@@ -82,6 +90,13 @@ class Agent:
             if tool_selector is not None
             else AllToolsSelector()
         )
+        self.session_id = session_id
+        self._run_id_factory = (
+            run_id_factory
+            if run_id_factory is not None
+            else lambda: str(uuid4())
+        )
+        self.last_run_record: RunRecord | None = None
 
 
     @property
@@ -99,10 +114,22 @@ class Agent:
                 self.listener_errors.append(exc)
 
 
+    def _finalize_run_record(
+        self,
+        builder: RunRecordBuilder,
+    ) -> None:
+        self.last_run_record = builder.finalize(self.trace)
+
+
     def run(self, user_input: str) -> str:
         self.trace = RunTrace()
         self.events = []
         self.listener_errors = []
+        self.last_run_record = None
+        record_builder = RunRecordBuilder(
+            run_id=self._run_id_factory(),
+            session_id=self.session_id,
+        )
 
         self._emit(
             AgentEvent(
@@ -160,6 +187,8 @@ class Agent:
                         },
                     )
                 )
+
+                self._finalize_run_record(record_builder)
 
                 self._emit(
                     AgentEvent(
@@ -276,6 +305,8 @@ class Agent:
             except ToolSelectionError as exc:
                 self.trace.end_reason = "tool_selection_error"
 
+                self._finalize_run_record(record_builder)
+
                 self._emit(
                     AgentEvent(
                         type="agent_failed",
@@ -291,6 +322,39 @@ class Agent:
 
             exposed_tool_names = frozenset(
                 tool.name for tool in tool_selection.tools
+            )
+            record_builder.record_model_invocation(
+                ModelInvocationRecord(
+                    step=step,
+                    context_strategy=compiled_context.strategy,
+                    estimated_history_tokens=(
+                        compiled_context.estimated_tokens
+                    ),
+                    estimated_task_state_tokens=(
+                        estimated_task_state_tokens
+                    ),
+                    registered_tool_count=(
+                        tool_selection.registered_tool_count
+                    ),
+                    exposed_tool_count=(
+                        tool_selection.exposed_tool_count
+                    ),
+                    estimated_tool_schema_tokens=(
+                        tool_selection.estimated_tool_schema_tokens
+                    ),
+                    selector_strategy=(
+                        tool_selection.selector_strategy
+                    ),
+                    trajectory_compacted=(
+                        compiled_context.trajectory_compacted
+                    ),
+                    compacted_source_units=(
+                        compiled_context.compacted_source_units
+                    ),
+                    compacted_tool_results=(
+                        compiled_context.compacted_tool_results
+                    ),
+                )
             )
 
             self._emit(
@@ -339,6 +403,8 @@ class Agent:
                     )
                 )
 
+                self._finalize_run_record(record_builder)
+
                 self._emit(
                     AgentEvent(
                         type="agent_failed",
@@ -363,6 +429,7 @@ class Agent:
                 if isinstance(output, list)
                 else 0
             )
+            record_builder.record_tool_calls(tool_call_count)
 
             self._emit(
                 AgentEvent(
@@ -389,6 +456,7 @@ class Agent:
                 )
 
                 self.trace.end_reason = "completed"
+                self._finalize_run_record(record_builder)
                 self._emit(
                     AgentEvent(
                         type="agent_completed",
@@ -493,6 +561,12 @@ class Agent:
                     tool_results.append(tool_result)
 
                     if tool_started_at is not None:
+                        record_builder.record_tool_execution()
+                    record_builder.record_tool_result(
+                        is_error=is_error
+                    )
+
+                    if tool_started_at is not None:
                         duration_seconds = (
                             perf_counter() - tool_started_at
                         )
@@ -527,6 +601,7 @@ class Agent:
 
                 continue
         self.trace.end_reason = "max_steps_exceeded"
+        self._finalize_run_record(record_builder)
 
         self._emit(
             AgentEvent(

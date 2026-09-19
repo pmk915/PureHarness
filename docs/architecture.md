@@ -2,7 +2,7 @@
 
 This document separates the implementation that exists today from the intended
 architecture. Sections marked **Current** describe repository behavior through
-the M10 Selective Tool Exposure v1 milestone. Sections marked **Target**
+the M11 RunRecord and Observational Replay milestone. Sections marked **Target**
 describe direction, not implemented APIs.
 
 ## 1. Project positioning
@@ -36,6 +36,8 @@ user input -> Agent -> Session.snapshot()                                +-> Mod
   +-> exposure validation -> ToolExecutor -> ToolRegistry lookup
                                       -> ToolPolicy -> Tool callable
   +-> Session + RunTrace + AgentEvent listeners
+                    |
+                    +-> finalized RunRecord -> observational replay
 
 External lifecycle -> SessionStore <-> Session -> Agent
 ```
@@ -60,6 +62,12 @@ the injected `ToolSelector` for a model-facing view of the complete registry.
 It validates and measures that view before emitting `model_started`. A model
 call to a tool absent from that inference's view becomes an error ToolResult
 before ToolExecutor is reached; this is protocol consistency, not authorization.
+
+Each known completion or failure path finalizes one `RunRecord`. The existing
+`run()` return value remains the assistant text for compatibility; callers read
+the structured result from `agent.last_run_record`. Recording consumes facts
+already produced by context compilation, TaskState reduction, tool selection,
+execution, and the trace. It does not control any of those operations.
 
 ### Model
 
@@ -323,16 +331,72 @@ the prior valid file when failure occurs before replacement. Unsupported
 versions, malformed data, missing sessions, and filesystem failures raise
 `SessionStoreError`. This is snapshot persistence, not an append-only event log.
 TaskState is not persisted: loading this unchanged schema-version-1 Session and
-running the reducer reconstructs it. A durable `RunRecord`, replay facility, and
-checkpoint policy remain future work.
+running the reducer reconstructs it. RunRecord serialization is separate from
+this format. M11 deliberately adds no RunRecord store: callers own storage
+policy for serialized records, and Session files remain Session-only.
 
 ### Trace
 
 `RunTrace` is a per-run record of step outputs, associated tool results, and an
 end reason (`completed`, `max_steps_exceeded`, `context_error`, `model_error`,
 or `tool_selection_error`). It is reset for
-each `Agent.run` call, unlike the conversation session. It is useful runtime
-evidence, but it is not currently a durable `RunRecord`.
+each `Agent.run` call, unlike the conversation session. Explicit `to_dict()` and
+`from_dict()` support make this existing trace the step-level portion of a
+RunRecord rather than introducing another trace system.
+
+### RunRecord and observational replay
+
+`RunRecord` describes exactly one `Agent.run()` invocation. `Session` remains
+the complete semantic history and may span any number of runs:
+
+```text
+                  Session
+             semantic task history
+                    |
+            multiple Agent.run()
+                    |
+        +-----------+-----------+
+        |                       |
+        v                       v
+   RunRecord A             RunRecord B
+        |
+        +-- RunTrace snapshot
+        +-- per-inference metrics
+        +-- canonical end reason
+        +-- tool/context/exposure aggregates
+        |
+        v
+observational replay (never execution replay)
+```
+
+The optional `session_id` belongs to external lifecycle metadata supplied to
+Agent; it is not added to Session. A trusted runtime UUID is the default
+`run_id`, with a small injectable factory for deterministic tests. Finalized
+records use frozen outer value objects, immutable invocation tuples, and an
+isolated trace snapshot, so a later run cannot alter an earlier record.
+
+Each `ModelInvocationRecord` captures the step, context and selector strategy,
+estimated history and TaskState tokens, registered/exposed tool counts,
+estimated selected-schema tokens, and existing ToolResult/trajectory
+compaction facts. Run-level sums are cumulative provider-neutral estimates,
+not provider billing tokens. `model_call_count` counts real model attempts,
+including attempts that raise `ModelError`. `tool_call_count` counts requests
+returned by the model, including calls rejected before execution;
+`tool_execution_count` counts calls that actually passed exposure and policy
+checks and began execution. `tool_result_error_count` counts error observations
+and is intentionally not named an execution-error count.
+
+RunRecord JSON-compatible serialization has explicit schema version 1 and
+rejects unsupported versions. It contains the RunTrace and safe structured
+statistics, not a Session copy, lifecycle-event dump, full prompts or schemas,
+or hidden chain-of-thought. Its duplicated `end_reason` is validated against
+the canonical RunTrace value.
+
+`replay_run(record)` returns a deterministic tuple of frozen `ReplayEntry`
+values in recorded step and tool-call order. Entries expose only recorded
+summaries and structured metadata. Replay imports no Agent, Model, Tool,
+ToolExecutor, ToolPolicy, registry, or ExecutionBackend and performs no I/O;
+it cannot rerun or reconstruct prompts, hidden details, or side effects.
 
 ### Events and listeners
 
@@ -555,8 +619,8 @@ to `ToolExecutor` while continuing to own runtime event and result orchestration
 ## 5. Plugin boundary
 
 Some concepts are stable domain language rather than plugins. Today these
-include `Message`, `ToolCall`, `ToolResult`, `AgentEvent`, `StepTrace`, and
-`RunTrace`. Future stable types may include structured execution and run results.
+include `Message`, `ToolCall`, `ToolResult`, `AgentEvent`, `StepTrace`,
+`RunTrace`, `RunRecord`, `ModelInvocationRecord`, and `ReplayEntry`.
 Simple data objects should remain simple.
 
 Capabilities with plausible alternative implementations belong behind narrow
@@ -768,9 +832,10 @@ how a command runs.
 - **M10 — Selective Tool Exposure v1:** implemented; choose and measure complete
   model-facing Tool definitions per inference while preserving ToolPolicy as
   the independent authorization boundary.
-- **M11 — Resume / RunRecord / Replay:** extend beyond M3's Session-level
-  save/load continuation to make runtime executions recoverable and inspectable
-  across process lifecycles.
+- **M11 — RunRecord + Observational Replay:** implemented; capture one
+  serializable structured record per run and inspect it deterministically
+  without replaying models, tools, backends, or side effects. Session resume
+  remains the separate M3 lifecycle responsibility.
 - **M12 — Context Benchmark and comparison:** compare context strategies using
   task success, tokens, calls, steps, constraint violations, and recovery.
 

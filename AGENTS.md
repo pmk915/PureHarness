@@ -57,6 +57,12 @@ product clone, a multi-agent framework, or an unrelated collection of tools.
     ToolSelector while ToolRegistry remains the complete capability source.
 23. Reject calls to non-exposed tools as protocol inconsistency before
     execution; do not treat exposure as authorization or policy.
+24. Each current, known Agent.run() termination path produces one RunRecord;
+    the record describes that run and does not replace or duplicate Session.
+25. RunRecord metrics are observational facts and must not influence context,
+    selection, policy, execution, or task-success decisions.
+26. Observational replay must never invoke models, tools, policies, execution
+    backends, or other side effects.
 
 ## Development workflow
 
