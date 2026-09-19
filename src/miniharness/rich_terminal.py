@@ -37,6 +37,9 @@ _TEXT = {
         "model_completed": "✓ Model response received",
         "tool_calls": "tool calls",
         "tool_policy_evaluated": "◆ Tool policy evaluated",
+        "approval_requested": "? Approval requested",
+        "approval_granted": "✓ Approval granted",
+        "approval_denied": "✗ Approval denied",
         "risk": "risk",
         "decision": "decision",
         "tool_started": "◆ Calling tool",
@@ -75,6 +78,9 @@ _TEXT = {
         "model_completed": "✓ 已收到模型响应",
         "tool_calls": "工具调用",
         "tool_policy_evaluated": "◆ 工具策略已评估",
+        "approval_requested": "? 请求操作批准",
+        "approval_granted": "✓ 操作已批准",
+        "approval_denied": "✗ 操作已拒绝",
         "risk": "风险",
         "decision": "决策",
         "tool_started": "◆ 正在调用工具",
@@ -231,6 +237,17 @@ class RichTerminalRenderer:
 
             for key, value in data["arguments_preview"].items():
                 self._print(f"  {key}: {value}")
+
+        elif event.type in {
+            "approval_requested",
+            "approval_granted",
+            "approval_denied",
+        }:
+            self._print(
+                f"{text[event.type]}"
+                f"{text['separator']}"
+                f"{data['name']}"
+            )
 
         elif event.type == "tool_completed":
             key = (

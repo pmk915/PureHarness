@@ -25,8 +25,10 @@ project deliberately favors explicit Python components over a broad framework.
           |            |            |
       TaskState    Events/Trace   ToolPolicy
                        |            |
-             Durable Session   ExecutionBackend
-                 + RunRecord       /       \
+             Durable Session   ApprovalHandler
+                 + RunRecord       |
+                            ExecutionBackend
+                                /       \
                                Local     Docker
 
              External Benchmark + Verifier
@@ -88,6 +90,21 @@ Resume loads prior conversation state passively. It does not call the model or
 re-execute historical tools; the next ordinary user message starts a new Run.
 `/status`, `/help`, and `/exit` remain available without an API key.
 
+When an injected policy returns `REQUIRE_APPROVAL`, interactive mode displays a
+redacted argument preview and asks for a one-time decision:
+
+```text
+Approval required
+Tool: run_command
+Arguments:
+  argv: ["make", "clean"]
+Approve this action? [y/N]: y
+```
+
+Only `y` or `yes` (case-insensitive) approves. Empty, invalid, EOF, or Ctrl+C
+input denies the action. One-shot mode has no interactive approval handler and
+therefore fails closed for approval-gated actions.
+
 Run a deliberately small real-model benchmark experiment:
 
 ```bash
@@ -115,8 +132,9 @@ running the full matrix.
   without calling a model, tool, policy, or execution backend again.
 - **Resume is not replay.** Resume restores durable logical conversation state
   and waits for a new turn; it never repeats historical model or tool work.
-- **Policy is not isolation.** ToolPolicy decides whether a capability may run;
-  an ExecutionBackend decides where command execution occurs.
+- **Policy is not approval or isolation.** ToolPolicy classifies an action;
+  ApprovalHandler obtains a host decision when required; ExecutionBackend
+  decides where an approved action runs. Approval does not make code safe.
 - **Session is not Run.** A Session spans conversation turns, while every
   `Agent.run()` produces its own RunRecord.
 - **Interrupted is not failed.** Ctrl+C finalizes the current RunRecord as

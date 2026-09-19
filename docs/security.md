@@ -3,7 +3,7 @@
 MiniHarness v0.1 provides explicit policy and execution boundaries, but it is
 not a hardened production sandbox or a hostile multi-tenant security boundary.
 
-## Policy is not isolation
+## Policy, approval, and isolation are separate
 
 `ToolPolicy` makes an authorization decision for a model-requested capability.
 Every production Agent tool call passes through `ToolExecutor`, which consults
@@ -15,7 +15,13 @@ allowed command tool can still receive dangerous arguments. Tool exposure is
 also not authorization: `ToolSelector` controls which definitions a model sees,
 while `ToolPolicy` remains the decision boundary for exposed calls.
 
-`ExecutionBackend` controls where and how a command runs:
+For `REQUIRE_APPROVAL`, an `ApprovalHandler` obtains a one-time `APPROVE` or
+`DENY` decision. No handler means deny. The terminal adapter approves only an
+explicit `y` or `yes`; empty, invalid, EOF, and Ctrl+C input deny. Policy denial
+does not invoke the handler, and approval never bypasses ToolPolicy or
+ToolExecutor.
+
+`ExecutionBackend` controls where and how an authorized command runs:
 
 - `LocalExecutionBackend` launches a host subprocess, inherits the host
   environment, and provides no isolation. Use it only for trusted local work.
@@ -24,8 +30,14 @@ while `ToolPolicy` remains the decision boundary for exposed calls.
   Docker shares the host kernel and its daemon is privileged infrastructure.
 
 Neither backend turns arbitrary Agent-generated commands into proven-safe
-operations. `REQUIRE_APPROVAL` currently fails closed; v0.1 has no interactive
-approval workflow.
+operations. Human approval does not make arbitrary code safe, sandboxed,
+reversible, or idempotent. Approval is an authorization boundary, not execution
+isolation.
+
+Approval decisions are allow-once only. They are not remembered as trust rules.
+Durable resume never reopens historical approval prompts or retries their tool
+calls. A crash after approval but during execution still has unknown side-effect
+state and must not cause automatic retry.
 
 ## Secrets
 
@@ -64,7 +76,8 @@ untrusted.
 - ToolPolicy does not parse or classify command arguments.
 - Local execution is not sandboxed and inherits the process environment.
 - Docker is a practical isolation adapter, not a perfect security boundary.
-- There is no user approval UI, durable audit service, RBAC, or multi-tenant
+- Approval supports only allow-once or deny; there are no remembered trust
+  rules, remote approval, durable pending queue, RBAC, or multi-tenant
   isolation.
 - RunRecord and Session persistence are evidence/state mechanisms, not tamper-
   evident security logs.

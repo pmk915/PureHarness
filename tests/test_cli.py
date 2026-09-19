@@ -3,10 +3,14 @@ import tomllib
 import pytest
 
 import miniharness.cli as cli_module
+from miniharness.agent import Agent
 from miniharness.cli import main
 from miniharness.experiment import load_experiment_results
 from miniharness.messages import Message, ToolCall
 from miniharness.model import ModelError
+from miniharness.tool_executor import ToolExecutor
+from miniharness.tool_policy import PolicyDecision
+from miniharness.tools import Tool, ToolRegistry
 
 
 @pytest.fixture(autouse=True)
@@ -248,6 +252,100 @@ def test_interactive_ctrl_c_during_run_returns_to_prompt(tmp_path):
     assert output[-1] == "Goodbye."
 
 
+def test_interactive_ctrl_c_during_approval_denies_without_execution(
+    tmp_path,
+    monkeypatch,
+):
+    execution_count = 0
+
+    class RequireApprovalPolicy:
+        def evaluate(self, tool, arguments):
+            return PolicyDecision.REQUIRE_APPROVAL
+
+    class ApprovalModel:
+        def __init__(self):
+            self.calls = 0
+
+        def generate(self, messages, tools):
+            self.calls += 1
+            if self.calls == 1:
+                return [
+                    ToolCall(
+                        name="effect",
+                        arguments={},
+                        call_id="approval-ctrl-c",
+                    )
+                ]
+            return Message(role="assistant", content="denied safely")
+
+    def create_agent(
+        workspace,
+        model,
+        *,
+        session_id,
+        output_fn,
+        session=None,
+        approval_handler=None,
+    ):
+        nonlocal execution_count
+        assert approval_handler is not None
+
+        def effect():
+            nonlocal execution_count
+            execution_count += 1
+
+        registry = ToolRegistry()
+        registry.register(
+            Tool(
+                name="effect",
+                description="Approval-gated effect.",
+                parameters={"type": "object", "properties": {}},
+                function=effect,
+                side_effects=True,
+            )
+        )
+        return Agent(
+            model=model,
+            tools=registry,
+            tool_executor=ToolExecutor(
+                registry,
+                RequireApprovalPolicy(),
+                approval_handler=approval_handler,
+            ),
+            listeners=[cli_module.PlainTerminalRenderer(output_fn)],
+            session_id=session_id,
+            session=session,
+            max_steps=2,
+        )
+
+    monkeypatch.setattr(cli_module, "_create_agent", create_agent)
+    input_calls = 0
+
+    def interrupt_approval(prompt):
+        nonlocal input_calls
+        input_calls += 1
+        if input_calls == 1:
+            return "perform effect"
+        if input_calls == 2:
+            raise KeyboardInterrupt
+        return "/exit"
+
+    output = []
+    exit_code = main(
+        ["--workspace", str(tmp_path), "--model", "fake-model"],
+        model_factory=lambda name: ApprovalModel(),
+        input_fn=interrupt_approval,
+        output_fn=output.append,
+    )
+
+    assert exit_code == 0
+    assert execution_count == 0
+    assert "Approval cancelled; action denied." in output
+    assert "[approval] denied: effect" in output
+    assert "denied safely" in output
+    assert not any("Traceback" in line for line in output)
+
+
 def test_one_shot_writes_record_and_inspect_reads_it(tmp_path):
     record_path = tmp_path / "evidence" / "run.json"
     output = []
@@ -283,6 +381,17 @@ def test_one_shot_writes_record_and_inspect_reads_it(tmp_path):
     assert "End reason: completed" in rendered
     assert "Model calls: 1" in rendered
     assert "Estimated history tokens:" in rendered
+
+
+def test_one_shot_agent_has_no_interactive_approval_handler(tmp_path):
+    agent = cli_module._create_agent(
+        tmp_path,
+        MultiTurnModel(),
+        session_id="one-shot-session",
+        output_fn=lambda value: None,
+    )
+
+    assert agent.tool_executor.approval_handler is None
 
 
 def test_one_shot_failure_has_nonzero_exit_without_traceback(tmp_path):

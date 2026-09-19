@@ -2,7 +2,7 @@
 
 This document separates the implementation that exists today from the intended
 architecture. Sections marked **Current** describe repository behavior through
-the M14 durable session runtime milestone. Sections marked **Target**
+the M15 human approval and action safety milestone. Sections marked **Target**
 describe direction, not implemented APIs.
 
 ## 1. Project positioning
@@ -34,7 +34,7 @@ CLI/user input -> Agent -> Session.snapshot()                            +-> Mod
   |                                                                           |
   |                                            Message or ToolCall(s) <--------+
   +-> exposure validation -> ToolExecutor -> ToolRegistry lookup
-                                      -> ToolPolicy -> Tool callable
+                    -> ToolPolicy -> ApprovalHandler? -> Tool callable
   +-> Session + RunTrace + AgentEvent listeners
                     |
                     +-> finalized RunRecord -> observational replay
@@ -123,13 +123,21 @@ Tool definitions are the atomic exposure unit; descriptions and parameter
 schemas are never truncated or rewritten.
 
 `ToolExecutor` is the canonical runtime path from an Agent tool call to a tool
-implementation. It looks up the tool, asks the injected `ToolPolicy` to evaluate
-the tool and arguments, and invokes `Tool.execute()` only after an `ALLOW`
-decision. `DENY` and `REQUIRE_APPROVAL` raise a concise `ToolPolicyError` before
-the tool function can run. The Agent's existing exception handling turns that
-failure into `ToolResult(is_error=True)`, allowing the model to react.
-Optional synchronous decision/start callbacks let the Agent emit correctly
-ordered events; the executor does not store events or own result orchestration.
+implementation. It looks up the tool and asks the injected `ToolPolicy` to
+classify the tool and arguments. `ALLOW` proceeds directly; `DENY` raises a
+concise `ToolPolicyError`; `REQUIRE_APPROVAL` constructs an `ApprovalRequest`
+and consults the injected `ApprovalHandler`. Only `ApprovalDecision.APPROVE`
+continues to `Tool.execute()`. A denied decision raises `ToolApprovalError`, and
+no handler is equivalent to denial. The Agent converts both rejection paths to
+distinct model-visible `ToolResult(is_error=True)` observations.
+
+`ApprovalHandler` is a synchronous replaceable port that only obtains a host
+decision. `AutoDenyApprovalHandler` is the safe automation baseline;
+`AutoApproveApprovalHandler` is available only for explicit composition and
+tests. `TerminalApprovalHandler` lives in a terminal adapter module, receives
+injected input/output callables, displays a bounded redacted argument preview,
+and approves only explicit `y`/`yes` input. It catches EOF and Ctrl+C as denial.
+Neither ToolExecutor, Agent, nor ToolPolicy calls `input()`.
 
 `ToolPolicy` is a replaceable protocol. `DefaultToolPolicy` uses `RiskLevel`
 directly and has this complete mapping:
@@ -144,10 +152,11 @@ directly and has this complete mapping:
 `category` and `side_effects` remain descriptive metadata; the default mapping
 does not combine them into extra rules.
 
-`REQUIRE_APPROVAL` is a supported decision, but M5B has no approval handler, so
-it safely means the tool is not executed. Tool policy remains independent of
-backend selection. Command-based tool callables may delegate to the separately
-injected `ExecutionBackend` port only after policy authorization.
+Tool policy, approval interaction, and backend execution remain independent.
+Approval does not change the policy classification, and an ApprovalHandler
+never executes a tool. Command-based tool callables may delegate to the
+separately injected `ExecutionBackend` only after policy and, when required,
+approval authorization.
 
 ToolSelector and ToolPolicy are deliberately orthogonal: hidden does not mean
 policy-denied, and exposed does not mean authorized. Calls to exposed tools
@@ -375,7 +384,8 @@ snapshot. Concurrent multi-process writers for one session are not supported.
 
 ### Trace
 
-`RunTrace` is a per-run record of step outputs, associated tool results, and an
+`RunTrace` is a per-run record of step outputs, associated tool results,
+structured resolved approval decisions, and an
 end reason (`completed`, `max_steps_exceeded`, `context_error`, `model_error`,
 `tool_selection_error`, or `interrupted`). It is reset for
 each `Agent.run` call, unlike the conversation session. Explicit `to_dict()` and
@@ -435,6 +445,9 @@ values in recorded step and tool-call order. Entries expose only recorded
 summaries and structured metadata. Replay imports no Agent, Model, Tool,
 ToolExecutor, ToolPolicy, registry, or ExecutionBackend and performs no I/O;
 it cannot rerun or reconstruct prompts, hidden details, or side effects.
+Resolved approvals appear as `approval_decision` entries between their recorded
+tool call and result, so evidence distinguishes approve/deny without replaying
+the handler.
 
 On `KeyboardInterrupt`, Agent finalizes the active record with
 `end_reason="interrupted"` and restores Session to its pre-run length. Completed
@@ -537,6 +550,11 @@ creates the provider and Agent with the loaded Session. It invokes no historical
 model or tool work. Ctrl+D exits cleanly; Ctrl+C cancels prompt input or marks
 the active run interrupted before returning to the prompt.
 
+Interactive Agent construction injects `TerminalApprovalHandler` using the
+REPL's input/output adapters. It is called only after `REQUIRE_APPROVAL`.
+One-shot `run` intentionally has no interactive handler and therefore fails
+closed rather than blocking a pipe or CI job.
+
 The default command-line provider adapter is DeepSeek, but the Agent continues
 to depend only on the Model protocol. Deterministic tests inject scripted model
 factories and make no network calls. Real-model trials are explicit, manual,
@@ -554,7 +572,10 @@ agent_started
   selection -> model_started -> model_completed | model_failed
   tool_policy_evaluated                (zero or more tools)
     ALLOW -> tool_started -> tool_completed
-    DENY | REQUIRE_APPROVAL -> no tool execution event
+    DENY -> model-visible denial, no approval/tool execution event
+    REQUIRE_APPROVAL -> approval_requested
+      APPROVE -> approval_granted -> tool_started -> tool_completed
+      DENY -> approval_denied -> model-visible denial, no tool execution event
 agent_completed | agent_failed
 ```
 
@@ -562,7 +583,9 @@ The lifecycle inside the loop repeats for each model step. `model_failed` is
 followed by `agent_failed`; an allowed tool that starts and then raises retains a
 `tool_completed` event with `is_error=True`. A policy rejection creates a
 model-visible `ToolResult(is_error=True)` without `tool_started` or
-`tool_completed`, because tool execution never began. Events describe runtime
+`tool_completed`, because tool execution never began. Approval rejection has
+the same no-execution property but distinct approval events and error text.
+Events describe runtime
 execution while ToolResult describes the observation supplied to the model.
 `context_build_failed` is followed by `agent_failed`, and no model request is
 made with partial or malformed context. Invalid selector configuration/output
@@ -581,6 +604,8 @@ Event payloads use the following current contract:
 | `model_completed` | `step`, `output_kind`, `tool_call_count` |
 | `model_failed` | `step`, `reason`, `error_type` |
 | `tool_policy_evaluated` | `step`, `name`, `call_id`, `risk_level`, `decision` |
+| `approval_requested` | `run_id`, `step`, `name`, `call_id`, redacted `arguments_preview` |
+| `approval_granted` / `approval_denied` | `run_id`, `step`, `name`, `call_id`, `approval_decision` |
 | `tool_started` | `step`, `name`, `call_id`, `arguments_preview` |
 | `tool_completed` | `step`, `name`, `call_id`, `is_error`, `duration_seconds`, `result_character_count` |
 | `agent_completed` | `reason`, `step_count` |
@@ -737,7 +762,9 @@ packages or a class for every box:
              decisions and tool calls
                          v
                     Action plane
- Tool Catalog -> Tool Policy -> Tool Executor -> ExecutionBackend
+ Tool Catalog -> Tool Executor -> Tool Policy
+                         |-> ApprovalHandler?
+                         `-> Tool -> ExecutionBackend
                          |
                   results and events
                          v
@@ -764,11 +791,13 @@ to `ToolExecutor` while continuing to own runtime event and result orchestration
 
 Some concepts are stable domain language rather than plugins. Today these
 include `Message`, `ToolCall`, `ToolResult`, `AgentEvent`, `StepTrace`,
-`RunTrace`, `RunRecord`, `ModelInvocationRecord`, and `ReplayEntry`.
+`ApprovalRequest`, `ApprovalTrace`, `RunTrace`, `RunRecord`,
+`ModelInvocationRecord`, and `ReplayEntry`.
 Simple data objects should remain simple.
 
 Capabilities with plausible alternative implementations belong behind narrow
 ports. `Model`, `SessionStore`, `ExecutionBackend`, `ToolPolicy`,
+`ApprovalHandler`,
 `TokenEstimator`, `ToolResultProjector`, `TrajectoryCompactor`, and
 `ToolSelector` are protocol-shaped ports. Context compilation strategies,
 result projection, trajectory compaction, and tool exposure are replaceable by
@@ -777,7 +806,8 @@ policy-enforced invocation service. `EventSink` remains a planned port.
 
 Adapters implement those ports: for example, DeepSeek for `Model`, the current
 memory and JSONL adapters for `SessionStore`, the current local and Docker
-adapters for `ExecutionBackend`, or a terminal renderer for a future `EventSink`.
+adapters for `ExecutionBackend`, the terminal/automatic approval handlers, or a
+terminal renderer for a future `EventSink`.
 Concrete adapters must not import or control one another. This avoids
 combinations such as a Docker backend coupled to a terminal renderer or a
 context compiler coupled to JSONL persistence, and keeps each integration
@@ -911,9 +941,9 @@ also be separable. Isolation must not hide failures: errors remain observable.
 
 **Current:** every production Agent tool invocation passes through
 `ToolExecutor` and its injected `ToolPolicy` before `Tool.execute()`. This
-establishes the invariant that no tool side effect occurs before an `ALLOW`
-decision. For command tools, it also means `ExecutionBackend.execute()` cannot
-be reached after `DENY` or `REQUIRE_APPROVAL`.
+establishes the invariant that no tool side effect occurs after `DENY`, or after
+`REQUIRE_APPROVAL` without an explicit `APPROVE` decision. For command tools,
+`ExecutionBackend.execute()` cannot be reached before both applicable gates.
 
 Policy is capability-level, not an argument security analyzer. `RiskLevel`
 describes a tool capability class, not the safety of every possible argument.
@@ -939,13 +969,15 @@ shares the host kernel, the Docker daemon remains a privileged host component,
 and container/runtime/kernel vulnerabilities remain possible. It must not be
 presented as a perfect boundary for hostile multi-tenant workloads.
 
-There is no real approval mechanism in M5B: `REQUIRE_APPROVAL` is a fail-closed
-state. Future mitigations may include argument-aware policy, staged workspaces,
-diff/apply approval, or restricted command profiles. Network enablement, secret
-injection, and broader host access remain denied by the M5A adapter rather than
-becoming model-controlled options. `ToolPolicy` knows nothing about local versus
-Docker execution, and `ExecutionBackend` remains responsible only for where and
-how a command runs.
+M15 approval is authorization, not a safety proof: an approved command is not
+necessarily sandboxed, reversible, or idempotent. Decisions are one-time and
+are not persisted as trust rules. Resume does not reopen an old prompt or retry
+an approval-gated call. Approval granted before an interrupted tool still leaves
+unknown side-effect state and is never treated as safe to retry. Future
+mitigations may include argument-aware policy, staged workspaces, diff/apply
+approval, or restricted command profiles. `ToolPolicy` knows nothing about
+local versus Docker execution, and `ExecutionBackend` remains responsible only
+for where and how a command runs.
 
 ## 10. Roadmap
 
@@ -991,6 +1023,9 @@ how a command runs.
 - **M14 — Durable Session Runtime:** implemented; atomically persist interactive
   identity, raw Session history, and associated RunRecords; discover and resume
   sessions without replaying historical execution; formalize interruption.
+- **M15 — Human Approval & Action Safety:** implemented; resolve
+  approval-required tool calls through a replaceable fail-closed handler, emit
+  and persist structured decisions, and provide one-time terminal approval.
 
 Future work may address concurrent session writers, session migration or
 branching, workspace relocation, and stronger cancellation of synchronous

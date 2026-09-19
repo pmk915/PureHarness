@@ -249,6 +249,12 @@ class RunRecord:
             raise ValueError(
                 "Every trace step must have a model invocation record"
             )
+        if not {
+            approval.step for approval in self.trace.approvals
+        }.issubset(invocation_steps):
+            raise ValueError(
+                "Every approval must have a model invocation record"
+            )
 
     def to_dict(self) -> dict[str, object]:
         return {

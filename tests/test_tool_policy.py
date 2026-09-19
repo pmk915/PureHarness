@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from miniharness.approval import ToolApprovalError
 from miniharness.coding_tools import create_run_command_tool
 from miniharness.execution import CommandResult
 from miniharness.tool_executor import ToolExecutor
@@ -113,20 +114,23 @@ def test_executor_evaluates_policy_before_allowed_tool():
 
 
 @pytest.mark.parametrize(
-    ("decision", "message"),
+    ("decision", "error_type", "message"),
     [
         (
             PolicyDecision.DENY,
+            ToolPolicyError,
             "Tool 'test_tool' was denied by policy.",
         ),
         (
             PolicyDecision.REQUIRE_APPROVAL,
-            "Tool 'test_tool' requires approval and was not executed.",
+            ToolApprovalError,
+            "Tool 'test_tool' requires approval, but no approval ",
         ),
     ],
 )
 def test_executor_does_not_call_unauthorized_tool(
     decision,
+    error_type,
     message,
 ):
     call_count = 0
@@ -140,7 +144,7 @@ def test_executor_does_not_call_unauthorized_tool(
     policy = StaticPolicy(decision)
     executor = ToolExecutor(registry, policy)
 
-    with pytest.raises(ToolPolicyError, match=message):
+    with pytest.raises(error_type, match=message):
         executor.execute("test_tool", {})
 
     assert call_count == 0
@@ -179,7 +183,12 @@ def test_unauthorized_command_does_not_call_backend(
     registry.register(tool)
     executor = ToolExecutor(registry, StaticPolicy(decision))
 
-    with pytest.raises(ToolPolicyError):
+    error_type = (
+        ToolPolicyError
+        if decision is PolicyDecision.DENY
+        else ToolApprovalError
+    )
+    with pytest.raises(error_type):
         executor.execute(
             "run_command",
             {"argv": ["python", "-V"]},

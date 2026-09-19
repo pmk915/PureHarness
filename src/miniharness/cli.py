@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from dotenv import load_dotenv
 
+from miniharness.approval import ApprovalHandler
 from miniharness.agent import Agent
 from miniharness.benchmark import (
     BenchmarkConfig,
@@ -36,6 +37,8 @@ from miniharness.session_store import (
     JsonlDurableSessionStore,
     SessionStoreError,
 )
+from miniharness.terminal_approval import TerminalApprovalHandler
+from miniharness.tool_executor import ToolExecutor
 from miniharness.tools import ToolRegistry
 
 
@@ -75,6 +78,12 @@ class PlainTerminalRenderer:
             self.output(f"[agent] failed: {data['reason']}")
         elif event.type == "agent_interrupted":
             self.output("[agent] interrupted")
+        elif event.type == "approval_requested":
+            self.output(f"[approval] requested: {data['name']}")
+        elif event.type == "approval_granted":
+            self.output(f"[approval] granted: {data['name']}")
+        elif event.type == "approval_denied":
+            self.output(f"[approval] denied: {data['name']}")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -312,6 +321,10 @@ def _run_interactive(
                     session_id=session_id,
                     output_fn=output_fn,
                     session=durable_state.session,
+                    approval_handler=TerminalApprovalHandler(
+                        input_fn=input_fn,
+                        output_fn=output_fn,
+                    ),
                 )
             except CLIError as exc:
                 output_fn(f"Error: {exc}")
@@ -484,6 +497,15 @@ def _inspect_record(
     output_fn(f"Tool calls: {record.tool_call_count}")
     output_fn(f"Tool executions: {record.tool_execution_count}")
     output_fn(f"Tool result errors: {record.tool_result_error_count}")
+    output_fn(f"Approvals: {len(record.trace.approvals)}")
+    for approval in record.trace.approvals:
+        output_fn(
+            "Approval: "
+            f"step={approval.step} "
+            f"tool={approval.tool_name} "
+            f"call_id={approval.call_id or '(none)'} "
+            f"decision={approval.decision.value}"
+        )
     output_fn(
         "Trajectory compactions: "
         f"{record.trajectory_compaction_count}"
@@ -556,13 +578,19 @@ def _create_agent(
     session_id: str,
     output_fn: OutputFunction,
     session: Session | None = None,
+    approval_handler: ApprovalHandler | None = None,
 ) -> Agent:
     registry = ToolRegistry()
     for tool in create_coding_tools(workspace):
         registry.register(tool)
+    tool_executor = ToolExecutor(
+        registry,
+        approval_handler=approval_handler,
+    )
     return Agent(
         model=model,
         tools=registry,
+        tool_executor=tool_executor,
         listeners=[PlainTerminalRenderer(output_fn)],
         session_id=session_id,
         session=session,

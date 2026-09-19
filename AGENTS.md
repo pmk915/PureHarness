@@ -78,6 +78,13 @@ product clone, a multi-agent framework, or an unrelated collection of tools.
     must never replay historical model calls, tools, or side effects.
 33. Interrupted runs finalize explicit evidence but must not commit a partial
     tool-execution unit into Session or automatically retry an uncertain tool.
+34. ToolPolicy classification, ApprovalHandler interaction, and tool/backend
+    execution are separate boundaries; approval must not bypass policy or
+    execute a tool itself.
+35. REQUIRE_APPROVAL without an explicit APPROVE decision fails closed, and
+    policy DENY must never invoke an ApprovalHandler.
+36. Durable resume must not reopen historical approvals or retry approval-gated
+    calls, including calls approved before an uncertain interruption.
 
 ## Development workflow
 

@@ -3,13 +3,18 @@ from pathlib import Path
 
 import pytest
 
+from miniharness.agent import Agent
+from miniharness.approval import ApprovalDecision
 from miniharness.cli import main
-from miniharness.messages import Message, ToolCall
+from miniharness.messages import Message, ToolCall, ToolResult
 from miniharness.session import Session
 from miniharness.session_store import (
     DurableSession,
     JsonlDurableSessionStore,
 )
+from miniharness.tool_executor import ToolExecutor
+from miniharness.tool_policy import PolicyDecision
+from miniharness.tools import Tool, ToolRegistry
 
 
 class RecordingModel:
@@ -411,3 +416,201 @@ def test_durable_files_stay_under_configured_miniharness_home(
     files = tuple(home.rglob("*"))
     assert any(path.suffix == ".jsonl" for path in files)
     assert all(path == home or home in path.parents for path in files)
+
+
+@pytest.mark.parametrize(
+    ("approval_decision", "expected_executions"),
+    [
+        (ApprovalDecision.APPROVE, 1),
+        (ApprovalDecision.DENY, 0),
+    ],
+)
+def test_resume_never_replays_historical_approval_gated_action(
+    durable_environment,
+    approval_decision,
+    expected_executions,
+):
+    home, workspace = durable_environment
+    execution_count = 0
+    approval_requests = 0
+
+    class RequireApprovalPolicy:
+        def evaluate(self, tool, arguments):
+            return PolicyDecision.REQUIRE_APPROVAL
+
+    class RecordingHandler:
+        def request_approval(self, request):
+            nonlocal approval_requests
+            approval_requests += 1
+            return approval_decision
+
+    class EffectModel:
+        def __init__(self):
+            self.calls = 0
+
+        def generate(self, messages, tools):
+            self.calls += 1
+            if self.calls == 1:
+                return [
+                    ToolCall(
+                        name="effect",
+                        arguments={},
+                        call_id="historical-approval",
+                    )
+                ]
+            return Message(role="assistant", content="done")
+
+    def effect():
+        nonlocal execution_count
+        execution_count += 1
+        return "executed"
+
+    registry = ToolRegistry()
+    registry.register(
+        Tool(
+            name="effect",
+            description="Approval-gated historical effect.",
+            parameters={"type": "object", "properties": {}},
+            function=effect,
+            side_effects=True,
+        )
+    )
+    agent = Agent(
+        model=EffectModel(),
+        tools=registry,
+        tool_executor=ToolExecutor(
+            registry,
+            RequireApprovalPolicy(),
+            approval_handler=RecordingHandler(),
+        ),
+        max_steps=2,
+        session_id="approval-session",
+        run_id_factory=lambda: "approval-run",
+    )
+
+    assert agent.run("perform gated action") == "done"
+    assert agent.last_run_record is not None
+    now = datetime(2026, 9, 20, 10, 0, tzinfo=timezone.utc)
+    state = DurableSession(
+        session_id="approval-session",
+        created_at=now,
+        updated_at=now,
+        workspace=workspace.resolve(),
+        model="fake-model",
+        session=agent.session,
+        run_records=[agent.last_run_record],
+    )
+    _store(home).save(state)
+
+    loaded = _store(home).load(state.session_id)
+    assert loaded.run_records[0].trace.approvals[0].decision is (
+        approval_decision
+    )
+    result = next(
+        item
+        for item in loaded.session.items
+        if isinstance(item, ToolResult)
+    )
+    assert result.is_error is (
+        approval_decision is ApprovalDecision.DENY
+    )
+
+    exit_code = main(
+        ["resume", state.session_id],
+        model_factory=lambda name: pytest.fail(
+            "passive resume must not create a model"
+        ),
+        input_fn=_input(["/status", "/exit"]),
+        output_fn=lambda value: None,
+    )
+
+    assert exit_code == 0
+    assert approval_requests == 1
+    assert execution_count == expected_executions
+
+
+def test_resume_never_retries_approved_tool_interrupted_in_execution(
+    durable_environment,
+):
+    home, workspace = durable_environment
+    execution_count = 0
+    approval_requests = 0
+
+    class RequireApprovalPolicy:
+        def evaluate(self, tool, arguments):
+            return PolicyDecision.REQUIRE_APPROVAL
+
+    class ApproveOnce:
+        def request_approval(self, request):
+            nonlocal approval_requests
+            approval_requests += 1
+            return ApprovalDecision.APPROVE
+
+    class EffectModel:
+        def generate(self, messages, tools):
+            return [
+                ToolCall(
+                    name="uncertain_effect",
+                    arguments={},
+                    call_id="approved-interrupted",
+                )
+            ]
+
+    def uncertain_effect():
+        nonlocal execution_count
+        execution_count += 1
+        raise KeyboardInterrupt
+
+    registry = ToolRegistry()
+    registry.register(
+        Tool(
+            name="uncertain_effect",
+            description="Interrupt after an uncertain side effect.",
+            parameters={"type": "object", "properties": {}},
+            function=uncertain_effect,
+            side_effects=True,
+        )
+    )
+    agent = Agent(
+        model=EffectModel(),
+        tools=registry,
+        tool_executor=ToolExecutor(
+            registry,
+            RequireApprovalPolicy(),
+            approval_handler=ApproveOnce(),
+        ),
+        session_id="approved-interrupted-session",
+        run_id_factory=lambda: "approved-interrupted-run",
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        agent.run("perform uncertain effect")
+
+    assert agent.last_run_record is not None
+    assert agent.last_run_record.end_reason == "interrupted"
+    assert agent.last_run_record.trace.approvals[0].decision is (
+        ApprovalDecision.APPROVE
+    )
+    assert agent.session.items == []
+    now = datetime(2026, 9, 20, 10, 0, tzinfo=timezone.utc)
+    state = DurableSession(
+        session_id="approved-interrupted-session",
+        created_at=now,
+        updated_at=now,
+        workspace=workspace.resolve(),
+        model="fake-model",
+        session=agent.session,
+        run_records=[agent.last_run_record],
+    )
+    _store(home).save(state)
+
+    assert main(
+        ["resume", state.session_id],
+        model_factory=lambda name: pytest.fail(
+            "passive resume must not recreate interrupted work"
+        ),
+        input_fn=_input(["/status", "/exit"]),
+        output_fn=lambda value: None,
+    ) == 0
+    assert approval_requests == 1
+    assert execution_count == 1

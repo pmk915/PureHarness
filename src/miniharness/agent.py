@@ -1,5 +1,6 @@
 from miniharness.messages import AgentItem, Message, ToolCall, ToolResult
 from miniharness.model import Model, ModelError
+from miniharness.approval import ApprovalDecision, ApprovalRequest
 from miniharness.run_record import (
     ModelInvocationRecord,
     RunRecord,
@@ -16,7 +17,7 @@ from miniharness.tool_selection import (
     prepare_tool_selection,
 )
 from miniharness.tools import Tool, ToolRegistry
-from miniharness.trace import RunTrace, StepTrace
+from miniharness.trace import ApprovalTrace, RunTrace, StepTrace
 from miniharness.events import AgentEvent, safe_arguments_preview
 from miniharness.context import (
     ContextBuilder,
@@ -558,6 +559,60 @@ class Agent:
                             )
                         )
 
+                    def on_approval_requested(
+                        tool: Tool,
+                        request: ApprovalRequest,
+                    ) -> None:
+                        self._emit(
+                            AgentEvent(
+                                type="approval_requested",
+                                data={
+                                    "run_id": record_builder.run_id,
+                                    "step": step,
+                                    "name": tool.name,
+                                    "call_id": tool_call.call_id,
+                                    "arguments_preview": (
+                                        safe_arguments_preview(
+                                            request.arguments
+                                        )
+                                    ),
+                                },
+                            )
+                        )
+
+                    def on_approval_resolved(
+                        tool: Tool,
+                        _request: ApprovalRequest,
+                        decision: ApprovalDecision,
+                    ) -> None:
+                        self.trace.approvals.append(
+                            ApprovalTrace(
+                                step=step,
+                                tool_name=tool.name,
+                                call_id=tool_call.call_id,
+                                decision=decision,
+                            )
+                        )
+                        event_type = (
+                            "approval_granted"
+                            if decision is ApprovalDecision.APPROVE
+                            else "approval_denied"
+                        )
+                        self._emit(
+                            AgentEvent(
+                                type=event_type,
+                                data={
+                                    "run_id": record_builder.run_id,
+                                    "step": step,
+                                    "name": tool.name,
+                                    "call_id": tool_call.call_id,
+                                    "approval_decision": (
+                                        decision.value
+                                    ),
+                                },
+                            )
+                        )
+
                     try:
                         if (
                             tool_call.name
@@ -572,6 +627,12 @@ class Agent:
                             tool_call.arguments,
                             on_policy_evaluated=(
                                 on_policy_evaluated
+                            ),
+                            on_approval_requested=(
+                                on_approval_requested
+                            ),
+                            on_approval_resolved=(
+                                on_approval_resolved
                             ),
                             on_tool_started=on_tool_started,
                         )

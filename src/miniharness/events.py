@@ -14,6 +14,9 @@ AgentEventType = Literal[
     "model_completed",
     "model_failed",
     "tool_policy_evaluated",
+    "approval_requested",
+    "approval_granted",
+    "approval_denied",
     "tool_started",
     "tool_completed",
     "agent_completed",
@@ -24,6 +27,7 @@ AgentEventType = Literal[
 
 class AgentEventData(TypedDict, total=False):
     step: int
+    run_id: str
     step_count: int
     reason: str
     error_type: str
@@ -67,6 +71,7 @@ class AgentEventData(TypedDict, total=False):
     call_id: str | None
     risk_level: str
     decision: Literal["allow", "deny", "require_approval"]
+    approval_decision: Literal["approve", "deny"]
     arguments_preview: dict[str, str]
     is_error: bool
     duration_seconds: float

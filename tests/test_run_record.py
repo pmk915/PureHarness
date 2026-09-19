@@ -385,6 +385,14 @@ def test_run_record_serialization_round_trip(record_factory):
     assert record.to_json() == record.to_json()
 
 
+def test_run_record_loads_pre_approval_trace_without_approval_field():
+    record = _completed_record()
+    data = record.to_dict()
+    del data["trace"]["approvals"]
+
+    assert RunRecord.from_dict(data) == record
+
+
 def _failed_record():
     agent = Agent(
         model=FailingModel(),

@@ -132,6 +132,39 @@ def test_rich_terminal_renders_interruption_separately_from_failure():
 
 
 @pytest.mark.parametrize(
+    ("event_type", "expected"),
+    [
+        ("approval_requested", "Approval requested: effect"),
+        ("approval_granted", "Approval granted: effect"),
+        ("approval_denied", "Approval denied: effect"),
+    ],
+)
+def test_rich_terminal_renders_approval_events(event_type, expected):
+    output = StringIO()
+    renderer = RichTerminalRenderer(
+        console=Console(
+            file=output,
+            force_terminal=False,
+            color_system=None,
+        )
+    )
+
+    renderer(
+        AgentEvent(
+            type=event_type,
+            data={
+                "run_id": "run-1",
+                "step": 0,
+                "name": "effect",
+                "call_id": "call-1",
+            },
+        )
+    )
+
+    assert expected in output.getvalue()
+
+
+@pytest.mark.parametrize(
     ("locale", "expected"),
     [
         (

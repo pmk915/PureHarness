@@ -32,6 +32,16 @@ def replay_run(record: RunRecord) -> tuple[ReplayEntry, ...]:
         step.index: step
         for step in record.trace.steps
     }
+    approvals_by_step = {
+        step: tuple(
+            approval
+            for approval in record.trace.approvals
+            if approval.step == step
+        )
+        for step in {
+            approval.step for approval in record.trace.approvals
+        }
+    }
 
     for invocation in record.model_invocations:
         entries.append(
@@ -108,6 +118,30 @@ def replay_run(record: RunRecord) -> tuple[ReplayEntry, ...]:
                     ),
                 )
             )
+            for approval in approvals_by_step.get(
+                invocation.step,
+                (),
+            ):
+                if (
+                    approval.tool_name != call.name
+                    or approval.call_id != call.call_id
+                ):
+                    continue
+                entries.append(
+                    ReplayEntry(
+                        kind="approval_decision",
+                        step=invocation.step,
+                        summary=(
+                            "Tool approval decision recorded: "
+                            f"{approval.decision.value}."
+                        ),
+                        metadata=(
+                            ("name", approval.tool_name),
+                            ("call_id", approval.call_id),
+                            ("decision", approval.decision.value),
+                        ),
+                    )
+                )
             entries.append(
                 ReplayEntry(
                     kind="tool_result",

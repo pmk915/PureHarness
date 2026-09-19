@@ -2,6 +2,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Literal
 
+from miniharness.approval import ApprovalDecision
 from miniharness.messages import Message, ToolCall, ToolResult
 
 
@@ -28,6 +29,66 @@ RUN_END_REASONS = frozenset(
 
 class RunTraceSerializationError(ValueError):
     """Raised when serialized RunTrace data is invalid."""
+
+
+@dataclass(frozen=True)
+class ApprovalTrace:
+    step: int
+    tool_name: str
+    call_id: str | None
+    decision: ApprovalDecision
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.step, int)
+            or isinstance(self.step, bool)
+            or self.step < 0
+        ):
+            raise ValueError("ApprovalTrace step must be non-negative")
+        if not isinstance(self.tool_name, str) or not self.tool_name:
+            raise ValueError("ApprovalTrace tool_name must be non-empty")
+        if self.call_id is not None and not isinstance(self.call_id, str):
+            raise ValueError("ApprovalTrace call_id must be text or null")
+        if not isinstance(self.decision, ApprovalDecision):
+            raise ValueError(
+                "ApprovalTrace decision must be ApprovalDecision"
+            )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "step": self.step,
+            "tool_name": self.tool_name,
+            "call_id": self.call_id,
+            "decision": self.decision.value,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, object]) -> "ApprovalTrace":
+        try:
+            step = data["step"]
+            if (
+                not isinstance(step, int)
+                or isinstance(step, bool)
+                or step < 0
+            ):
+                raise ValueError("step must be non-negative")
+            tool_name = _require_string(data, "tool_name")
+            call_id = data["call_id"]
+            if call_id is not None and not isinstance(call_id, str):
+                raise ValueError("call_id must be text or null")
+            decision = ApprovalDecision(
+                _require_string(data, "decision")
+            )
+            return cls(
+                step=step,
+                tool_name=tool_name,
+                call_id=call_id,
+                decision=decision,
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise RunTraceSerializationError(
+                f"Invalid ApprovalTrace data: {exc}"
+            ) from exc
 
 
 @dataclass
@@ -130,6 +191,7 @@ class StepTrace:
 @dataclass
 class RunTrace:
     steps: list[StepTrace] = field(default_factory=list)
+    approvals: list[ApprovalTrace] = field(default_factory=list)
     end_reason: RunEndReason | None = None
 
     def snapshot(self) -> "RunTrace":
@@ -139,6 +201,10 @@ class RunTrace:
         return {
             "end_reason": self.end_reason,
             "steps": [step.to_dict() for step in self.steps],
+            "approvals": [
+                approval.to_dict()
+                for approval in self.approvals
+            ],
         }
 
     @classmethod
@@ -168,6 +234,18 @@ class RunTrace:
                 raise RunTraceSerializationError(
                     "RunTrace steps must contain objects."
                 )
+
+            approvals_data = data.get("approvals", [])
+            if not isinstance(approvals_data, list) or not all(
+                isinstance(item, dict) for item in approvals_data
+            ):
+                raise RunTraceSerializationError(
+                    "RunTrace approvals must be a list of objects."
+                )
+            approvals = [
+                ApprovalTrace.from_dict(item)
+                for item in approvals_data
+            ]
         except (KeyError, TypeError, ValueError) as exc:
             if isinstance(exc, RunTraceSerializationError):
                 raise
@@ -185,6 +263,7 @@ class RunTrace:
 
         return cls(
             steps=steps,
+            approvals=approvals,
             end_reason=end_reason,
         )
 

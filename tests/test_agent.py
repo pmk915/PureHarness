@@ -532,20 +532,24 @@ def test_agent_uses_replaceable_allow_policy():
 
 
 @pytest.mark.parametrize(
-    ("decision", "error_detail"),
+    ("decision", "error_type", "error_detail"),
     [
         (
             PolicyDecision.DENY,
+            "ToolPolicyError",
             "Tool 'add' was denied by policy.",
         ),
         (
             PolicyDecision.REQUIRE_APPROVAL,
-            "Tool 'add' requires approval and was not executed.",
+            "ToolApprovalError",
+            "Tool 'add' requires approval, but no approval handler was "
+            "configured.",
         ),
     ],
 )
 def test_agent_observes_unauthorized_tool_as_error(
     decision,
+    error_type,
     error_detail,
 ):
     call_count = 0
@@ -578,25 +582,29 @@ def test_agent_observes_unauthorized_tool_as_error(
     result = agent.run("calculate")
 
     assert result == (
-        "The result is Tool error: ToolPolicyError: "
+        f"The result is Tool error: {error_type}: "
         f"{error_detail}"
     )
     assert call_count == 0
     assert isinstance(agent.messages[2], ToolResult)
     assert agent.messages[2].is_error is True
     assert agent.messages[2].content == (
-        f"Tool error: ToolPolicyError: {error_detail}"
+        f"Tool error: {error_type}: {error_detail}"
     )
 
     tool_events = [
         event
         for event in agent.events
         if event.type.startswith("tool_")
+        or event.type.startswith("approval_")
     ]
 
-    assert [event.type for event in tool_events] == [
-        "tool_policy_evaluated",
-    ]
+    expected_events = ["tool_policy_evaluated"]
+    if decision is PolicyDecision.REQUIRE_APPROVAL:
+        expected_events.extend(
+            ["approval_requested", "approval_denied"]
+        )
+    assert [event.type for event in tool_events] == expected_events
     assert tool_events[0].data["decision"] == decision.value
 
 
