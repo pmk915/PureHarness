@@ -21,6 +21,9 @@ _TEXT = {
         "units": "units",
         "history_budget": "history token budget",
         "compacted_results": "tool outputs compacted",
+        "task_state": "task state",
+        "modified_files": "modified files",
+        "recent_errors": "recent errors",
         "context_build_failed": "✗ Context build failed",
         "item_unit": "items",
         "separator": ": ",
@@ -49,6 +52,9 @@ _TEXT = {
         "units": "单元",
         "history_budget": "历史 token 预算",
         "compacted_results": "工具输出压缩",
+        "task_state": "任务状态",
+        "modified_files": "个修改文件",
+        "recent_errors": "个近期错误",
         "context_build_failed": "✗ 上下文构建失败",
         "item_unit": "项",
         "separator": "：",
@@ -131,6 +137,14 @@ class RichTerminalRenderer:
                 f"  {text['compacted_results']}"
                 f"{text['separator']}"
                 f"{data['compacted_tool_results']}"
+            )
+            self._print(
+                f"  {text['task_state']}"
+                f"{text['separator']}"
+                f"{data['files_modified_count']} "
+                f"{text['modified_files']} · "
+                f"{data['recent_errors_count']} "
+                f"{text['recent_errors']}"
             )
 
             if "history_token_budget" in data:

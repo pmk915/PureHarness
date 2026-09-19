@@ -40,6 +40,10 @@ product clone, a multi-agent framework, or an unrelated collection of tools.
 15. Model-facing ToolResult compaction is derived context state; preserve raw
     results in Session and estimate the projected representation sent to the
     model.
+16. TaskState is derived from raw Session, is rebuildable, and must not become a
+    second persistence source of truth.
+17. Do not infer structured state from arbitrary shell text or natural-language
+    semantics without an explicit architecture change.
 
 ## Development workflow
 

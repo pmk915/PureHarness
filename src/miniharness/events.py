@@ -28,8 +28,16 @@ class AgentEventData(TypedDict, total=False):
     error_type: str
     history_item_count: int
     context_item_count: int
+    trajectory_item_count: int
     context_strategy: str
     estimated_history_tokens: int
+    estimated_task_state_tokens: int
+    current_request_present: bool
+    completed_actions_count: int
+    failed_actions_count: int
+    files_read_count: int
+    files_modified_count: int
+    recent_errors_count: int
     total_units: int
     included_units: int
     dropped_units: int

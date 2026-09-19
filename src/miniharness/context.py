@@ -14,6 +14,10 @@ from miniharness.tool_result_projection import (
     DeterministicToolResultProjector,
     ToolResultProjector,
 )
+from miniharness.tool_history import (
+    ToolHistoryError,
+    match_tool_interactions,
+)
 
 
 class ContextCompileError(RuntimeError):
@@ -153,6 +157,13 @@ class ContextBuilder:
         """Compatibility view over the canonical compile path."""
         return self.compile(history).items
 
+    def estimate_tokens(
+        self,
+        items: Sequence[AgentItem],
+    ) -> int:
+        """Estimate and validate model-facing items with this compiler."""
+        return _estimate_items(items, self.token_estimator)
+
 
 class RecentContextBuilder(ContextBuilder):
     strategy = "Recent"
@@ -283,56 +294,12 @@ def _group_context_units(
 def _tool_context_unit(
     items: Sequence[ToolCall | ToolResult],
 ) -> ContextUnit:
-    calls: list[ToolCall] = []
-    matched_call_indexes: set[int] = set()
-    call_ids: set[str] = set()
-
-    for item in items:
-        if isinstance(item, ToolCall):
-            if item.call_id is not None:
-                if item.call_id in call_ids:
-                    raise ContextCompileError(
-                        "Tool history contains duplicate ToolCall "
-                        f"call_id {item.call_id!r}."
-                    )
-
-                call_ids.add(item.call_id)
-
-            calls.append(item)
-            continue
-
-        match = next(
-            (
-                index
-                for index, call in enumerate(calls)
-                if index not in matched_call_indexes
-                and _tool_result_matches(call, item)
-            ),
-            None,
-        )
-
-        if match is None:
-            raise ContextCompileError(
-                "ToolResult has no matching ToolCall in its "
-                f"execution group: {item.name!r}."
-            )
-
-        matched_call_indexes.add(match)
+    try:
+        match_tool_interactions(items)
+    except ToolHistoryError as exc:
+        raise ContextCompileError(str(exc)) from exc
 
     return ContextUnit(items=tuple(items))
-
-
-def _tool_result_matches(
-    call: ToolCall,
-    result: ToolResult,
-) -> bool:
-    if call.name != result.name:
-        return False
-
-    if call.call_id is None or result.call_id is None:
-        return True
-
-    return call.call_id == result.call_id
 
 
 def _estimate_units(
@@ -342,20 +309,27 @@ def _estimate_units(
     costs = []
 
     for unit in units:
-        cost = token_estimator.estimate(unit.items)
-
-        if (
-            not isinstance(cost, int)
-            or isinstance(cost, bool)
-            or cost < 0
-        ):
-            raise ContextCompileError(
-                "TokenEstimator must return a non-negative integer."
-            )
-
-        costs.append(cost)
+        costs.append(_estimate_items(unit.items, token_estimator))
 
     return costs
+
+
+def _estimate_items(
+    items: Sequence[AgentItem],
+    token_estimator: TokenEstimator,
+) -> int:
+    cost = token_estimator.estimate(items)
+
+    if (
+        not isinstance(cost, int)
+        or isinstance(cost, bool)
+        or cost < 0
+    ):
+        raise ContextCompileError(
+            "TokenEstimator must return a non-negative integer."
+        )
+
+    return cost
 
 
 def _project_context_units(

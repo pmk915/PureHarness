@@ -571,3 +571,16 @@ def test_context_supports_legacy_missing_call_ids():
 
     assert compiled.items == history
     assert compiled.total_units == 1
+
+
+def test_context_rejects_duplicate_tool_call_ids():
+    history = [
+        ToolCall(name="read_file", arguments={}, call_id="1"),
+        ToolCall(name="read_file", arguments={}, call_id="1"),
+    ]
+
+    with pytest.raises(
+        ContextCompileError,
+        match="duplicate ToolCall call_id",
+    ):
+        ContextBuilder().compile(history)

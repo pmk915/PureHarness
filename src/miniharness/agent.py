@@ -14,6 +14,11 @@ from collections.abc import Callable
 from time import perf_counter
 
 from miniharness.session import Session
+from miniharness.task_state import (
+    TaskStateError,
+    TaskStateReducer,
+    render_task_state,
+)
 
 
 class Agent:
@@ -26,6 +31,7 @@ class Agent:
         context_builder: ContextBuilder | None = None,
         session: Session | None = None,
         tool_executor: ToolExecutor | None = None,
+        task_state_reducer: TaskStateReducer | None = None,
     ):
         self.model = model
         if tool_executor is None:
@@ -57,6 +63,11 @@ class Agent:
         self.listeners = listeners or []
         self.listener_errors: list[Exception] = []
         self.context_builder = context_builder or ContextBuilder()
+        self.task_state_reducer = (
+            task_state_reducer
+            if task_state_reducer is not None
+            else TaskStateReducer()
+        )
 
 
     @property
@@ -112,10 +123,17 @@ class Agent:
             )
 
             try:
+                task_state = self.task_state_reducer.reduce(history)
+                task_state_item = render_task_state(task_state)
+                estimated_task_state_tokens = (
+                    self.context_builder.estimate_tokens(
+                        [task_state_item]
+                    )
+                )
                 compiled_context = self.context_builder.compile(
                     history
                 )
-            except ContextCompileError as exc:
+            except (ContextCompileError, TaskStateError) as exc:
                 self.trace.end_reason = "context_error"
 
                 self._emit(
@@ -143,15 +161,39 @@ class Agent:
 
                 raise
 
+            model_context = [
+                task_state_item,
+                *compiled_context.items,
+            ]
             context_event_data = {
                 "step": step,
                 "history_item_count": len(history),
-                "context_item_count": len(
+                "context_item_count": len(model_context),
+                "trajectory_item_count": len(
                     compiled_context.items
                 ),
                 "context_strategy": compiled_context.strategy,
                 "estimated_history_tokens": (
                     compiled_context.estimated_tokens
+                ),
+                "estimated_task_state_tokens": (
+                    estimated_task_state_tokens
+                ),
+                "current_request_present": (
+                    task_state.current_request is not None
+                ),
+                "completed_actions_count": len(
+                    task_state.completed_actions
+                ),
+                "failed_actions_count": len(
+                    task_state.failed_actions
+                ),
+                "files_read_count": len(task_state.files_read),
+                "files_modified_count": len(
+                    task_state.files_modified
+                ),
+                "recent_errors_count": len(
+                    task_state.recent_errors
                 ),
                 "total_units": compiled_context.total_units,
                 "included_units": (
@@ -195,7 +237,7 @@ class Agent:
 
             try:
                 output = self.model.generate(
-                    compiled_context.items,
+                    model_context,
                     self.tools.list_tools(),
                 )
             except ModelError as exc:

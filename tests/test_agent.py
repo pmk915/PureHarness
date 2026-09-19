@@ -17,6 +17,7 @@ from miniharness.tool_policy import PolicyDecision
 from miniharness.tool_result_projection import (
     DeterministicToolResultProjector,
 )
+from miniharness.task_state import TaskStateError
 
 class FailingModel:
     def generate(self, messages, tools):
@@ -29,8 +30,16 @@ class MultiToolModel:
         messages,
         tools,
     ):
+        trajectory = [
+            item
+            for item in messages
+            if not (
+                isinstance(item, Message)
+                and item.role == "system"
+            )
+        ]
 
-        if len(messages) == 1:
+        if len(trajectory) == 1:
 
             return [
                 ToolCall(
@@ -90,6 +99,12 @@ class FixedMessageEstimator:
         self.costs = costs
 
     def estimate(self, items):
+        if (
+            isinstance(items[0], Message)
+            and items[0].role == "system"
+        ):
+            return 1
+
         return self.costs[items[0].content]
 
 
@@ -135,9 +150,17 @@ def test_agent_records_lifecycle_events():
 
     assert context_built.data["step"] == 0
     assert context_built.data["history_item_count"] == 1
-    assert context_built.data["context_item_count"] == 1
+    assert context_built.data["context_item_count"] == 2
+    assert context_built.data["trajectory_item_count"] == 1
     assert context_built.data["context_strategy"] == "FullHistory"
     assert context_built.data["estimated_history_tokens"] > 0
+    assert context_built.data["estimated_task_state_tokens"] > 0
+    assert context_built.data["current_request_present"] is True
+    assert context_built.data["completed_actions_count"] == 0
+    assert context_built.data["failed_actions_count"] == 0
+    assert context_built.data["files_read_count"] == 0
+    assert context_built.data["files_modified_count"] == 0
+    assert context_built.data["recent_errors_count"] == 0
     assert context_built.data["total_units"] == 1
     assert context_built.data["included_units"] == 1
     assert context_built.data["dropped_units"] == 0
@@ -725,11 +748,11 @@ def test_agent_sends_compiled_context_items_and_emits_statistics():
     )
 
     assert agent.run("new") == "done"
-    assert model.contexts == [
-        [
-            Message(role="assistant", content="recent"),
-            Message(role="user", content="new"),
-        ]
+    assert len(model.contexts) == 1
+    assert model.contexts[0][0].role == "system"
+    assert model.contexts[0][1:] == [
+        Message(role="assistant", content="recent"),
+        Message(role="user", content="new"),
     ]
 
     context_built = next(
@@ -741,9 +764,17 @@ def test_agent_sends_compiled_context_items_and_emits_statistics():
     assert context_built.data == {
         "step": 0,
         "history_item_count": 3,
-        "context_item_count": 2,
+        "context_item_count": 3,
+        "trajectory_item_count": 2,
         "context_strategy": "TokenBudget",
         "estimated_history_tokens": 5,
+        "estimated_task_state_tokens": 1,
+        "current_request_present": True,
+        "completed_actions_count": 0,
+        "failed_actions_count": 0,
+        "files_read_count": 0,
+        "files_modified_count": 0,
+        "recent_errors_count": 0,
         "total_units": 3,
         "included_units": 2,
         "dropped_units": 1,
@@ -820,6 +851,82 @@ def test_agent_sends_projected_tool_result_without_mutating_session():
     )
 
 
+def test_agent_prepends_derived_task_state_without_storing_it():
+    session = Session(
+        items=[
+            Message(role="user", content="repair the project"),
+            ToolCall(
+                name="read_file",
+                arguments={"path": "src/a.py"},
+                call_id="read-1",
+            ),
+            ToolResult(
+                name="read_file",
+                content="contents",
+                call_id="read-1",
+            ),
+            Message(role="assistant", content="editing"),
+            ToolCall(
+                name="apply_patch",
+                arguments={"path": "src/a.py"},
+                call_id="write-1",
+            ),
+            ToolResult(
+                name="apply_patch",
+                content="patched",
+                call_id="write-1",
+            ),
+            Message(role="assistant", content="testing"),
+            ToolCall(
+                name="run_command",
+                arguments={"argv": ["pytest"]},
+                call_id="test-1",
+            ),
+            ToolResult(
+                name="run_command",
+                content="one test failed",
+                call_id="test-1",
+                is_error=True,
+            ),
+        ]
+    )
+    model = RecordingModel()
+    agent = Agent(model=model, session=session)
+
+    assert agent.run("continue repair") == "done"
+
+    state_item = model.contexts[0][0]
+    assert isinstance(state_item, Message)
+    assert state_item.role == "system"
+    assert "[MiniHarness Derived Task State]" in state_item.content
+    assert "continue repair" in state_item.content
+    assert "src/a.py" in state_item.content
+    assert "read_file (call_id=read-1)" in state_item.content
+    assert "apply_patch (call_id=write-1)" in state_item.content
+    assert "run_command (call_id=test-1)" in state_item.content
+    assert "one test failed" in state_item.content
+    assert model.contexts[0][1:] != []
+    assert all(
+        not (
+            isinstance(item, Message)
+            and item.role == "system"
+        )
+        for item in session.items
+    )
+
+    context_built = next(
+        event
+        for event in agent.events
+        if event.type == "context_built"
+    )
+    assert context_built.data["completed_actions_count"] == 2
+    assert context_built.data["failed_actions_count"] == 1
+    assert context_built.data["files_read_count"] == 1
+    assert context_built.data["files_modified_count"] == 1
+    assert context_built.data["recent_errors_count"] == 1
+    assert context_built.data["estimated_task_state_tokens"] > 0
+
+
 def test_context_budget_failure_stops_before_model_call():
     model = RecordingModel()
     agent = Agent(
@@ -852,6 +959,36 @@ def test_context_budget_failure_stops_before_model_call():
         "error_type": "ContextBudgetExceeded",
     }
     assert agent.events[3].data["reason"] == "context_error"
+
+
+def test_task_state_failure_stops_before_model_call():
+    model = RecordingModel()
+    session = Session(
+        items=[
+            ToolResult(
+                name="read_file",
+                content="orphan",
+                call_id="1",
+            )
+        ]
+    )
+    agent = Agent(model=model, session=session)
+
+    with pytest.raises(
+        TaskStateError,
+        match="ToolResult has no matching ToolCall",
+    ):
+        agent.run("continue")
+
+    assert model.contexts == []
+    assert agent.trace.end_reason == "context_error"
+    assert [event.type for event in agent.events] == [
+        "agent_started",
+        "context_build_started",
+        "context_build_failed",
+        "agent_failed",
+    ]
+    assert agent.events[2].data["error_type"] == "TaskStateError"
 
 
 def test_agent_records_history_in_session():

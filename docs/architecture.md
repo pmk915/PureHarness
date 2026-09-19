@@ -2,7 +2,7 @@
 
 This document separates the implementation that exists today from the intended
 architecture. Sections marked **Current** describe repository behavior through
-the M7 Structured Tool Output milestone. Sections marked **Target** describe
+the M8 Deterministic TaskState v1 milestone. Sections marked **Target** describe
 direction, not implemented APIs.
 
 ## 1. Project positioning
@@ -26,17 +26,12 @@ over a broad framework or a coding-agent product.
 `src/miniharness`. The runtime flow is:
 
 ```text
-user input
-   |
-   v
-Agent -> Session.snapshot() -> Context compiler -> CompiledContext -> Model
-                              (result projection)
-  |                                                               |
-  |                                     Message or ToolCall(s) <--+
-  |                           |
-  +-> ToolExecutor -> ToolRegistry lookup
-  |              `-> ToolPolicy -> Tool callable
-  |
+                             +-> TaskStateReducer -> system state view --+
+user input -> Agent -> Session.snapshot()                                +-> Model
+  |                          +-> Context compiler -> trajectory view ----+
+  |                                                                      |
+  |                                            Message or ToolCall(s) <--+
+  +-> ToolExecutor -> ToolRegistry lookup -> ToolPolicy -> Tool callable
   +-> Session + RunTrace + AgentEvent listeners
 
 External lifecycle -> SessionStore <-> Session -> Agent
@@ -47,8 +42,10 @@ External lifecycle -> SessionStore <-> Session -> Agent
 `Agent` owns the synchronous execution loop. At the start of each run it resets
 the per-run trace, events, and listener errors, appends the user message to its
 session, and iterates up to `max_steps`. Each step builds model context from a
-session snapshot and calls the model. An assistant `Message` completes the run;
-one or more `ToolCall` objects are executed before the next model step.
+session snapshot and calls the model. It independently derives TaskState from
+raw history and compiles the model-facing trajectory, then places the derived
+system state view before the trajectory. An assistant `Message` completes the
+run; one or more `ToolCall` objects are executed before the next model step.
 
 Tool exceptions are converted into error `ToolResult` observations. A context
 compilation error, `ModelError`, or exhaustion of the step limit fails the run
@@ -194,6 +191,14 @@ character counts. These are approximate **historical trajectory** tokens only:
 system instructions, tool definitions, provider wrappers, and output-token
 reservation are deliberately outside the current budget.
 
+`CompiledContext.items` remains the trajectory view and does not mix in
+TaskState. Immediately before a model call, the Agent prepends one derived
+`Message(role="system")` rendered from TaskState. That message is estimated
+separately through the same `TokenEstimator` as
+`estimated_task_state_tokens`; `estimated_history_tokens` and an optional
+history budget retain their trajectory-only meanings. M8 intentionally has no
+unified provider-request budget allocator.
+
 ### Session
 
 `Session` contains the ordered `Message`, `ToolCall`, and `ToolResult` history.
@@ -226,8 +231,9 @@ file in the destination directory and atomically replace the target, preserving
 the prior valid file when failure occurs before replacement. Unsupported
 versions, malformed data, missing sessions, and filesystem failures raise
 `SessionStoreError`. This is snapshot persistence, not an append-only event log.
-A durable `RunRecord`, replay facility, checkpoint policy, and `TaskState` remain
-future work.
+TaskState is not persisted: loading this unchanged schema-version-1 Session and
+running the reducer reconstructs it. A durable `RunRecord`, replay facility, and
+checkpoint policy remain future work.
 
 ### Trace
 
@@ -268,7 +274,7 @@ Event payloads use the following current contract:
 | --- | --- |
 | `agent_started` | `history_item_count` before the new user message |
 | `context_build_started` | `step`, `history_item_count` |
-| `context_built` | `step`, history/context counts, strategy, estimated history tokens, total/included/dropped units, projected/compacted result counts, raw/projected result character counts, optional history budget |
+| `context_built` | `step`, history/final-context/trajectory counts, strategy, separate estimated history and TaskState tokens, safe TaskState aggregate counts, total/included/dropped units, projected/compacted result counts, raw/projected result character counts, optional history budget |
 | `context_build_failed` | `step`, `reason`, `error_type` |
 | `model_started` | `step` |
 | `model_completed` | `step`, `output_kind`, `tool_call_count` |
@@ -294,7 +300,8 @@ and Simplified Chinese templates. It imports Rich only from its adapter module,
 and Rich is provided by the `cli` optional dependency. The Agent neither imports
 Rich nor invokes terminal APIs. A renderer can be added or removed without
 changing runtime execution. Its context summary includes one concise count of
-compacted tool outputs.
+compacted tool outputs and one concise TaskState line with modified-file and
+recent-error counts.
 
 ### Coding tools
 
@@ -476,26 +483,61 @@ The intended distinction is:
 
 ```text
 Session   = source-of-truth history of what happened
-TaskState = derived working state for the active task (planned; not present)
+TaskState = derived working state for the active task
 Context   = per-inference projection sent to the model
 ```
 
-**Current:** `Session` stores complete ordered agent history, including full raw
-`ToolResult` text. The compiler groups the isolated list returned by
-`Session.snapshot()` into atomic semantic units, derives model-facing result
-copies, estimates those projected units, and produces a `CompiledContext` for
-each model call. FullHistory, Recent, and TokenBudget strategies never mutate
-Session. This in-memory snapshot is distinct from the complete durable snapshot
-written by `JsonlSessionStore.save()`; the external lifecycle still owns
-`session_id` and save/load timing.
+```text
+                 Session
+              raw source truth
+               /          \
+              v            v
+    TaskStateReducer    Context compiler
+              |            |
+              v            v
+         TaskState     trajectory view
+              \            /
+               v          v
+                model context
+```
 
-There is no summary item, `TaskState`, selective tool exposure, automatic
-checkpointing, durable runtime event log, or replay. M7 only performs
-deterministic result-level projection for the current model request; it does not
-compact old trajectory units. Planned future boundaries are M8 TaskState, M9
-old-trajectory compaction, and M10 selective tool exposure. Any future derived
-state must remain reproducible or traceable without replacing Session as the
-source of truth.
+**Current:** `TaskStateReducer.reduce(raw_items)` deterministically rebuilds a
+frozen `TaskState` from the complete raw Session snapshot for every model step.
+It records a bounded current request, bounded recent successful and failed
+action identities, stable first-seen unique file-read/file-modification paths,
+and bounded `recent_errors`. The latter means the most recent failed tool
+observations, not logically unresolved errors. Action records retain only tool
+name and existing call ID; they do not duplicate arguments or result bodies.
+
+The reducer uses the same shared ToolCall/ToolResult matching rules as context
+grouping. Only successful `read_file` calls contribute `files_read`; only
+successful `write_file` and `apply_patch` calls contribute `files_modified`.
+Paths come from structured `path` arguments and receive lexical POSIX
+normalization. Arbitrary `run_command` argv is never parsed to infer filesystem
+state. Failed operations remain failed actions/errors but do not claim a
+successful read or modification.
+
+TaskState contains no inferred goal, constraints, plan, pending actions,
+priority, intent, or reasoning. It uses no LLM, embeddings, filesystem scan,
+provider behavior, execution backend, or ToolPolicy decision. Current-request
+and error text use deterministic head/middle-omission/tail bounds; completed
+actions keep the latest 20, failed actions the latest 10, and recent errors the
+latest 5. File tuples remain stable unique collections for the current scale.
+
+The model-facing renderer produces one deterministic system-role message with
+the current request, file lists, compact action identities, and recent errors.
+The Agent prepends it to the independently compiled trajectory without writing
+it to Session. Loading a Session and reducing it again recreates the same state;
+there is no TaskState persistence schema or cache.
+
+Current limitations are deliberate: runtime facts are not semantic task
+understanding; successful arbitrary commands may change files without appearing
+in TaskState; paths are based on trusted structured tool arguments rather than a
+workspace rescan; file collections are not yet capped; token estimates remain
+provider-neutral approximations. There is no old-trajectory compaction,
+selective tool exposure, automatic checkpointing, durable runtime event log, or
+replay. M9 old-trajectory compaction and M10 selective tool exposure remain
+future boundaries.
 
 ## 7. Tool definition and execution
 
@@ -610,7 +652,8 @@ how a command runs.
   measurable FullHistory, Recent, and TokenBudget strategies.
 - **M7 — Structured Tool Output:** implemented; deterministically project
   oversized model-facing ToolResult text without losing raw Session history.
-- **M8 — Structured TaskState:** add explicit derived working state.
+- **M8 — Deterministic TaskState v1:** implemented; rebuild bounded runtime-fact
+  state from raw Session and prepend a non-persistent model-facing state view.
 - **M9 — Old-trajectory compaction:** compact earlier trajectory without
   replacing durable Session history.
 - **M10 — Selective Tool Exposure:** control which tool definitions are available

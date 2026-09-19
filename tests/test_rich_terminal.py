@@ -48,6 +48,7 @@ def test_rich_terminal_renders_english_labels():
     assert "estimated history tokens:" in output
     assert "units: 1/1" in output
     assert "tool outputs compacted: 0" in output
+    assert "task state: 0 modified files · 0 recent errors" in output
     assert "Tool policy evaluated: add" in output
     assert "decision: allow" in output
     assert "Calling tool: add" in output
@@ -63,6 +64,7 @@ def test_rich_terminal_renders_chinese_labels():
     assert "估算历史 tokens：" in output
     assert "单元：1/1" in output
     assert "工具输出压缩：0" in output
+    assert "任务状态：0 个修改文件 · 0 个近期错误" in output
     assert "工具策略已评估：add" in output
     assert "决策：allow" in output
     assert "正在调用工具：add" in output
