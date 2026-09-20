@@ -5,3 +5,4 @@ __pycache__/
 .env
 /benchmarks/results/*.jsonl
 *.egg-info/
+/jobs/

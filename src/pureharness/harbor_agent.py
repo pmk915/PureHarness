@@ -27,6 +27,22 @@ _VENV_DIR = _INSTALL_DIR / "venv"
 _RUN_RECORD_NAME = "pureharness-run-record.json"
 _COMMIT_PATTERN = re.compile(r"[0-9a-fA-F]{40}\Z")
 _MODEL_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
+_CAPABILITY_PROBE = """\
+import ssl
+import subprocess
+import tempfile
+
+if not ssl.create_default_context().get_ca_certs():
+    raise SystemExit(1)
+
+with tempfile.TemporaryDirectory(prefix="pureharness-venv-check-") as temp_dir:
+    result = subprocess.run(
+        ["python3", "-m", "venv", f"{temp_dir}/venv"],
+        check=False,
+    )
+
+raise SystemExit(result.returncode)
+"""
 
 
 def _require_value(
@@ -116,12 +132,27 @@ class PureHarnessHarborAgent(BaseInstalledAgent):
         _validate_ref(_require_value(sources, _REF_ENV))
         _require_value(sources, _API_KEY_ENV)
 
+    async def _has_required_install_capabilities(
+        self,
+        environment: BaseEnvironment,
+    ) -> bool:
+        result = await environment.exec(
+            command=(
+                "command -v git >/dev/null 2>&1 && "
+                "command -v python3 >/dev/null 2>&1 && "
+                f"python3 -c {shlex.quote(_CAPABILITY_PROBE)}"
+            ),
+            user="root",
+        )
+        return result.return_code == 0
+
     @override
     async def install(self, environment: BaseEnvironment) -> None:
-        await self.ensure_system_dependencies(
-            environment,
-            ("git", "python3", "python_venv", "ca_certificates"),
-        )
+        if not await self._has_required_install_capabilities(environment):
+            await self.ensure_system_dependencies(
+                environment,
+                ("git", "python3", "python_venv", "ca_certificates"),
+            )
         package = (
             f"pureharness @ git+{_REPOSITORY_URL}@{self._pureharness_ref}"
         )
@@ -135,6 +166,34 @@ class PureHarnessHarborAgent(BaseInstalledAgent):
             ),
         )
 
+    async def _resolve_workspace(self, environment: BaseEnvironment) -> str:
+        configured = environment.task_env_config.workdir
+
+        if configured:
+            path = PurePosixPath(configured)
+            if path.is_absolute():
+                return str(path)
+
+        result = await self.exec_as_agent(
+            environment,
+            command="pwd",
+        )
+        container_cwd = result.stdout.strip()
+
+        if not container_cwd:
+            raise RuntimeError("Could not determine container working directory")
+
+        base = PurePosixPath(container_cwd)
+        if not base.is_absolute():
+            raise RuntimeError(
+                f"Container working directory must be absolute: {container_cwd!r}"
+            )
+
+        if configured:
+            return str(base / configured)
+
+        return str(base)
+
     @override
     async def run(
         self,
@@ -143,7 +202,7 @@ class PureHarnessHarborAgent(BaseInstalledAgent):
         context: AgentContext,
     ) -> None:
         del context
-        workspace = environment.task_env_config.workdir or "."
+        workspace = await self._resolve_workspace(environment)
         record_path = self.environment_logs_dir / _RUN_RECORD_NAME
         executable = _VENV_DIR / "bin/pureharness"
 

@@ -19,19 +19,27 @@ MODEL = "deepseek/deepseek-chat"
 
 
 class FakeResult:
-    return_code = 0
-    stdout = ""
-    stderr = ""
+    def __init__(self, return_code=0, stdout="", stderr="") -> None:
+        self.return_code = return_code
+        self.stdout = stdout
+        self.stderr = stderr
 
 
 class FakeEnvironment:
-    def __init__(self, workdir: str | None = "/workspace") -> None:
+    def __init__(
+        self,
+        workdir: str | None = "/workspace",
+        results: list[FakeResult] | None = None,
+    ) -> None:
         self.task_env_config = SimpleNamespace(workdir=workdir)
         self.default_user = None
         self.calls: list[dict[str, object]] = []
+        self.results = list(results or [])
 
     async def exec(self, **kwargs):
         self.calls.append(kwargs)
+        if self.results:
+            return self.results.pop(0)
         return FakeResult()
 
 
@@ -99,27 +107,61 @@ def test_missing_deepseek_credential_is_rejected(tmp_path):
         )
 
 
-def test_install_command_pins_exact_pureharness_revision(
+def test_install_skips_dependencies_and_pins_exact_revision(
     tmp_path,
     monkeypatch,
 ):
     agent = make_agent(tmp_path)
     environment = FakeEnvironment()
+    dependency_calls = []
 
-    async def dependencies(_environment, _dependencies):
-        return None
+    async def dependencies(dependency_environment, dependencies):
+        dependency_calls.append((dependency_environment, dependencies))
 
     monkeypatch.setattr(agent, "ensure_system_dependencies", dependencies)
     asyncio.run(agent.install(environment))
 
-    assert len(environment.calls) == 1
-    command = str(environment.calls[0]["command"])
+    assert dependency_calls == []
+    assert len(environment.calls) == 2
+    capability_call = environment.calls[0]
+    capability_command = str(capability_call["command"])
+    assert capability_call["user"] == "root"
+    assert "command -v git" in capability_command
+    assert "command -v python3" in capability_command
+    assert "ssl.create_default_context().get_ca_certs()" in capability_command
+    assert "TemporaryDirectory" in capability_command
+    assert '["python3", "-m", "venv"' in capability_command
+
+    command = str(environment.calls[1]["command"])
     assert "python3 -m venv /installed-agent/pureharness/venv" in command
     assert (
         "git+https://github.com/pmk915/pureharness.git@" + COMMIT
         in command
     )
     assert "@main" not in command
+    assert "secret-key" not in str(environment.calls)
+
+
+def test_install_falls_back_when_capabilities_are_missing(
+    tmp_path,
+    monkeypatch,
+):
+    agent = make_agent(tmp_path)
+    environment = FakeEnvironment(results=[FakeResult(return_code=1)])
+    dependency_calls = []
+
+    async def dependencies(dependency_environment, dependencies):
+        dependency_calls.append((dependency_environment, dependencies))
+
+    monkeypatch.setattr(agent, "ensure_system_dependencies", dependencies)
+    asyncio.run(agent.install(environment))
+
+    assert dependency_calls == [
+        (
+            environment,
+            ("git", "python3", "python_venv", "ca_certificates"),
+        )
+    ]
 
 
 def test_run_invokes_public_cli_with_safe_arguments_and_record(tmp_path):
@@ -142,3 +184,51 @@ def test_run_invokes_public_cli_with_safe_arguments_and_record(tmp_path):
     assert call["cwd"] == "/workspace"
     assert call["env"] == {"DEEPSEEK_API_KEY": "secret-key"}
     assert agent.extra_env == {}
+
+
+def test_run_resolves_missing_workdir_from_container_pwd(tmp_path):
+    instruction = "create answer.txt"
+    agent = make_agent(tmp_path)
+    agent.environment_logs_dir = PurePosixPath("/logs/agent")
+    environment = FakeEnvironment(
+        workdir=None,
+        results=[
+            FakeResult(stdout="/app\n"),
+            FakeResult(),
+        ],
+    )
+
+    asyncio.run(agent.run(instruction, environment, AgentContext()))
+
+    assert len(environment.calls) == 2
+
+    pwd_call = environment.calls[0]
+    assert str(pwd_call["command"]).endswith("pwd")
+
+    run_call = environment.calls[1]
+    command = str(run_call["command"])
+
+    assert "--workspace /app" in command
+    assert run_call["cwd"] == "/app"
+
+
+def test_run_resolves_relative_workdir_against_container_pwd(tmp_path):
+    agent = make_agent(tmp_path)
+    agent.environment_logs_dir = PurePosixPath("/logs/agent")
+    environment = FakeEnvironment(
+        workdir="repo",
+        results=[
+            FakeResult(stdout="/app\n"),
+            FakeResult(),
+        ],
+    )
+
+    asyncio.run(agent.run("test task", environment, AgentContext()))
+
+    assert len(environment.calls) == 2
+
+    run_call = environment.calls[1]
+    command = str(run_call["command"])
+
+    assert "--workspace /app/repo" in command
+    assert run_call["cwd"] == "/app/repo"
