@@ -1,0 +1,35 @@
+{
+  "evaluation": {
+    "completed_trials": 1,
+    "errored_trials": 0,
+    "finished_at": "2026-09-21T01:22:32.921871",
+    "mean_reward": 1.0,
+    "started_at": "2026-09-21T01:21:51.243960",
+    "total_trials": 1
+  },
+  "harbor": {
+    "job_id": "30c622ea-7f3d-4610-8369-68569a80f51b",
+    "version": "0.23.0"
+  },
+  "pureharness": {
+    "repository_commit": "9e780b13140b8bc2a200d8e229839b46920003a7",
+    "worktree_clean": true
+  },
+  "schema_version": 1,
+  "trials": [
+    {
+      "agent_name": "pureharness",
+      "agent_version": "9e780b13140b8bc2a200d8e229839b46920003a7",
+      "environment_type": "docker",
+      "exception": null,
+      "model_name": "deepseek-v4-flash",
+      "model_provider": "deepseek",
+      "reward": 1.0,
+      "run_record": "smoke__jA2XZue/agent/pureharness-run-record.json",
+      "task_checksum": "4625afa4c09bdf0d9ee5610da987d283bcf0301da922090c07c142f34730d004",
+      "task_name": "pureharness/harbor-smoke",
+      "task_path": "benchmarks/harbor/smoke",
+      "trial_name": "smoke__jA2XZue"
+    }
+  ]
+}
