@@ -21,6 +21,9 @@ cli = [
 dev = [
     "pytest>=8",
 ]
+harbor = [
+    "harbor>=0.23,<0.24",
+]
 
 [project.scripts]
 pureharness = "pureharness.cli:main"
