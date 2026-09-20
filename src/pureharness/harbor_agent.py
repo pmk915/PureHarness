@@ -4,6 +4,7 @@ Harbor owns environment lifecycle and evaluation. This adapter only installs a
 pinned PureHarness revision and invokes its public one-shot CLI.
 """
 
+import asyncio
 import os
 import re
 import shlex
@@ -12,7 +13,10 @@ from collections.abc import Mapping
 from pathlib import Path, PurePosixPath
 from typing import Any, override
 
-from harbor.agents.installed.base import BaseInstalledAgent
+from harbor.agents.installed.base import (
+    BaseInstalledAgent,
+    NonZeroAgentExitCodeError,
+)
 from harbor.agents.options import InstalledAgentOptions
 from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
@@ -25,6 +29,8 @@ _REPOSITORY_URL = "https://github.com/pmk915/pureharness.git"
 _INSTALL_DIR = PurePosixPath("/installed-agent/pureharness")
 _VENV_DIR = _INSTALL_DIR / "venv"
 _RUN_RECORD_NAME = "pureharness-run-record.json"
+_INSTALL_ATTEMPTS = 3
+_INSTALL_RETRY_DELAY_SECONDS = 1
 _COMMIT_PATTERN = re.compile(r"[0-9a-fA-F]{40}\Z")
 _MODEL_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
 _CAPABILITY_PROBE = """\
@@ -158,13 +164,26 @@ class PureHarnessHarborAgent(BaseInstalledAgent):
         )
         await self.exec_as_root(
             environment,
-            command=(
-                f"python3 -m venv {shlex.quote(str(_VENV_DIR))} && "
-                f"{shlex.quote(str(_VENV_DIR / 'bin/python'))} "
-                "-m pip install --disable-pip-version-check "
-                f"{shlex.quote(package)}"
-            ),
+            command=f"python3 -m venv {shlex.quote(str(_VENV_DIR))}",
         )
+        install_command = (
+            f"{shlex.quote(str(_VENV_DIR / 'bin/python'))} "
+            "-m pip install --disable-pip-version-check "
+            f"{shlex.quote(package)}"
+        )
+        for attempt in range(1, _INSTALL_ATTEMPTS + 1):
+            try:
+                await self.exec_as_root(
+                    environment,
+                    command=install_command,
+                )
+                break
+            except NonZeroAgentExitCodeError:
+                if attempt == _INSTALL_ATTEMPTS:
+                    raise
+                await asyncio.sleep(
+                    _INSTALL_RETRY_DELAY_SECONDS * attempt
+                )
 
     async def _resolve_workspace(self, environment: BaseEnvironment) -> str:
         configured = environment.task_env_config.workdir

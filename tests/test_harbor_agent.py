@@ -9,6 +9,7 @@ import pytest
 
 pytest.importorskip("harbor")
 
+from harbor.agents.installed.base import NonZeroAgentExitCodeError
 from harbor.models.agent.context import AgentContext
 
 from pureharness.harbor_agent import PureHarnessHarborAgent
@@ -107,7 +108,7 @@ def test_missing_deepseek_credential_is_rejected(tmp_path):
         )
 
 
-def test_install_skips_dependencies_and_pins_exact_revision(
+def test_install_succeeds_immediately_and_pins_exact_revision(
     tmp_path,
     monkeypatch,
 ):
@@ -122,7 +123,7 @@ def test_install_skips_dependencies_and_pins_exact_revision(
     asyncio.run(agent.install(environment))
 
     assert dependency_calls == []
-    assert len(environment.calls) == 2
+    assert len(environment.calls) == 3
     capability_call = environment.calls[0]
     capability_command = str(capability_call["command"])
     assert capability_call["user"] == "root"
@@ -132,13 +133,111 @@ def test_install_skips_dependencies_and_pins_exact_revision(
     assert "TemporaryDirectory" in capability_command
     assert '["python3", "-m", "venv"' in capability_command
 
-    command = str(environment.calls[1]["command"])
-    assert "python3 -m venv /installed-agent/pureharness/venv" in command
+    venv_command = str(environment.calls[1]["command"])
+    assert "python3 -m venv /installed-agent/pureharness/venv" in venv_command
+
+    install_command = str(environment.calls[2]["command"])
+    assert "pip install" in install_command
     assert (
         "git+https://github.com/pmk915/pureharness.git@" + COMMIT
-        in command
+        in install_command
     )
-    assert "@main" not in command
+    assert "@main" not in install_command
+    assert "secret-key" not in str(environment.calls)
+
+
+def test_install_retries_transient_failure_then_succeeds(
+    tmp_path,
+    monkeypatch,
+):
+    agent = make_agent(tmp_path)
+    environment = FakeEnvironment(
+        results=[
+            FakeResult(),
+            FakeResult(),
+            FakeResult(return_code=1, stderr="transient TLS failure"),
+            FakeResult(),
+        ]
+    )
+    retry_delays = []
+
+    async def dependencies(_environment, _dependencies):
+        pytest.fail("dependency fallback should not run")
+
+    async def sleep(delay):
+        retry_delays.append(delay)
+
+    monkeypatch.setattr(agent, "ensure_system_dependencies", dependencies)
+    monkeypatch.setattr("pureharness.harbor_agent.asyncio.sleep", sleep)
+    asyncio.run(agent.install(environment))
+
+    commands = [str(call["command"]) for call in environment.calls]
+    venv_commands = [
+        command
+        for command in commands
+        if "python3 -m venv /installed-agent/pureharness/venv" in command
+    ]
+    install_commands = [
+        command for command in commands if "pip install" in command
+    ]
+
+    assert len(venv_commands) == 1
+    assert len(install_commands) == 2
+    assert retry_delays == [1]
+    assert all(
+        "git+https://github.com/pmk915/pureharness.git@" + COMMIT
+        in command
+        for command in install_commands
+    )
+    assert "secret-key" not in str(environment.calls)
+
+
+def test_install_propagates_after_all_attempts_fail(
+    tmp_path,
+    monkeypatch,
+):
+    agent = make_agent(tmp_path)
+    environment = FakeEnvironment(
+        results=[
+            FakeResult(),
+            FakeResult(),
+            FakeResult(return_code=1, stderr="transient TLS failure"),
+            FakeResult(return_code=1, stderr="transient TLS failure"),
+            FakeResult(return_code=1, stderr="transient TLS failure"),
+        ]
+    )
+    retry_delays = []
+
+    async def dependencies(_environment, _dependencies):
+        pytest.fail("dependency fallback should not run")
+
+    async def sleep(delay):
+        retry_delays.append(delay)
+
+    monkeypatch.setattr(agent, "ensure_system_dependencies", dependencies)
+    monkeypatch.setattr("pureharness.harbor_agent.asyncio.sleep", sleep)
+
+    with pytest.raises(NonZeroAgentExitCodeError):
+        asyncio.run(agent.install(environment))
+
+    commands = [str(call["command"]) for call in environment.calls]
+    venv_commands = [
+        command
+        for command in commands
+        if "python3 -m venv /installed-agent/pureharness/venv" in command
+    ]
+    install_commands = [
+        command for command in commands if "pip install" in command
+    ]
+
+    assert len(venv_commands) == 1
+    assert len(install_commands) == 3
+    assert retry_delays == [1, 2]
+    assert all(
+        "git+https://github.com/pmk915/pureharness.git@" + COMMIT
+        in command
+        for command in install_commands
+    )
     assert "secret-key" not in str(environment.calls)
 
 
