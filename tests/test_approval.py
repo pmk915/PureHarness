@@ -1,24 +1,24 @@
 import pytest
 
-from miniharness.agent import Agent
-from miniharness.approval import (
+from pureharness.agent import Agent
+from pureharness.approval import (
     ApprovalDecision,
     ApprovalRequest,
     AutoApproveApprovalHandler,
     AutoDenyApprovalHandler,
     ToolApprovalError,
 )
-from miniharness.cli import main
-from miniharness.messages import Message, ToolCall, ToolResult
-from miniharness.run_record import RunRecord
-from miniharness.replay import replay_run
-from miniharness.terminal_approval import TerminalApprovalHandler
-from miniharness.tool_executor import ToolExecutor
-from miniharness.tool_policy import (
+from pureharness.cli import main
+from pureharness.messages import Message, ToolCall, ToolResult
+from pureharness.run_record import RunRecord
+from pureharness.replay import replay_run
+from pureharness.terminal_approval import TerminalApprovalHandler
+from pureharness.tool_executor import ToolExecutor
+from pureharness.tool_policy import (
     PolicyDecision,
     ToolPolicyError,
 )
-from miniharness.tools import Tool, ToolRegistry
+from pureharness.tools import Tool, ToolRegistry
 
 
 class StaticPolicy:

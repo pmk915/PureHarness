@@ -1,18 +1,18 @@
 from collections.abc import Callable
 
-from miniharness.approval import (
+from pureharness.approval import (
     ApprovalDecision,
     ApprovalHandler,
     ApprovalRequest,
     ToolApprovalError,
 )
-from miniharness.tool_policy import (
+from pureharness.tool_policy import (
     DefaultToolPolicy,
     PolicyDecision,
     ToolPolicy,
     ToolPolicyError,
 )
-from miniharness.tools import Tool, ToolRegistry
+from pureharness.tools import Tool, ToolRegistry
 
 
 class ToolExecutor:

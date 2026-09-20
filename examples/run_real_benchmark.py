@@ -4,13 +4,13 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from miniharness.benchmark import (
+from pureharness.benchmark import (
     BenchmarkRunner,
     default_benchmark_configs,
     load_benchmark_tasks,
 )
-from miniharness.deepseek_model import DeepSeekModel
-from miniharness.experiment import (
+from pureharness.deepseek_model import DeepSeekModel
+from pureharness.experiment import (
     ExperimentRunner,
     summarize_experiment,
     write_experiment_results,
@@ -20,7 +20,7 @@ from miniharness.experiment import (
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Run the controlled MiniHarness benchmark with DeepSeek. "
+            "Run the controlled PureHarness benchmark with DeepSeek. "
             "This makes paid, nondeterministic API calls."
         )
     )

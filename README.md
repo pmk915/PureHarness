@@ -1,6 +1,6 @@
-# MiniHarness
+# PureHarness
 
-MiniHarness is a small, transparent, benchmark-driven CLI agent harness for
+PureHarness is a small, transparent, benchmark-driven CLI agent harness for
 studying and running reliable long-horizon, tool-using agents. It is an
 educational and experimental systems project focused on execution, durable
 conversation state, model-facing context, observable traces, replayable run
@@ -9,7 +9,7 @@ evidence, and external task verification.
 The coding agent is the main workload used to exercise the runtime. It is not
 the runtime kernel itself.
 
-MiniHarness is not a LangChain replacement, SaaS backend, multi-agent
+PureHarness is not a LangChain replacement, SaaS backend, multi-agent
 platform, production security boundary, or full coding-agent product. The
 project deliberately favors explicit Python components over a broad framework.
 
@@ -44,15 +44,15 @@ boundaries.
 
 ## Quickstart
 
-MiniHarness requires Python 3.11 or newer.
+PureHarness requires Python 3.11 or newer.
 
 ```bash
-git clone https://github.com/pmk915/miniharness.git
-cd miniharness
+git clone https://github.com/pmk915/pureharness.git
+cd pureharness
 python -m venv .venv
 .venv/bin/python -m pip install -e '.[cli]'
 export DEEPSEEK_API_KEY='your-key'
-.venv/bin/miniharness --help
+.venv/bin/pureharness --help
 ```
 
 The interactive CLI uses DeepSeek by default. It loads an uncommitted `.env`
@@ -61,13 +61,13 @@ agent to inspect and edit:
 
 ```bash
 cd /path/to/workspace
-/path/to/miniharness/.venv/bin/miniharness
+/path/to/pureharness/.venv/bin/pureharness
 ```
 
 One interactive conversation keeps one Session across multiple `Agent.run()`
 calls and process restarts. Use `/help`, `/status`, or `/exit`; Ctrl+D exits
-cleanly. Sessions are stored under `~/.miniharness/sessions` by default. Set
-`MINIHARNESS_HOME` to isolate or relocate that state. To export an additional
+cleanly. Sessions are stored under `~/.pureharness/sessions` by default. Set
+`PUREHARNESS_HOME` to isolate or relocate that state. To export an additional
 RunRecord per turn, pass `--record-dir PATH` before entering the session.
 
 ## Commands
@@ -75,15 +75,15 @@ RunRecord per turn, pass `--record-dir PATH` before entering the session.
 Run a single task and optionally save its structured evidence:
 
 ```bash
-miniharness run "fix the failing test" --workspace . --record run.json
-miniharness inspect run.json
+pureharness run "fix the failing test" --workspace . --record run.json
+pureharness inspect run.json
 ```
 
 Discover and resume durable interactive sessions:
 
 ```bash
-miniharness sessions
-miniharness resume <session-id>
+pureharness sessions
+pureharness resume <session-id>
 ```
 
 Resume loads prior conversation state passively. It does not call the model or
@@ -94,9 +94,9 @@ Use the versioned local machine interfaces when output will be consumed by a
 program:
 
 ```bash
-miniharness run "fix the failing test" --output jsonl
-miniharness inspect run.json --json
-miniharness sessions --json
+pureharness run "fix the failing test" --output jsonl
+pureharness inspect run.json --json
+pureharness sessions --json
 ```
 
 JSONL run mode writes only one JSON event per stdout line. Configuration and
@@ -121,7 +121,7 @@ therefore fails closed for approval-gated actions.
 Run a deliberately small real-model benchmark experiment:
 
 ```bash
-miniharness benchmark \
+pureharness benchmark \
   --task simple_fix \
   --config raw_baseline \
   --repetitions 1 \
@@ -177,7 +177,7 @@ secrets on the assumption that ToolPolicy alone provides containment. See the
 [security model](docs/security.md) for the exact boundary and current
 limitations.
 
-MiniHarness intentionally omits exact call-stack continuation, automatic retry
+PureHarness intentionally omits exact call-stack continuation, automatic retry
 of interrupted tools, concurrent writers for one session, workspace
 relocation, session branching, a full-screen TUI, web services, multi-agent
 orchestration, and a plugin framework.

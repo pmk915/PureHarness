@@ -8,14 +8,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Protocol, TextIO
 
-from miniharness.messages import (
+from pureharness.messages import (
     AgentItem,
     Message,
     ToolCall,
     ToolResult,
 )
-from miniharness.session import Session
-from miniharness.run_record import RunRecord
+from pureharness.session import Session
+from pureharness.run_record import RunRecord
 
 
 SCHEMA_VERSION = 1

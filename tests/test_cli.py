@@ -2,22 +2,22 @@ import tomllib
 
 import pytest
 
-import miniharness.cli as cli_module
-from miniharness.agent import Agent
-from miniharness.cli import main
-from miniharness.experiment import load_experiment_results
-from miniharness.messages import Message, ToolCall
-from miniharness.model import ModelError
-from miniharness.tool_executor import ToolExecutor
-from miniharness.tool_policy import PolicyDecision
-from miniharness.tools import Tool, ToolRegistry
+import pureharness.cli as cli_module
+from pureharness.agent import Agent
+from pureharness.cli import main
+from pureharness.experiment import load_experiment_results
+from pureharness.messages import Message, ToolCall
+from pureharness.model import ModelError
+from pureharness.tool_executor import ToolExecutor
+from pureharness.tool_policy import PolicyDecision
+from pureharness.tools import Tool, ToolRegistry
 
 
 @pytest.fixture(autouse=True)
-def isolated_miniharness_home(tmp_path, monkeypatch):
+def isolated_pureharness_home(tmp_path, monkeypatch):
     monkeypatch.setenv(
-        "MINIHARNESS_HOME",
-        str(tmp_path / "miniharness-home"),
+        "PUREHARNESS_HOME",
+        str(tmp_path / "pureharness-home"),
     )
 
 
@@ -79,7 +79,7 @@ def test_cli_help(capsys):
 
     assert exc_info.value.code == 0
     output = capsys.readouterr().out
-    assert "miniharness" in output
+    assert "pureharness" in output
     assert "run" in output
     assert "inspect" in output
     assert "benchmark" in output
@@ -486,6 +486,6 @@ def test_console_script_is_registered():
     assert project["version"] == "0.1.0"
     assert project["readme"] == "README.md"
     assert project["optional-dependencies"]["dev"] == ["pytest>=8"]
-    assert project["scripts"]["miniharness"] == (
-        "miniharness.cli:main"
+    assert project["scripts"]["pureharness"] == (
+        "pureharness.cli:main"
     )

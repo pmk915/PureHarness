@@ -1,23 +1,23 @@
 import pytest
 
-from miniharness.agent import Agent
-from miniharness.messages import Message, ToolCall, ToolResult
-from miniharness.model import AddModel, EchoModel, ModelError
-from miniharness.tools import ADD_TOOL, Tool, ToolRegistry
-from miniharness.context import (
+from pureharness.agent import Agent
+from pureharness.messages import Message, ToolCall, ToolResult
+from pureharness.model import AddModel, EchoModel, ModelError
+from pureharness.tools import ADD_TOOL, Tool, ToolRegistry
+from pureharness.context import (
     ContextBudget,
     ContextBudgetExceeded,
     ContextBuilder,
     TokenBudgetContextBuilder,
 )
-from miniharness.session import Session
-from miniharness.session_store import JsonlSessionStore
-from miniharness.tool_executor import ToolExecutor
-from miniharness.tool_policy import PolicyDecision
-from miniharness.tool_result_projection import (
+from pureharness.session import Session
+from pureharness.session_store import JsonlSessionStore
+from pureharness.tool_executor import ToolExecutor
+from pureharness.tool_policy import PolicyDecision
+from pureharness.tool_result_projection import (
     DeterministicToolResultProjector,
 )
-from miniharness.task_state import TaskStateError
+from pureharness.task_state import TaskStateError
 
 class FailingModel:
     def generate(self, messages, tools):
@@ -916,7 +916,7 @@ def test_agent_prepends_derived_task_state_without_storing_it():
     state_item = model.contexts[0][0]
     assert isinstance(state_item, Message)
     assert state_item.role == "system"
-    assert "[MiniHarness Derived Task State]" in state_item.content
+    assert "[PureHarness Derived Task State]" in state_item.content
     assert "continue repair" in state_item.content
     assert "src/a.py" in state_item.content
     assert "read_file (call_id=read-1)" in state_item.content

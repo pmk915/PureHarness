@@ -3,7 +3,7 @@ from copy import deepcopy
 
 import pytest
 
-from miniharness.context import (
+from pureharness.context import (
     ApproximateTokenEstimator,
     ContextBudget,
     ContextBudgetExceeded,
@@ -12,18 +12,18 @@ from miniharness.context import (
     RecentContextBuilder,
     TokenBudgetContextBuilder,
 )
-from miniharness.messages import (
+from pureharness.messages import (
     AgentItem,
     Message,
     ToolCall,
     ToolResult,
 )
-from miniharness.session import Session
-from miniharness.tool_result_projection import (
+from pureharness.session import Session
+from pureharness.tool_result_projection import (
     DeterministicToolResultProjector,
     IdentityToolResultProjector,
 )
-from miniharness.trajectory_compaction import (
+from pureharness.trajectory_compaction import (
     IdentityTrajectoryCompactor,
 )
 

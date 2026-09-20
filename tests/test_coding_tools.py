@@ -3,7 +3,7 @@ import sys
 
 import pytest
 
-from miniharness.coding_tools import (
+from pureharness.coding_tools import (
     create_apply_patch_tool,
     create_coding_tools,
     create_git_diff_tool,
@@ -14,8 +14,8 @@ from miniharness.coding_tools import (
     create_search_text_tool,
     create_write_file_tool,
 )
-from miniharness.execution import CommandResult
-from miniharness.tools import RiskLevel
+from pureharness.execution import CommandResult
+from pureharness.tools import RiskLevel
 
 
 class FakeExecutionBackend:
@@ -262,7 +262,7 @@ def test_search_text_rejects_path_outside_workspace(tmp_path):
 def test_read_file_tool_reads_workspace_file(tmp_path):
     target = tmp_path / "hello.txt"
     target.write_text(
-        "hello MiniHarness",
+        "hello PureHarness",
         encoding="utf-8",
     )
 
@@ -274,7 +274,7 @@ def test_read_file_tool_reads_workspace_file(tmp_path):
         }
     )
 
-    assert result == "hello MiniHarness"
+    assert result == "hello PureHarness"
 
 
 def test_write_file_tool_writes_workspace_file(tmp_path):
@@ -461,7 +461,7 @@ def test_coding_command_tools_share_injected_backend(
         raise AssertionError("host subprocess should not run")
 
     monkeypatch.setattr(
-        "miniharness.execution.subprocess.run",
+        "pureharness.execution.subprocess.run",
         reject_host_execution,
     )
     tools = {

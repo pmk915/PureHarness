@@ -1,7 +1,7 @@
 import pytest
 
-from miniharness.messages import ToolResult
-from miniharness.tool_result_projection import (
+from pureharness.messages import ToolResult
+from pureharness.tool_result_projection import (
     DeterministicToolResultProjector,
     IdentityToolResultProjector,
 )

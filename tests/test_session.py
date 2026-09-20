@@ -1,5 +1,5 @@
-from miniharness.messages import Message
-from miniharness.session import Session
+from pureharness.messages import Message
+from pureharness.session import Session
 
 
 def test_session_appends_items():

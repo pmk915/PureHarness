@@ -2,30 +2,30 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from miniharness.agent import Agent
-from miniharness.context import (
+from pureharness.agent import Agent
+from pureharness.context import (
     CompiledContext,
     ContextBudget,
     ContextBudgetExceeded,
     ContextBuilder,
     TokenBudgetContextBuilder,
 )
-from miniharness.messages import Message, ToolCall, ToolResult
-from miniharness.model import AddModel, EchoModel, ModelError
-from miniharness.replay import replay_run
-from miniharness.run_record import (
+from pureharness.messages import Message, ToolCall, ToolResult
+from pureharness.model import AddModel, EchoModel, ModelError
+from pureharness.replay import replay_run
+from pureharness.run_record import (
     RUN_RECORD_SCHEMA_VERSION,
     RunRecord,
     RunRecordSerializationError,
 )
-from miniharness.session import Session
-from miniharness.tool_executor import ToolExecutor
-from miniharness.tool_policy import PolicyDecision
-from miniharness.tool_selection import (
+from pureharness.session import Session
+from pureharness.tool_executor import ToolExecutor
+from pureharness.tool_policy import PolicyDecision
+from pureharness.tool_selection import (
     StaticToolSelector,
     ToolSelectionError,
 )
-from miniharness.tools import ADD_TOOL, Tool, ToolRegistry
+from pureharness.tools import ADD_TOOL, Tool, ToolRegistry
 
 
 class FailingModel:

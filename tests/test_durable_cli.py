@@ -3,18 +3,18 @@ from pathlib import Path
 
 import pytest
 
-from miniharness.agent import Agent
-from miniharness.approval import ApprovalDecision
-from miniharness.cli import main
-from miniharness.messages import Message, ToolCall, ToolResult
-from miniharness.session import Session
-from miniharness.session_store import (
+from pureharness.agent import Agent
+from pureharness.approval import ApprovalDecision
+from pureharness.cli import main
+from pureharness.messages import Message, ToolCall, ToolResult
+from pureharness.session import Session
+from pureharness.session_store import (
     DurableSession,
     JsonlDurableSessionStore,
 )
-from miniharness.tool_executor import ToolExecutor
-from miniharness.tool_policy import PolicyDecision
-from miniharness.tools import Tool, ToolRegistry
+from pureharness.tool_executor import ToolExecutor
+from pureharness.tool_policy import PolicyDecision
+from pureharness.tools import Tool, ToolRegistry
 
 
 class RecordingModel:
@@ -69,10 +69,10 @@ def _input(values):
 
 @pytest.fixture
 def durable_environment(tmp_path, monkeypatch):
-    home = tmp_path / "miniharness-home"
+    home = tmp_path / "pureharness-home"
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    monkeypatch.setenv("MINIHARNESS_HOME", str(home))
+    monkeypatch.setenv("PUREHARNESS_HOME", str(home))
     return home, workspace
 
 
@@ -398,7 +398,7 @@ def test_interrupted_run_is_durable_and_not_replayed_on_resume(
     assert "Last end reason: interrupted" in resume_output
 
 
-def test_durable_files_stay_under_configured_miniharness_home(
+def test_durable_files_stay_under_configured_pureharness_home(
     durable_environment,
 ):
     home, workspace = durable_environment

@@ -1,6 +1,6 @@
 import pytest
 
-from miniharness.tools import (
+from pureharness.tools import (
     ADD_TOOL,
     RiskLevel,
     Tool,

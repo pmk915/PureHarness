@@ -2,8 +2,8 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Literal
 
-from miniharness.approval import ApprovalDecision
-from miniharness.messages import Message, ToolCall, ToolResult
+from pureharness.approval import ApprovalDecision
+from pureharness.messages import Message, ToolCall, ToolResult
 
 
 RunEndReason = Literal[

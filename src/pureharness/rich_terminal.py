@@ -3,15 +3,15 @@ try:
 except ModuleNotFoundError as exc:
     raise ModuleNotFoundError(
         "RichTerminalRenderer requires the optional CLI dependencies. "
-        "Install them with: pip install 'miniharness[cli]'"
+        "Install them with: pip install 'pureharness[cli]'"
     ) from exc
 
-from miniharness.events import AgentEvent
+from pureharness.events import AgentEvent
 
 
 _TEXT = {
     "en": {
-        "title": "MiniHarness",
+        "title": "PureHarness",
         "context_build_started": "● Building context...",
         "context_built": "✓ Context built",
         "history": "history",
@@ -52,7 +52,7 @@ _TEXT = {
         "steps": "steps",
     },
     "zh-CN": {
-        "title": "MiniHarness",
+        "title": "PureHarness",
         "context_build_started": "● 正在构建上下文...",
         "context_built": "✓ 上下文已构建",
         "history": "历史记录",

@@ -7,11 +7,11 @@ load_dotenv()
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from miniharness.agent import Agent
-from miniharness.coding_tools import create_coding_tools
-from miniharness.deepseek_model import DeepSeekModel
-from miniharness.messages import Message, ToolCall
-from miniharness.tools import ToolRegistry
+from pureharness.agent import Agent
+from pureharness.coding_tools import create_coding_tools
+from pureharness.deepseek_model import DeepSeekModel
+from pureharness.messages import Message, ToolCall
+from pureharness.tools import ToolRegistry
 
 
 def main(
@@ -19,7 +19,7 @@ def main(
     locale: str = "en",
 ) -> None:
     with TemporaryDirectory(
-        prefix="miniharness-coding-demo-"
+        prefix="pureharness-coding-demo-"
     ) as temporary_directory:
         workspace = Path(temporary_directory)
 
@@ -53,7 +53,7 @@ def main(
         listeners = []
 
         if show_terminal:
-            from miniharness.rich_terminal import (
+            from pureharness.rich_terminal import (
                 RichTerminalRenderer,
             )
 

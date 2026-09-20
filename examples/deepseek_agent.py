@@ -1,8 +1,8 @@
 from dotenv import load_dotenv
 
-from miniharness.agent import Agent
-from miniharness.deepseek_model import DeepSeekModel
-from miniharness.tools import ADD_TOOL, ToolRegistry
+from pureharness.agent import Agent
+from pureharness.deepseek_model import DeepSeekModel
+from pureharness.tools import ADD_TOOL, ToolRegistry
 
 
 load_dotenv()

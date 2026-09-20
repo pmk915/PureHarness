@@ -1,7 +1,7 @@
-# MiniHarness benchmark
+# PureHarness benchmark
 
 This directory contains a small, deterministic benchmark for comparing
-MiniHarness context and tool-exposure configurations. It is not a leaderboard
+PureHarness context and tool-exposure configurations. It is not a leaderboard
 or a general benchmark platform.
 
 ## What is measured
@@ -20,10 +20,10 @@ budget where applicable:
 | `raw_baseline` | FullHistory | identity | disabled | identity | all |
 | `budget_only` | TokenBudget | identity | disabled | identity | all |
 | `context_engineered` | TokenBudget | deterministic | enabled | deterministic | all |
-| `full_miniharness` | TokenBudget | deterministic | enabled | deterministic | task-declared static names |
+| `full_pureharness` | TokenBudget | deterministic | enabled | deterministic | task-declared static names |
 
-`raw_baseline` is the closest baseline supported by MiniHarness; it is still
-the MiniHarness runtime, not a raw provider request. Static selective exposure
+`raw_baseline` is the closest baseline supported by PureHarness; it is still
+the PureHarness runtime, not a raw provider request. Static selective exposure
 is curated task metadata, not semantic or intelligent tool selection.
 `declared_required_tools` is descriptive metadata only and is not a success
 oracle or proof that a tool is necessary.
@@ -87,7 +87,7 @@ From a repository checkout, the installed CLI exposes the same benchmark and
 experiment abstractions:
 
 ```bash
-miniharness benchmark \
+pureharness benchmark \
   --task simple_fix \
   --config raw_baseline \
   --repetitions 1 \

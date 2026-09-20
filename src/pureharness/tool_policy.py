@@ -1,7 +1,7 @@
 from enum import Enum
 from typing import Protocol
 
-from miniharness.tools import RiskLevel, Tool
+from pureharness.tools import RiskLevel, Tool
 
 
 class PolicyDecision(str, Enum):

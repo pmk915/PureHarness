@@ -1,6 +1,6 @@
-# MiniHarness observability
+# PureHarness observability
 
-MiniHarness exposes one runtime through human-readable renderers and small,
+PureHarness exposes one runtime through human-readable renderers and small,
 versioned local machine interfaces. These adapters observe execution; they do
 not select tools, make policy or approval decisions, or control the Agent loop.
 
@@ -29,7 +29,7 @@ are not a wire protocol.
 Use:
 
 ```bash
-miniharness run "fix the failing test" --output jsonl
+pureharness run "fix the failing test" --output jsonl
 ```
 
 Each non-empty stdout line is one compact JSON object:
@@ -76,20 +76,20 @@ and returns nonzero rather than silently treating the stream as complete.
 Human RunRecord inspection remains:
 
 ```bash
-miniharness inspect run.json
+pureharness inspect run.json
 ```
 
 The machine form writes one JSON document using the existing versioned
 RunRecord persistence serializer:
 
 ```bash
-miniharness inspect run.json --json
+pureharness inspect run.json --json
 ```
 
 Durable Session discovery has a separate versioned summary document:
 
 ```bash
-miniharness sessions --json
+pureharness sessions --json
 ```
 
 It contains newest-first Session summaries derived from durable metadata and

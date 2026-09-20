@@ -1,5 +1,5 @@
 def approximate_text_tokens(text: str) -> int:
-    """Apply MiniHarness's provider-neutral character heuristic."""
+    """Apply PureHarness's provider-neutral character heuristic."""
     if not text:
         return 0
 

@@ -3,23 +3,23 @@ from copy import deepcopy
 
 import pytest
 
-from miniharness.agent import Agent
-from miniharness.context import (
+from pureharness.agent import Agent
+from pureharness.context import (
     ContextBudget,
     ContextBuilder,
     TokenBudgetContextBuilder,
 )
-from miniharness.messages import (
+from pureharness.messages import (
     AgentItem,
     Message,
     ToolCall,
     ToolResult,
 )
-from miniharness.session import Session
-from miniharness.tool_result_projection import (
+from pureharness.session import Session
+from pureharness.tool_result_projection import (
     DeterministicToolResultProjector,
 )
-from miniharness.trajectory_compaction import (
+from pureharness.trajectory_compaction import (
     CompactedTrajectory,
     DeterministicToolTrajectoryCompactor,
     IdentityTrajectoryCompactor,
@@ -28,7 +28,7 @@ from miniharness.trajectory_compaction import (
 )
 
 
-_COMPACTED_TITLE = "[MiniHarness Compacted Tool History]"
+_COMPACTED_TITLE = "[PureHarness Compacted Tool History]"
 
 
 class CompactCostEstimator:
@@ -583,7 +583,7 @@ def test_small_agent_trajectory_keeps_normal_context_and_task_state():
 
     assert model.contexts[0][0].role == "system"
     assert model.contexts[0][0].content.startswith(
-        "[MiniHarness Derived Task State]"
+        "[PureHarness Derived Task State]"
     )
     assert model.contexts[0][1] == Message(
         role="user",

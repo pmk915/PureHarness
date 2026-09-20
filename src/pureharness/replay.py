@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 
-from miniharness.messages import Message
-from miniharness.run_record import RunRecord
+from pureharness.messages import Message
+from pureharness.run_record import RunRecord
 
 
 ReplayValue = str | int | bool | None

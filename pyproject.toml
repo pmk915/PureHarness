@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "miniharness"
+name = "pureharness"
 version = "0.1.0"
 description = "A minimal, inspectable agent harness built from first principles."
 readme = "README.md"
@@ -23,7 +23,10 @@ dev = [
 ]
 
 [project.scripts]
-miniharness = "miniharness.cli:main"
+pureharness = "pureharness.cli:main"
+
+[project.urls]
+Repository = "https://github.com/pmk915/pureharness"
 
 [tool.setuptools.packages.find]
 where = ["src"]

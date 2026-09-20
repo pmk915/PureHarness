@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 
-from miniharness.messages import AgentItem
+from pureharness.messages import AgentItem
 
 
 @dataclass

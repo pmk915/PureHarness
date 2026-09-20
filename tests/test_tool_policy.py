@@ -2,16 +2,16 @@ from pathlib import Path
 
 import pytest
 
-from miniharness.approval import ToolApprovalError
-from miniharness.coding_tools import create_run_command_tool
-from miniharness.execution import CommandResult
-from miniharness.tool_executor import ToolExecutor
-from miniharness.tool_policy import (
+from pureharness.approval import ToolApprovalError
+from pureharness.coding_tools import create_run_command_tool
+from pureharness.execution import CommandResult
+from pureharness.tool_executor import ToolExecutor
+from pureharness.tool_policy import (
     DefaultToolPolicy,
     PolicyDecision,
     ToolPolicyError,
 )
-from miniharness.tools import RiskLevel, Tool, ToolRegistry
+from pureharness.tools import RiskLevel, Tool, ToolRegistry
 
 
 class StaticPolicy:

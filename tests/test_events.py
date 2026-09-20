@@ -1,4 +1,4 @@
-from miniharness.events import safe_arguments_preview
+from pureharness.events import safe_arguments_preview
 
 
 def test_safe_arguments_preview_redacts_sensitive_values():

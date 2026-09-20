@@ -1,13 +1,13 @@
-# MiniHarness contributor guide
+# PureHarness contributor guide
 
 ## Project identity
 
-MiniHarness is a small, inspectable, pluggable runtime for reliable long-horizon,
+PureHarness is a small, inspectable, pluggable runtime for reliable long-horizon,
 tool-using agents. Its priorities are transparent execution, recoverable state,
 observable behavior, and controlled tool use. The coding agent is the primary
 workload and benchmark; it is not the runtime kernel.
 
-Do not grow MiniHarness into a general-purpose agent framework, a coding-agent
+Do not grow PureHarness into a general-purpose agent framework, a coding-agent
 product clone, a multi-agent framework, or an unrelated collection of tools.
 
 ## Architecture invariants

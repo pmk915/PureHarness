@@ -1,14 +1,14 @@
-from miniharness.messages import AgentItem, Message, ToolCall, ToolResult
-from miniharness.model import Model, ModelError
-from miniharness.approval import ApprovalDecision, ApprovalRequest
-from miniharness.run_record import (
+from pureharness.messages import AgentItem, Message, ToolCall, ToolResult
+from pureharness.model import Model, ModelError
+from pureharness.approval import ApprovalDecision, ApprovalRequest
+from pureharness.run_record import (
     ModelInvocationRecord,
     RunRecord,
     RunRecordBuilder,
 )
-from miniharness.tool_executor import ToolExecutor
-from miniharness.tool_policy import PolicyDecision
-from miniharness.tool_selection import (
+from pureharness.tool_executor import ToolExecutor
+from pureharness.tool_policy import PolicyDecision
+from pureharness.tool_selection import (
     AllToolsSelector,
     ToolNotExposedError,
     ToolSelectionContext,
@@ -16,10 +16,10 @@ from miniharness.tool_selection import (
     ToolSelector,
     prepare_tool_selection,
 )
-from miniharness.tools import Tool, ToolRegistry
-from miniharness.trace import ApprovalTrace, RunTrace, StepTrace
-from miniharness.events import AgentEvent, safe_arguments_preview
-from miniharness.context import (
+from pureharness.tools import Tool, ToolRegistry
+from pureharness.trace import ApprovalTrace, RunTrace, StepTrace
+from pureharness.events import AgentEvent, safe_arguments_preview
+from pureharness.context import (
     ContextBuilder,
     ContextCompileError,
 )
@@ -28,8 +28,8 @@ from collections.abc import Callable
 from time import perf_counter
 from uuid import uuid4
 
-from miniharness.session import Session
-from miniharness.task_state import (
+from pureharness.session import Session
+from pureharness.task_state import (
     TaskStateError,
     TaskStateReducer,
     render_task_state,

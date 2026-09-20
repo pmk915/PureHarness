@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
-import miniharness.execution as execution_module
-from miniharness.coding_tools import create_coding_tools
-from miniharness.execution import (
+import pureharness.execution as execution_module
+from pureharness.coding_tools import create_coding_tools
+from pureharness.execution import (
     DEFAULT_DOCKER_IMAGE,
     DockerExecutionBackend,
     ExecutionError,
@@ -42,7 +42,7 @@ def test_docker_backend_builds_constrained_invocation(
         )
 
     monkeypatch.setenv(
-        "MINIHARNESS_TEST_SECRET",
+        "PUREHARNESS_TEST_SECRET",
         "do-not-expose",
     )
     monkeypatch.setattr(
@@ -372,7 +372,7 @@ def test_docker_backend_timeout_forces_container_cleanup(
         "docker",
         "rm",
         "--force",
-        "miniharness-fixed-container-id",
+        "pureharness-fixed-container-id",
     ]
 
 
@@ -441,7 +441,7 @@ def test_docker_integration_security_and_workspace(
         encoding="utf-8",
     )
     monkeypatch.setenv(
-        "MINIHARNESS_TEST_SECRET",
+        "PUREHARNESS_TEST_SECRET",
         "do-not-expose",
     )
     script = """
@@ -452,20 +452,20 @@ from pathlib import Path
 
 root_write_failed = False
 try:
-    Path("/miniharness-root-write-test").write_text("blocked")
+    Path("/pureharness-root-write-test").write_text("blocked")
 except OSError:
     root_write_failed = True
 
-Path("/tmp/miniharness-test").write_text("temporary")
+Path("/tmp/pureharness-test").write_text("temporary")
 Path("workspace-output.txt").write_text("from container")
 
 print(json.dumps({
     "uid": os.geteuid(),
-    "secret": os.environ.get("MINIHARNESS_TEST_SECRET"),
+    "secret": os.environ.get("PUREHARNESS_TEST_SECRET"),
     "interfaces": [name for _, name in socket.if_nameindex()],
     "workspace_input": Path("visible.txt").read_text(),
     "root_write_failed": root_write_failed,
-    "tmp_writable": Path("/tmp/miniharness-test").read_text() == "temporary",
+    "tmp_writable": Path("/tmp/pureharness-test").read_text() == "temporary",
 }))
 """
     backend = DockerExecutionBackend(
@@ -566,7 +566,7 @@ def test_docker_integration_timeout_cleanup(
             "docker",
             "container",
             "inspect",
-            f"miniharness-{container_suffix}",
+            f"pureharness-{container_suffix}",
         ],
         capture_output=True,
         text=True,

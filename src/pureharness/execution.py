@@ -200,7 +200,7 @@ class DockerExecutionBackend:
             )
 
         container_cwd = self._container_cwd(cwd)
-        container_name = f"miniharness-{uuid.uuid4().hex}"
+        container_name = f"pureharness-{uuid.uuid4().hex}"
         docker_argv = self._docker_argv(
             argv,
             container_name=container_name,

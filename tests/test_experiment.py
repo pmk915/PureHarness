@@ -5,14 +5,14 @@ from pathlib import Path
 
 import pytest
 
-from miniharness.benchmark import (
+from pureharness.benchmark import (
     BenchmarkError,
     BenchmarkRunner,
     BenchmarkTask,
     TRUSTED_VERIFIER_PLACEHOLDER,
     default_benchmark_configs,
 )
-from miniharness.experiment import (
+from pureharness.experiment import (
     EXPERIMENT_RESULT_SCHEMA_VERSION,
     ExperimentResult,
     ExperimentRunner,
@@ -21,7 +21,7 @@ from miniharness.experiment import (
     summarize_experiment,
     write_experiment_results,
 )
-from miniharness.messages import Message
+from pureharness.messages import Message
 
 
 class CompletingModel:
@@ -214,7 +214,7 @@ def test_experiment_rejects_empty_or_duplicate_inputs(tmp_path):
 
 
 def test_experiment_layer_has_no_provider_dependency():
-    source = Path("src/miniharness/experiment.py").read_text(
+    source = Path("src/pureharness/experiment.py").read_text(
         encoding="utf-8"
     ).lower()
 

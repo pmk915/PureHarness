@@ -2,7 +2,7 @@ import sys
 
 import pytest
 
-from miniharness.execution import (
+from pureharness.execution import (
     ExecutionError,
     ExecutionTimeoutError,
     LocalExecutionBackend,
@@ -96,7 +96,7 @@ def test_local_execution_backend_missing_executable_is_execution_error(
         match="Could not execute command",
     ):
         backend.execute(
-            ["miniharness-definitely-missing-executable"],
+            ["pureharness-definitely-missing-executable"],
             cwd=tmp_path,
             timeout=5.0,
         )

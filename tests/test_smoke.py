@@ -3,14 +3,14 @@ import subprocess
 import sys
 from pathlib import Path
 
-import miniharness
+import pureharness
 
 
 def test_package_import():
-    assert miniharness.__version__ == "0.1.0"
+    assert pureharness.__version__ == "0.1.0"
 
 
-from miniharness.messages import ToolCall
+from pureharness.messages import ToolCall
 
 
 def test_tool_call():
@@ -40,8 +40,8 @@ def test_core_import_does_not_require_optional_dependencies():
             "-S",
             "-c",
             (
-                "import miniharness; "
-                "from miniharness.agent import Agent"
+                "import pureharness; "
+                "from pureharness.agent import Agent"
             ),
         ],
         cwd=project_root,

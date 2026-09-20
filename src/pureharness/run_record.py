@@ -3,7 +3,7 @@ import json
 from dataclasses import dataclass
 from typing import ClassVar
 
-from miniharness.trace import RUN_END_REASONS, RunEndReason, RunTrace
+from pureharness.trace import RUN_END_REASONS, RunEndReason, RunTrace
 
 
 RUN_RECORD_SCHEMA_VERSION = 1

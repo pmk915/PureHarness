@@ -8,33 +8,33 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import ClassVar
 
-from miniharness.agent import Agent
-from miniharness.coding_tools import create_coding_tools
-from miniharness.context import (
+from pureharness.agent import Agent
+from pureharness.coding_tools import create_coding_tools
+from pureharness.context import (
     ContextBudget,
     ContextBuilder,
     TokenBudgetContextBuilder,
 )
-from miniharness.execution import (
+from pureharness.execution import (
     ExecutionBackend,
     ExecutionError,
     ExecutionTimeoutError,
     LocalExecutionBackend,
 )
-from miniharness.model import Model
-from miniharness.run_record import RunRecord
-from miniharness.tool_result_projection import (
+from pureharness.model import Model
+from pureharness.run_record import RunRecord
+from pureharness.tool_result_projection import (
     DeterministicToolResultProjector,
     IdentityToolResultProjector,
 )
-from miniharness.tool_selection import (
+from pureharness.tool_selection import (
     AllToolsSelector,
     StaticToolSelector,
     ToolSelector,
 )
-from miniharness.tools import ToolRegistry
-from miniharness.trace import RUN_END_REASONS, RunEndReason
-from miniharness.trajectory_compaction import (
+from pureharness.tools import ToolRegistry
+from pureharness.trace import RUN_END_REASONS, RunEndReason
+from pureharness.trajectory_compaction import (
     DeterministicToolTrajectoryCompactor,
     IdentityTrajectoryCompactor,
     default_compactor_for_history_budget,
@@ -301,7 +301,7 @@ def default_benchmark_configs(
             max_steps=max_steps,
         ),
         BenchmarkConfig(
-            config_id="full_miniharness",
+            config_id="full_pureharness",
             context_strategy="token_budget",
             history_token_budget=history_token_budget,
             tool_result_projection="deterministic",
@@ -586,7 +586,7 @@ class BenchmarkRunner:
 
         try:
             temporary = TemporaryDirectory(
-                prefix="miniharness-benchmark-",
+                prefix="pureharness-benchmark-",
                 dir=self.workspace_parent,
             )
         except OSError as exc:

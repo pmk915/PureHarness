@@ -5,27 +5,27 @@ from typing import get_args
 
 import pytest
 
-import miniharness.cli as cli_module
-import miniharness.observability as observability_module
-from miniharness.agent import Agent
-from miniharness.approval import AutoApproveApprovalHandler
-from miniharness.cli import main
-from miniharness.events import AgentEvent, AgentEventType
-from miniharness.messages import Message, ToolCall
-from miniharness.model import EchoModel
-from miniharness.observability import (
+import pureharness.cli as cli_module
+import pureharness.observability as observability_module
+from pureharness.agent import Agent
+from pureharness.approval import AutoApproveApprovalHandler
+from pureharness.cli import main
+from pureharness.events import AgentEvent, AgentEventType
+from pureharness.messages import Message, ToolCall
+from pureharness.model import EchoModel
+from pureharness.observability import (
     EventSerializationError,
     JsonlEventRenderer,
     event_to_wire,
 )
-from miniharness.session import Session
-from miniharness.session_store import (
+from pureharness.session import Session
+from pureharness.session_store import (
     DurableSession,
     JsonlDurableSessionStore,
 )
-from miniharness.tool_executor import ToolExecutor
-from miniharness.tool_policy import PolicyDecision
-from miniharness.tools import Tool, ToolRegistry
+from pureharness.tool_executor import ToolExecutor
+from pureharness.tool_policy import PolicyDecision
+from pureharness.tools import Tool, ToolRegistry
 
 
 class ListThenCompleteModel:
@@ -176,7 +176,7 @@ def test_one_shot_jsonl_stdout_is_pure_and_versioned(tmp_path, capsys):
         timestamp = str(event["timestamp"])
         assert timestamp.endswith("Z")
         datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
-    assert "MiniHarness" not in captured.out
+    assert "PureHarness" not in captured.out
     assert "[model]" not in captured.out
     assert "Echo:" not in captured.out
 
@@ -438,7 +438,7 @@ def test_sessions_json_is_newest_first_and_versioned(
     home = tmp_path / "home"
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    monkeypatch.setenv("MINIHARNESS_HOME", str(home))
+    monkeypatch.setenv("PUREHARNESS_HOME", str(home))
     store = JsonlDurableSessionStore(home / "sessions")
     now = datetime(2026, 9, 20, 10, 0, tzinfo=timezone.utc)
     for session_id, offset in (("older", 0), ("newer", 1)):
@@ -482,7 +482,7 @@ def test_empty_sessions_json_contains_no_human_prose(
     monkeypatch,
     capsys,
 ):
-    monkeypatch.setenv("MINIHARNESS_HOME", str(tmp_path / "empty-home"))
+    monkeypatch.setenv("PUREHARNESS_HOME", str(tmp_path / "empty-home"))
 
     assert main(["sessions", "--json"]) == 0
     captured = capsys.readouterr()

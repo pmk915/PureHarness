@@ -4,22 +4,22 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
-from miniharness.messages import (
+from pureharness.messages import (
     AgentItem,
     Message,
     ToolCall,
     ToolResult,
 )
-from miniharness.tool_result_projection import (
+from pureharness.tool_result_projection import (
     DeterministicToolResultProjector,
     ToolResultProjector,
 )
-from miniharness.tool_history import (
+from pureharness.tool_history import (
     ToolHistoryError,
     match_tool_interactions,
 )
-from miniharness.token_estimation import approximate_text_tokens
-from miniharness.trajectory_compaction import (
+from pureharness.token_estimation import approximate_text_tokens
+from pureharness.trajectory_compaction import (
     CompactedTrajectory,
     DeterministicToolTrajectoryCompactor,
     ModelContextUnit,

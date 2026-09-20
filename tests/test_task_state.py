@@ -2,22 +2,22 @@ from copy import deepcopy
 
 import pytest
 
-from miniharness.context import ContextBuilder
-from miniharness.messages import Message, ToolCall, ToolResult
-from miniharness.session import Session
-from miniharness.session_store import JsonlSessionStore
-from miniharness.task_state import (
+from pureharness.context import ContextBuilder
+from pureharness.messages import Message, ToolCall, ToolResult
+from pureharness.session import Session
+from pureharness.session_store import JsonlSessionStore
+from pureharness.task_state import (
     RecentTaskError,
     TaskAction,
     TaskStateError,
     TaskStateReducer,
     render_task_state,
 )
-from miniharness.tool_result_projection import (
+from pureharness.tool_result_projection import (
     DeterministicToolResultProjector,
     IdentityToolResultProjector,
 )
-from miniharness.trajectory_compaction import (
+from pureharness.trajectory_compaction import (
     DeterministicToolTrajectoryCompactor,
     IdentityTrajectoryCompactor,
 )

@@ -9,44 +9,44 @@ from uuid import uuid4
 
 from dotenv import load_dotenv
 
-from miniharness.approval import ApprovalHandler
-from miniharness.agent import Agent
-from miniharness.benchmark import (
+from pureharness.approval import ApprovalHandler
+from pureharness.agent import Agent
+from pureharness.benchmark import (
     BenchmarkConfig,
     BenchmarkRunner,
     BenchmarkTask,
     default_benchmark_configs,
     load_benchmark_tasks,
 )
-from miniharness.coding_tools import create_coding_tools
-from miniharness.deepseek_model import DeepSeekModel
-from miniharness.events import AgentEvent
-from miniharness.experiment import (
+from pureharness.coding_tools import create_coding_tools
+from pureharness.deepseek_model import DeepSeekModel
+from pureharness.events import AgentEvent
+from pureharness.experiment import (
     ExperimentRunner,
     summarize_experiment,
     write_experiment_results,
 )
-from miniharness.model import Model, ModelError
-from miniharness.observability import (
+from pureharness.model import Model, ModelError
+from pureharness.observability import (
     JsonlEventRenderer,
     dumps_wire,
     run_record_to_wire,
     session_summaries_to_wire,
 )
-from miniharness.run_record import (
+from pureharness.run_record import (
     RunRecord,
     RunRecordSerializationError,
 )
-from miniharness.session import Session
-from miniharness.session_store import (
+from pureharness.session import Session
+from pureharness.session_store import (
     DurableSession,
     DurableSessionStore,
     JsonlDurableSessionStore,
     SessionStoreError,
 )
-from miniharness.terminal_approval import TerminalApprovalHandler
-from miniharness.tool_executor import ToolExecutor
-from miniharness.tools import ToolRegistry
+from pureharness.terminal_approval import TerminalApprovalHandler
+from pureharness.tool_executor import ToolExecutor
+from pureharness.tools import ToolRegistry
 
 
 DEFAULT_MODEL = "deepseek-v4-flash"
@@ -95,7 +95,7 @@ class PlainTerminalRenderer:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="miniharness",
+        prog="pureharness",
         description=(
             "A small, transparent CLI harness for long-horizon, "
             "tool-using agents."
@@ -313,7 +313,7 @@ def _run_interactive(
 
     session_id = durable_state.session_id
     agent: Agent | None = None
-    output_fn("MiniHarness")
+    output_fn("PureHarness")
     if resumed:
         output_fn(f"Resumed session {session_id}")
     output_fn(f"Workspace: {resolved_workspace}")
@@ -412,11 +412,11 @@ def _run_interactive(
 
 
 def _create_durable_store() -> DurableSessionStore:
-    configured_home = os.environ.get("MINIHARNESS_HOME")
+    configured_home = os.environ.get("PUREHARNESS_HOME")
     if configured_home is None:
-        root = Path.home() / ".miniharness"
+        root = Path.home() / ".pureharness"
     elif not configured_home:
-        raise CLIError("MINIHARNESS_HOME must not be empty")
+        raise CLIError("PUREHARNESS_HOME must not be empty")
     else:
         root = Path(configured_home).expanduser()
 
@@ -424,7 +424,7 @@ def _create_durable_store() -> DurableSessionStore:
         root = root.resolve()
     except OSError as exc:
         raise CLIError(
-            f"Could not resolve MiniHarness home: {root}"
+            f"Could not resolve PureHarness home: {root}"
         ) from exc
     return JsonlDurableSessionStore(root / "sessions")
 

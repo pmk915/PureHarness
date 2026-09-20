@@ -1,6 +1,6 @@
-# MiniHarness security model
+# PureHarness security model
 
-MiniHarness v0.1 provides explicit policy and execution boundaries, but it is
+PureHarness v0.1 provides explicit policy and execution boundaries, but it is
 not a hardened production sandbox or a hostile multi-tenant security boundary.
 
 ## Policy, approval, and isolation are separate

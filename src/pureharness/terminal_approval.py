@@ -1,10 +1,10 @@
 from collections.abc import Callable
 
-from miniharness.approval import (
+from pureharness.approval import (
     ApprovalDecision,
     ApprovalRequest,
 )
-from miniharness.events import safe_arguments_preview
+from pureharness.events import safe_arguments_preview
 
 
 InputFunction = Callable[[str], str]

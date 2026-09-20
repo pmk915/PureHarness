@@ -1,11 +1,11 @@
 from collections.abc import Iterator
 from pathlib import Path
 
-from miniharness.execution import (
+from pureharness.execution import (
     ExecutionBackend,
     LocalExecutionBackend,
 )
-from miniharness.tools import RiskLevel, Tool
+from pureharness.tools import RiskLevel, Tool
 
 
 _IGNORED_DIRECTORY_NAMES = {

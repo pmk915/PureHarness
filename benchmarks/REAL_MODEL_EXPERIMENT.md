@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This optional experiment measures whether MiniHarness context and tool-exposure
+This optional experiment measures whether PureHarness context and tool-exposure
 configurations produce observable differences with the same real model. It does
 not establish general model quality or statistical significance.
 
@@ -14,7 +14,7 @@ The frozen comparison dimensions are:
 - the same default ToolPolicy and local ExecutionBackend;
 - the same `max_steps`;
 - the four named M12 configs: `raw_baseline`, `budget_only`,
-  `context_engineered`, and `full_miniharness`.
+  `context_engineered`, and `full_pureharness`.
 
 Only the declared context/projection/TaskState/compaction/exposure configuration
 changes between comparable cases.

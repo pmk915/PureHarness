@@ -5,8 +5,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
-from miniharness.messages import AgentItem, Message, ToolCall, ToolResult
-from miniharness.tool_history import match_tool_interactions
+from pureharness.messages import AgentItem, Message, ToolCall, ToolResult
+from pureharness.tool_history import match_tool_interactions
 
 
 DEFAULT_COMPACTION_TRIGGER_TOKENS = 12_000
@@ -14,7 +14,7 @@ DEFAULT_RECENT_RAW_TOKENS = 4_000
 DEFAULT_MAX_ARGUMENT_CHARS = 120
 DEFAULT_MAX_FAILURE_DETAIL_CHARS = 120
 
-_COMPACTED_HISTORY_TITLE = "[MiniHarness Compacted Tool History]"
+_COMPACTED_HISTORY_TITLE = "[PureHarness Compacted Tool History]"
 _PATH_TOOLS = frozenset(
     {
         "read_file",

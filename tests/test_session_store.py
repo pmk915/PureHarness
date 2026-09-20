@@ -4,12 +4,12 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-import miniharness.session_store as session_store_module
-from miniharness.agent import Agent
-from miniharness.messages import Message, ToolCall, ToolResult
-from miniharness.model import EchoModel
-from miniharness.session import Session
-from miniharness.session_store import (
+import pureharness.session_store as session_store_module
+from pureharness.agent import Agent
+from pureharness.messages import Message, ToolCall, ToolResult
+from pureharness.model import EchoModel
+from pureharness.session import Session
+from pureharness.session_store import (
     DurableSession,
     JsonlDurableSessionStore,
     JsonlSessionStore,

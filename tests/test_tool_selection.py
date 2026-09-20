@@ -2,14 +2,14 @@ from copy import deepcopy
 
 import pytest
 
-from miniharness.agent import Agent
-from miniharness.messages import Message, ToolCall, ToolResult
-from miniharness.model import AddModel
-from miniharness.session import Session
-from miniharness.task_state import TaskStateReducer
-from miniharness.tool_executor import ToolExecutor
-from miniharness.tool_policy import PolicyDecision
-from miniharness.tool_selection import (
+from pureharness.agent import Agent
+from pureharness.messages import Message, ToolCall, ToolResult
+from pureharness.model import AddModel
+from pureharness.session import Session
+from pureharness.task_state import TaskStateReducer
+from pureharness.tool_executor import ToolExecutor
+from pureharness.tool_policy import PolicyDecision
+from pureharness.tool_selection import (
     AllToolsSelector,
     StaticToolSelector,
     ToolSelectionContext,
@@ -17,7 +17,7 @@ from miniharness.tool_selection import (
     estimate_tool_schema_tokens,
     prepare_tool_selection,
 )
-from miniharness.tools import ADD_TOOL, Tool, ToolRegistry
+from pureharness.tools import ADD_TOOL, Tool, ToolRegistry
 
 
 def _tool(name: str, *, description: str = "Test tool.", function=None):

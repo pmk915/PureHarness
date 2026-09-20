@@ -7,11 +7,11 @@ pytest.importorskip("rich")
 
 from rich.console import Console
 
-from miniharness.agent import Agent
-from miniharness.events import AgentEvent
-from miniharness.model import AddModel
-from miniharness.rich_terminal import RichTerminalRenderer
-from miniharness.tools import ADD_TOOL, ToolRegistry
+from pureharness.agent import Agent
+from pureharness.events import AgentEvent
+from pureharness.model import AddModel
+from pureharness.rich_terminal import RichTerminalRenderer
+from pureharness.tools import ADD_TOOL, ToolRegistry
 
 
 def _render_run(locale: str) -> str:

@@ -5,9 +5,9 @@ from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timezone
 from enum import Enum
 
-from miniharness.events import AgentEvent
-from miniharness.run_record import RunRecord
-from miniharness.session_store import DurableSessionSummary
+from pureharness.events import AgentEvent
+from pureharness.run_record import RunRecord
+from pureharness.session_store import DurableSessionSummary
 
 
 EVENT_WIRE_SCHEMA_VERSION = 1

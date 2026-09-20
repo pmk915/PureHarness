@@ -4,9 +4,9 @@ import os
 import openai
 from openai import OpenAI
 
-from miniharness.messages import AgentItem, Message, ToolCall, ToolResult
-from miniharness.model import ModelError, ModelOutput
-from miniharness.tools import Tool
+from pureharness.messages import AgentItem, Message, ToolCall, ToolResult
+from pureharness.model import ModelError, ModelOutput
+from pureharness.tools import Tool
 
 
 class DeepSeekModel:

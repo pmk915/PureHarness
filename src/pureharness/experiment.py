@@ -7,7 +7,7 @@ from pathlib import Path
 from time import monotonic
 from typing import ClassVar
 
-from miniharness.benchmark import (
+from pureharness.benchmark import (
     BenchmarkConfig,
     BenchmarkError,
     BenchmarkResult,

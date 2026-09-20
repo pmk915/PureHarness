@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from miniharness.agent import Agent
-from miniharness.benchmark import (
+from pureharness.agent import Agent
+from pureharness.benchmark import (
     BENCHMARK_RESULT_SCHEMA_VERSION,
     BenchmarkConfig,
     BenchmarkError,
@@ -25,24 +25,24 @@ from miniharness.benchmark import (
     summarize_results,
     write_benchmark_results,
 )
-from miniharness.context import (
+from pureharness.context import (
     ContextBuilder,
     TokenBudgetContextBuilder,
 )
-from miniharness.execution import (
+from pureharness.execution import (
     CommandResult,
     ExecutionTimeoutError,
 )
-from miniharness.messages import Message, ToolCall, ToolResult
-from miniharness.tool_result_projection import (
+from pureharness.messages import Message, ToolCall, ToolResult
+from pureharness.tool_result_projection import (
     DeterministicToolResultProjector,
     IdentityToolResultProjector,
 )
-from miniharness.tool_selection import (
+from pureharness.tool_selection import (
     AllToolsSelector,
     StaticToolSelector,
 )
-from miniharness.trajectory_compaction import (
+from pureharness.trajectory_compaction import (
     DeterministicToolTrajectoryCompactor,
     IdentityTrajectoryCompactor,
 )
@@ -193,7 +193,7 @@ def test_default_configs_are_explicit_and_stable():
         "raw_baseline",
         "budget_only",
         "context_engineered",
-        "full_miniharness",
+        "full_pureharness",
     ]
     assert all(config.max_steps == 7 for config in configs)
     assert [config.history_token_budget for config in configs] == [
@@ -486,7 +486,7 @@ def test_default_agent_still_injects_task_state():
 
     assert isinstance(model.contexts[0][0], Message)
     assert (
-        "[MiniHarness Derived Task State]"
+        "[PureHarness Derived Task State]"
         in model.contexts[0][0].content
     )
 
@@ -672,7 +672,7 @@ def test_verifier_nonzero_is_task_failure_but_start_error_is_infrastructure(
     missing_verifier = replace(
         task,
         verification_argv=(
-            "definitely-missing-miniharness-command",
+            "definitely-missing-pureharness-command",
             TRUSTED_VERIFIER_PLACEHOLDER,
         ),
     )
@@ -790,7 +790,7 @@ def test_verification_output_is_bounded(tmp_path):
 
 
 def test_benchmark_core_has_no_provider_or_network_dependency():
-    source = Path("src/miniharness/benchmark.py").read_text(
+    source = Path("src/pureharness/benchmark.py").read_text(
         encoding="utf-8"
     )
 

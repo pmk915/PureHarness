@@ -1,7 +1,7 @@
 from typing import Protocol
 
-from miniharness.messages import AgentItem, Message, ToolCall, ToolResult
-from miniharness.tools import Tool
+from pureharness.messages import AgentItem, Message, ToolCall, ToolResult
+from pureharness.tools import Tool
 
 
 ModelOutput = Message | list[ToolCall]

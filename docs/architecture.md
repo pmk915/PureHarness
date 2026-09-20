@@ -1,4 +1,4 @@
-# MiniHarness architecture
+# PureHarness architecture
 
 This document separates the implementation that exists today from the intended
 architecture. Sections marked **Current** describe repository behavior through
@@ -7,7 +7,7 @@ describe direction, not implemented APIs.
 
 ## 1. Project positioning
 
-MiniHarness is a small, inspectable agent runtime: it coordinates a model,
+PureHarness is a small, inspectable agent runtime: it coordinates a model,
 conversation state, context selection, tools, execution traces, and observable
 events through an explicit loop. Its product values are transparency,
 reliability, and measurability.
@@ -17,13 +17,13 @@ runtime. File reading, file writing, and command execution demonstrate what the
 runtime can host, but these capabilities are not part of the kernel's identity.
 Removing the coding tools should leave a coherent agent runtime.
 
-MiniHarness favors a small kernel, replaceable integrations, and ordinary Python
+PureHarness favors a small kernel, replaceable integrations, and ordinary Python
 over a broad framework or a coding-agent product.
 
 ## 2. Current architecture
 
 **Current:** the repository is a compact Python package under
-`src/miniharness`. The runtime flow is:
+`src/pureharness`. The runtime flow is:
 
 ```text
                              +-> TaskStateReducer -> system state view --+
@@ -48,7 +48,7 @@ RunRecord -> inspect / observational replay
 External benchmark -> fresh Agent workspace -> trusted verifier -> Experiment
 ```
 
-The installed `miniharness` command is a thin composition layer around these
+The installed `pureharness` command is a thin composition layer around these
 components. CLI input, terminal rendering, benchmark selection, and provider
 construction do not enter the Agent kernel.
 
@@ -259,7 +259,7 @@ entirely OLD or RECENT; multi-tool units are never split.
 
 Only complete OLD ToolCall/ToolResult units are eligible. Each eligible unit is
 replaced in place, and only when the replacement is smaller, by one explicit
-system-role message headed `[MiniHarness Compacted Tool History]`. Its stable
+system-role message headed `[PureHarness Compacted Tool History]`. Its stable
 structural lines retain tool name, success/failure, and bounded safe targets:
 known path tools use `path`, `search_text` uses bounded query/path fields, and
 `run_command` uses at most six bounded/redacted argv entries. Successful output
@@ -372,7 +372,7 @@ finalized RunRecords (execution evidence for this session)
 
 Run count and last-run status are derived from the RunRecords rather than
 maintained as duplicate counters. The CLI stores these files under
-`$MINIHARNESS_HOME/sessions`, defaulting to `~/.miniharness/sessions`; Session
+`$PUREHARNESS_HOME/sessions`, defaulting to `~/.pureharness/sessions`; Session
 itself does not know that path. Saves flush a temporary file and atomically
 replace the complete prior snapshot, so conversation state and associated run
 evidence cross the commit boundary together. Schema version 1 is strict;
@@ -484,7 +484,7 @@ fixture path, verification argv, and optional curated tool-name metadata.
 `BenchmarkConfig` names one explicit combination of context strategy,
 ToolResult projection, TaskState injection, trajectory compaction, and tool
 exposure. The four standard configurations are `raw_baseline`,
-`budget_only`, `context_engineered`, and `full_miniharness`; they are not
+`budget_only`, `context_engineered`, and `full_pureharness`; they are not
 generated as a factorial matrix.
 
 For each task/config pair, the runner copies the canonical fixture into a new
@@ -533,15 +533,15 @@ summaries report success, duration, runtime counts, estimated token totals, and
 compaction counts. Provider-exact usage is intentionally absent because the
 generic Model protocol does not currently expose it.
 
-`miniharness` provides five thin command paths plus interactive mode:
+`pureharness` provides five thin command paths plus interactive mode:
 
 ```text
-miniharness                 one Session, repeated Agent.run() turns
-miniharness run PROMPT      one Agent run
-miniharness inspect PATH    read-only RunRecord inspection
-miniharness benchmark       BenchmarkRunner + ExperimentRunner
-miniharness sessions        discover durable sessions, newest first
-miniharness resume ID       restore a logical Session, then await input
+pureharness                 one Session, repeated Agent.run() turns
+pureharness run PROMPT      one Agent run
+pureharness inspect PATH    read-only RunRecord inspection
+pureharness benchmark       BenchmarkRunner + ExperimentRunner
+pureharness sessions        discover durable sessions, newest first
+pureharness resume ID       restore a logical Session, then await input
 ```
 
 Interactive `/help`, `/status`, and `/exit` are CLI concerns. Structured Agent

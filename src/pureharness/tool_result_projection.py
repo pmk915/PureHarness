@@ -1,6 +1,6 @@
 from typing import Protocol
 
-from miniharness.messages import ToolResult
+from pureharness.messages import ToolResult
 
 
 DEFAULT_MAX_TOOL_RESULT_CHARS = 12_000

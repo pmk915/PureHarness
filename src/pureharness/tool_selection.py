@@ -4,9 +4,9 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
-from miniharness.task_state import TaskState
-from miniharness.token_estimation import approximate_text_tokens
-from miniharness.tools import Tool
+from pureharness.task_state import TaskState
+from pureharness.token_estimation import approximate_text_tokens
+from pureharness.tools import Tool
 
 
 class ToolSelectionError(RuntimeError):

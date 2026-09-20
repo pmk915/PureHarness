@@ -1,7 +1,7 @@
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from miniharness.messages import ToolCall, ToolResult
+from pureharness.messages import ToolCall, ToolResult
 
 
 class ToolHistoryError(ValueError):

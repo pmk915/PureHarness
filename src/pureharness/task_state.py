@@ -3,8 +3,8 @@ import posixpath
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from miniharness.messages import AgentItem, Message, ToolCall, ToolResult
-from miniharness.tool_history import (
+from pureharness.messages import AgentItem, Message, ToolCall, ToolResult
+from pureharness.tool_history import (
     ToolHistoryError,
     ToolInteraction,
     match_tool_interactions,
@@ -185,7 +185,7 @@ class TaskStateReducer:
 def render_task_state(state: TaskState) -> Message:
     """Render a deterministic, model-facing system context item."""
     sections = [
-        "[MiniHarness Derived Task State]",
+        "[PureHarness Derived Task State]",
         "Current request:\n"
         + (
             state.current_request
