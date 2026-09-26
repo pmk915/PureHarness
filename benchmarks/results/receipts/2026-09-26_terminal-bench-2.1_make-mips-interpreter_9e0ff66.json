@@ -1,0 +1,38 @@
+{
+  "evaluation": {
+    "completed_trials": 1,
+    "errored_trials": 1,
+    "finished_at": "2026-09-26T17:20:50.440001",
+    "mean_reward": 0.0,
+    "started_at": "2026-09-26T17:15:08.384196",
+    "total_trials": 1
+  },
+  "harbor": {
+    "job_id": "9d6ff010-3097-42c2-a94a-6481de82c888",
+    "version": "0.23.0"
+  },
+  "pureharness": {
+    "repository_commit": "9e0ff66dd655534040b0cb3889235db221369996",
+    "worktree_clean": true
+  },
+  "schema_version": 1,
+  "trials": [
+    {
+      "agent_name": "pureharness",
+      "agent_version": "9e0ff66dd655534040b0cb3889235db221369996",
+      "environment_type": "docker",
+      "exception": {
+        "occurred_at": "2026-09-26T09:18:34.191848Z",
+        "type": "NonZeroAgentExitCodeError"
+      },
+      "model_name": "deepseek-v4-flash",
+      "model_provider": "deepseek",
+      "reward": 0.0,
+      "run_record": "make-mips-interpreter__YdNZQYU/agent/pureharness-run-record.json",
+      "task_checksum": "929f50bc438e551fb6c09fdc9f91ab528e266bc57a79e52c90d398738a553a72",
+      "task_name": "terminal-bench/make-mips-interpreter",
+      "task_path": null,
+      "trial_name": "make-mips-interpreter__YdNZQYU"
+    }
+  ]
+}
