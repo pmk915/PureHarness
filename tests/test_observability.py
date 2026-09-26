@@ -50,6 +50,11 @@ class InterruptingModel:
         raise KeyboardInterrupt
 
 
+class UnexpectedFailingModel:
+    def generate(self, messages, tools):
+        raise ValueError("api_key=must-not-enter-jsonl")
+
+
 class StaticPolicy:
     def __init__(self, decision: PolicyDecision) -> None:
         self.decision = decision
@@ -369,6 +374,55 @@ def test_jsonl_interruption_is_structured_without_human_text(
     assert events[-1]["payload"]["end_reason"] == "interrupted"
     assert "Interrupted." not in captured.out
     assert "Traceback" not in captured.out + captured.err
+
+
+def test_jsonl_model_failure_emits_events_and_writes_record(
+    tmp_path,
+    capsys,
+):
+    record_path = tmp_path / "failed-run.json"
+
+    exit_code = main(
+        [
+            "run",
+            "fail unexpectedly",
+            "--workspace",
+            str(tmp_path),
+            "--model",
+            "fake-model",
+            "--output",
+            "jsonl",
+            "--record",
+            str(record_path),
+        ],
+        model_factory=lambda name: UnexpectedFailingModel(),
+    )
+    captured = capsys.readouterr()
+    events = _parse_jsonl(captured.out)
+
+    assert exit_code == 1
+    assert captured.err == ""
+    assert [event["event"] for event in events[-2:]] == [
+        "model_failed",
+        "agent_failed",
+    ]
+    assert events[-2]["payload"] == {
+        "reason": "model_error",
+        "error_type": "ValueError",
+    }
+    assert events[-1]["payload"] == {
+        "end_reason": "model_error",
+        "error_type": "ValueError",
+        "step_count": 0,
+    }
+    assert "must-not-enter-jsonl" not in captured.out + captured.err
+    assert record_path.is_file()
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    assert record["end_reason"] == "model_error"
+    assert record["model_call_count"] == 1
+    assert "Agent produced no RunRecord to save" not in (
+        captured.out + captured.err
+    )
 
 
 def test_default_one_shot_output_remains_human(tmp_path, capsys):

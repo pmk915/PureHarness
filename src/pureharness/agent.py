@@ -1,5 +1,5 @@
 from pureharness.messages import AgentItem, Message, ToolCall, ToolResult
-from pureharness.model import Model, ModelError
+from pureharness.model import Model
 from pureharness.approval import ApprovalDecision, ApprovalRequest
 from pureharness.run_record import (
     ModelInvocationRecord,
@@ -433,7 +433,7 @@ class Agent:
                     model_context,
                     list(tool_selection.tools),
                 )
-            except ModelError as exc:
+            except Exception as exc:
                 self.trace.end_reason = "model_error"
 
                 self._emit(
@@ -454,6 +454,7 @@ class Agent:
                         type="agent_failed",
                         data={
                             "reason": "model_error",
+                            "error_type": type(exc).__name__,
                             "step_count": len(
                                 self.trace.steps
                             ),

@@ -23,6 +23,25 @@ class FailingModel:
     def generate(self, messages, tools):
         raise ModelError("simulated model failure")
 
+
+class ToolThenUnexpectedFailureModel:
+    def __init__(self, failure):
+        self.failure = failure
+        self.call_count = 0
+
+    def generate(self, messages, tools):
+        self.call_count += 1
+        if self.call_count == 1:
+            return [
+                ToolCall(
+                    name="add",
+                    arguments={"a": 1, "b": 2},
+                    call_id="add-before-failure",
+                )
+            ]
+        raise self.failure
+
+
 class MultiToolModel:
 
     def generate(
@@ -412,6 +431,46 @@ def test_agent_records_model_error_end_reason():
         agent.events[-1].data["reason"]
         == "model_error"
     )
+    assert agent.events[-1].data["error_type"] == "ModelError"
+    assert agent.last_run_record is not None
+    assert agent.last_run_record.end_reason == "model_error"
+
+
+def test_agent_finalizes_unexpected_model_exception_and_reraises_it():
+    failure = ValueError("unexpected model failure")
+    model = ToolThenUnexpectedFailureModel(failure)
+    registry = ToolRegistry()
+    registry.register(ADD_TOOL)
+    agent = Agent(model=model, tools=registry)
+
+    with pytest.raises(ValueError) as exc_info:
+        agent.run("calculate")
+
+    assert exc_info.value is failure
+    assert agent.trace.end_reason == "model_error"
+    assert len(agent.trace.steps) == 1
+    assert agent.events[-2].type == "model_failed"
+    assert agent.events[-2].data == {
+        "step": 1,
+        "reason": "model_error",
+        "error_type": "ValueError",
+    }
+    assert agent.events[-1].type == "agent_failed"
+    assert agent.events[-1].data == {
+        "reason": "model_error",
+        "error_type": "ValueError",
+        "step_count": 1,
+    }
+
+    record = agent.last_run_record
+    assert record is not None
+    assert record.end_reason == "model_error"
+    assert record.step_count == 1
+    assert record.model_call_count == 2
+    assert [invocation.step for invocation in record.model_invocations] == [
+        0,
+        1,
+    ]
 
 
 def test_agent_executes_multiple_tools():
