@@ -262,6 +262,7 @@ def test_one_shot_jsonl_approval_denial_never_prompts_or_executes(
         session=None,
         approval_handler=None,
         event_listener=None,
+        max_steps=10,
     ):
         nonlocal execution_count
         assert approval_handler is None
@@ -291,7 +292,7 @@ def test_one_shot_jsonl_approval_denial_never_prompts_or_executes(
             listeners=[event_listener],
             session_id=session_id,
             session=session,
-            max_steps=2,
+            max_steps=max_steps,
         )
 
     monkeypatch.setattr(cli_module, "_create_agent", create_agent)

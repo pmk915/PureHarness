@@ -59,6 +59,20 @@ class CLIError(RuntimeError):
     """Raised when CLI setup or local evidence handling fails."""
 
 
+def _positive_integer(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            "must be a positive integer"
+        ) from exc
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError(
+            "must be a positive integer"
+        )
+    return parsed
+
+
 class PlainTerminalRenderer:
     """Render a compact event stream without controlling Agent execution."""
 
@@ -130,6 +144,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=Path.cwd(),
     )
     run_parser.add_argument("--model", default=DEFAULT_MODEL)
+    run_parser.add_argument(
+        "--max-steps",
+        type=_positive_integer,
+        default=10,
+        help="Maximum Agent execution steps (default: 10).",
+    )
     run_parser.add_argument(
         "--record",
         type=Path,
@@ -517,6 +537,7 @@ def _run_once(
         session_id=str(uuid4()),
         output_fn=output_fn,
         event_listener=renderer,
+        max_steps=arguments.max_steps,
     )
     exit_code = 0
     try:
@@ -654,6 +675,7 @@ def _create_agent(
     session: Session | None = None,
     approval_handler: ApprovalHandler | None = None,
     event_listener: Callable[[AgentEvent], None] | None = None,
+    max_steps: int = 10,
 ) -> Agent:
     registry = ToolRegistry()
     for tool in create_coding_tools(workspace):
@@ -673,6 +695,7 @@ def _create_agent(
         ],
         session_id=session_id,
         session=session,
+        max_steps=max_steps,
     )
 
 

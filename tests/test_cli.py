@@ -383,6 +383,64 @@ def test_one_shot_writes_record_and_inspect_reads_it(tmp_path):
     assert "Estimated history tokens:" in rendered
 
 
+def test_one_shot_default_max_steps_remains_ten(tmp_path, monkeypatch):
+    created_agents = []
+    create_agent = cli_module._create_agent
+
+    def capture_agent(*args, **kwargs):
+        agent = create_agent(*args, **kwargs)
+        created_agents.append(agent)
+        return agent
+
+    monkeypatch.setattr(cli_module, "_create_agent", capture_agent)
+
+    exit_code = main(
+        ["run", "hello", "--workspace", str(tmp_path)],
+        model_factory=lambda name: MultiTurnModel(),
+        output_fn=lambda value: None,
+    )
+
+    assert exit_code == 0
+    assert created_agents[0].max_steps == 10
+
+
+def test_one_shot_explicit_max_steps_reaches_agent(tmp_path, monkeypatch):
+    created_agents = []
+    create_agent = cli_module._create_agent
+
+    def capture_agent(*args, **kwargs):
+        agent = create_agent(*args, **kwargs)
+        created_agents.append(agent)
+        return agent
+
+    monkeypatch.setattr(cli_module, "_create_agent", capture_agent)
+
+    exit_code = main(
+        [
+            "run",
+            "hello",
+            "--workspace",
+            str(tmp_path),
+            "--max-steps",
+            "37",
+        ],
+        model_factory=lambda name: MultiTurnModel(),
+        output_fn=lambda value: None,
+    )
+
+    assert exit_code == 0
+    assert created_agents[0].max_steps == 37
+
+
+@pytest.mark.parametrize("value", ["0", "-1"])
+def test_one_shot_rejects_non_positive_max_steps(value, capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        main(["run", "hello", "--max-steps", value])
+
+    assert exc_info.value.code == 2
+    assert "--max-steps: must be a positive integer" in capsys.readouterr().err
+
+
 def test_one_shot_agent_has_no_interactive_approval_handler(tmp_path):
     agent = cli_module._create_agent(
         tmp_path,

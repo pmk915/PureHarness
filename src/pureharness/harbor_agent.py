@@ -29,6 +29,7 @@ _REPOSITORY_URL = "https://github.com/pmk915/pureharness.git"
 _INSTALL_DIR = PurePosixPath("/installed-agent/pureharness")
 _VENV_DIR = _INSTALL_DIR / "venv"
 _RUN_RECORD_NAME = "pureharness-run-record.json"
+_EVALUATION_MAX_STEPS = 50
 _INSTALL_ATTEMPTS = 3
 _INSTALL_RETRY_DELAY_SECONDS = 1
 _COMMIT_PATTERN = re.compile(r"[0-9a-fA-F]{40}\Z")
@@ -233,6 +234,7 @@ class PureHarnessHarborAgent(BaseInstalledAgent):
                 f"{shlex.quote(instruction)} "
                 f"--workspace {shlex.quote(workspace)} "
                 f"--model {shlex.quote(self._deepseek_model)} "
+                f"--max-steps {_EVALUATION_MAX_STEPS} "
                 f"--record {shlex.quote(str(record_path))} "
                 "--output jsonl"
             ),
