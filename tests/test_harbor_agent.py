@@ -277,7 +277,7 @@ def test_run_invokes_public_cli_with_safe_arguments_and_record(tmp_path):
     assert "pureharness/venv/bin/pureharness run" in command
     assert "--workspace /workspace" in command
     assert "--model deepseek-chat" in command
-    assert "--max-steps 50" in command
+    assert "--max-steps 300" in command
     assert "--record /logs/agent/pureharness-run-record.json" in command
     assert "--output jsonl" in command
     assert shlex.quote(instruction) in command
