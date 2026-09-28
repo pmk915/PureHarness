@@ -67,6 +67,21 @@ compilation error, `ModelError`, or exhaustion of the step limit fails the run
 with a recorded end reason. The session remains across calls to `run`; an
 existing `Session` can be supplied to `Agent`.
 
+The loop is organized as explicit run, step, state-reduction, context-preparation,
+tool-selection, model-request, tool-execution, observation, and completion
+stages. `Agent` still owns and advances that synchronous loop. Focused private
+methods prepare each stage, while `RuntimeController` only makes deterministic
+lifecycle decisions about failures; it does not inspect task meaning, choose
+tools, call the model, or execute effects.
+
+`RuntimeFailure` records the failing step and `RuntimeStage`, original exception
+type, broad `FailureCategory`, and whether recovery is supported. The categories
+are `CONTEXT`, `MODEL`, `TOOL`, and `POLICY`. Current failures are conservatively
+marked non-recoverable and retain the existing end reasons and public events.
+Ordinary tool and policy exceptions remain model-visible error `ToolResult`
+observations rather than Run-level failures. Automatic retry and finer recovery
+policy are intentionally deferred to M18.3.
+
 For every inference, after TaskState and trajectory compilation, the Agent asks
 the injected `ToolSelector` for a model-facing view of the complete registry.
 It validates and measures that view before emitting `model_started`. A model

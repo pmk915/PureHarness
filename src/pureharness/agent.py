@@ -1,16 +1,41 @@
-from pureharness.messages import AgentItem, Message, ToolCall, ToolResult
-from pureharness.model import Model
+from collections.abc import Callable
+from dataclasses import dataclass
+from time import perf_counter
+from uuid import uuid4
+
 from pureharness.approval import ApprovalDecision, ApprovalRequest
+from pureharness.context import (
+    CompiledContext,
+    ContextBuilder,
+    ContextCompileError,
+)
+from pureharness.events import AgentEvent, safe_arguments_preview
+from pureharness.messages import AgentItem, Message, ToolCall, ToolResult
+from pureharness.model import Model, ModelOutput
 from pureharness.run_record import (
     ModelInvocationRecord,
     RunRecord,
     RunRecordBuilder,
+)
+from pureharness.runtime import (
+    FailureCategory,
+    RuntimeController,
+    RuntimeFailure,
+    RuntimeStage,
+)
+from pureharness.session import Session
+from pureharness.task_state import (
+    TaskState,
+    TaskStateError,
+    TaskStateReducer,
+    render_task_state,
 )
 from pureharness.tool_executor import ToolExecutor
 from pureharness.tool_policy import PolicyDecision
 from pureharness.tool_selection import (
     AllToolsSelector,
     ToolNotExposedError,
+    ToolSelection,
     ToolSelectionContext,
     ToolSelectionError,
     ToolSelector,
@@ -18,22 +43,14 @@ from pureharness.tool_selection import (
 )
 from pureharness.tools import Tool, ToolRegistry
 from pureharness.trace import ApprovalTrace, RunTrace, StepTrace
-from pureharness.events import AgentEvent, safe_arguments_preview
-from pureharness.context import (
-    ContextBuilder,
-    ContextCompileError,
-)
 
-from collections.abc import Callable
-from time import perf_counter
-from uuid import uuid4
 
-from pureharness.session import Session
-from pureharness.task_state import (
-    TaskStateError,
-    TaskStateReducer,
-    render_task_state,
-)
+@dataclass(frozen=True)
+class _PreparedContext:
+    task_state: TaskState
+    compiled: CompiledContext
+    model_items: tuple[AgentItem, ...]
+    estimated_task_state_tokens: int
 
 
 class Agent:
@@ -57,28 +74,17 @@ class Agent:
 
         self.model = model
         if tool_executor is None:
-            self.tools = (
-                tools
-                if tools is not None
-                else ToolRegistry()
-            )
+            self.tools = tools if tools is not None else ToolRegistry()
             self.tool_executor = ToolExecutor(self.tools)
         else:
-            if (
-                tools is not None
-                and tools is not tool_executor.registry
-            ):
+            if tools is not None and tools is not tool_executor.registry:
                 raise ValueError(
                     "Agent tools and ToolExecutor registry must match."
                 )
 
             self.tools = tool_executor.registry
             self.tool_executor = tool_executor
-        self.session = (
-            session
-            if session is not None
-            else Session()
-        )
+        self.session = session if session is not None else Session()
         self.max_steps = max_steps
         self.trace = RunTrace()
         self.events: list[AgentEvent] = []
@@ -102,15 +108,15 @@ class Agent:
             if run_id_factory is not None
             else lambda: str(uuid4())
         )
+        self.runtime_controller = RuntimeController()
+        self.last_runtime_failure: RuntimeFailure | None = None
         self.last_run_record: RunRecord | None = None
         self._active_record_builder: RunRecordBuilder | None = None
         self._active_session_size: int | None = None
 
-
     @property
     def messages(self):
         return self.session.items
-
 
     def _emit(self, event: AgentEvent) -> None:
         if event.run_id is None and self._active_record_builder is not None:
@@ -125,13 +131,11 @@ class Agent:
             except Exception as exc:
                 self.listener_errors.append(exc)
 
-
     def _finalize_run_record(
         self,
         builder: RunRecordBuilder,
     ) -> None:
         self.last_run_record = builder.finalize(self.trace)
-
 
     def run(self, user_input: str) -> str:
         try:
@@ -139,7 +143,7 @@ class Agent:
         except KeyboardInterrupt:
             if self.trace.end_reason is None:
                 if self._active_session_size is not None:
-                    del self.session.items[self._active_session_size:]
+                    del self.session.items[self._active_session_size :]
                 self.trace.end_reason = "interrupted"
                 if self._active_record_builder is not None:
                     self._finalize_run_record(
@@ -159,555 +163,95 @@ class Agent:
             self._active_record_builder = None
             self._active_session_size = None
 
-
     def _run(self, user_input: str) -> str:
-        self.trace = RunTrace()
-        self.events = []
-        self.listener_errors = []
-        self.last_run_record = None
-        self._active_session_size = len(self.session.items)
-        record_builder = RunRecordBuilder(
-            run_id=self._run_id_factory(),
-            session_id=self.session_id,
-        )
-        self._active_record_builder = record_builder
-
-        self._emit(
-            AgentEvent(
-                type="agent_started",
-                data={
-                    "history_item_count": len(
-                        self.session.items
-                    ),
-                },
-            )
-        )
-
-        user_message = Message(
-            role="user",
-            content=user_input,
-        )
-
-        self.session.append(user_message)
+        record_builder = self._start_run(user_input)
 
         for step in range(self.max_steps):
-
-            history = self.session.snapshot()
-
-            self._emit(
-                AgentEvent(
-                    type="context_build_started",
-                    data={
-                        "step": step,
-                        "history_item_count": len(history),
-                    },
-                )
-            )
+            history = self._start_step(step)
 
             try:
                 task_state = self.task_state_reducer.reduce(history)
-                if self.include_task_state:
-                    task_state_item = render_task_state(task_state)
-                    estimated_task_state_tokens = (
-                        self.context_builder.estimate_tokens(
-                            [task_state_item]
-                        )
-                    )
-                else:
-                    task_state_item = None
-                    estimated_task_state_tokens = 0
-                compiled_context = self.context_builder.compile(
-                    history
+            except TaskStateError as exc:
+                self._record_runtime_failure(
+                    step=step,
+                    stage=RuntimeStage.STATE_REDUCTION,
+                    error=exc,
+                    builder=record_builder,
                 )
-            except (ContextCompileError, TaskStateError) as exc:
-                self.trace.end_reason = "context_error"
-
-                self._emit(
-                    AgentEvent(
-                        type="context_build_failed",
-                        data={
-                            "step": step,
-                            "reason": "context_error",
-                            "error_type": type(exc).__name__,
-                        },
-                    )
-                )
-
-                self._finalize_run_record(record_builder)
-
-                self._emit(
-                    AgentEvent(
-                        type="agent_failed",
-                        data={
-                            "reason": "context_error",
-                            "step_count": len(
-                                self.trace.steps
-                            ),
-                        },
-                    )
-                )
-
                 raise
-
-            model_context = list(compiled_context.items)
-            if task_state_item is not None:
-                model_context.insert(0, task_state_item)
-            context_event_data = {
-                "step": step,
-                "history_item_count": len(history),
-                "context_item_count": len(model_context),
-                "trajectory_item_count": len(
-                    compiled_context.items
-                ),
-                "context_strategy": compiled_context.strategy,
-                "estimated_history_tokens": (
-                    compiled_context.estimated_tokens
-                ),
-                "estimated_task_state_tokens": (
-                    estimated_task_state_tokens
-                ),
-                "current_request_present": (
-                    task_state.current_request is not None
-                ),
-                "completed_actions_count": len(
-                    task_state.completed_actions
-                ),
-                "failed_actions_count": len(
-                    task_state.failed_actions
-                ),
-                "files_read_count": len(task_state.files_read),
-                "files_modified_count": len(
-                    task_state.files_modified
-                ),
-                "recent_errors_count": len(
-                    task_state.recent_errors
-                ),
-                "total_units": compiled_context.total_units,
-                "included_units": (
-                    compiled_context.included_units
-                ),
-                "dropped_units": compiled_context.dropped_units,
-                "projected_tool_results": (
-                    compiled_context.projected_tool_results
-                ),
-                "compacted_tool_results": (
-                    compiled_context.compacted_tool_results
-                ),
-                "raw_tool_result_chars": (
-                    compiled_context.raw_tool_result_chars
-                ),
-                "projected_tool_result_chars": (
-                    compiled_context.projected_tool_result_chars
-                ),
-                "trajectory_compacted": (
-                    compiled_context.trajectory_compacted
-                ),
-                "compacted_source_units": (
-                    compiled_context.compacted_source_units
-                ),
-                "compacted_tool_actions": (
-                    compiled_context.compacted_tool_actions
-                ),
-                "original_trajectory_estimated_tokens": (
-                    compiled_context.original_trajectory_estimated_tokens
-                ),
-                "compacted_trajectory_estimated_tokens": (
-                    compiled_context.compacted_trajectory_estimated_tokens
-                ),
-                "recent_raw_units": (
-                    compiled_context.recent_raw_units
-                ),
-                "recent_raw_estimated_tokens": (
-                    compiled_context.recent_raw_estimated_tokens
-                ),
-                "trajectory_compaction_strategy": (
-                    compiled_context.trajectory_compaction_strategy
-                ),
-            }
-
-            if compiled_context.history_token_budget is not None:
-                context_event_data["history_token_budget"] = (
-                    compiled_context.history_token_budget
-                )
-
-            self._emit(
-                AgentEvent(
-                    type="context_built",
-                    data=context_event_data,
-                )
-            )
 
             try:
-                tool_selection = prepare_tool_selection(
-                    self.tools.list_tools(),
-                    self.tool_selector,
-                    ToolSelectionContext(
-                        step=step,
-                        task_state=task_state,
-                    ),
+                prepared = self._prepare_context(
+                    step,
+                    history,
+                    task_state,
                 )
-            except ToolSelectionError as exc:
-                self.trace.end_reason = "tool_selection_error"
-
-                self._finalize_run_record(record_builder)
-
-                self._emit(
-                    AgentEvent(
-                        type="agent_failed",
-                        data={
-                            "reason": "tool_selection_error",
-                            "error_type": type(exc).__name__,
-                            "step_count": len(self.trace.steps),
-                        },
-                    )
+            except ContextCompileError as exc:
+                self._record_runtime_failure(
+                    step=step,
+                    stage=RuntimeStage.CONTEXT_PREPARATION,
+                    error=exc,
+                    builder=record_builder,
                 )
-
                 raise
 
-            exposed_tool_names = frozenset(
-                tool.name for tool in tool_selection.tools
-            )
-            record_builder.record_model_invocation(
-                ModelInvocationRecord(
+            try:
+                tool_selection = self._select_tools(step, task_state)
+            except ToolSelectionError as exc:
+                self._record_runtime_failure(
                     step=step,
-                    context_strategy=compiled_context.strategy,
-                    estimated_history_tokens=(
-                        compiled_context.estimated_tokens
-                    ),
-                    estimated_task_state_tokens=(
-                        estimated_task_state_tokens
-                    ),
-                    registered_tool_count=(
-                        tool_selection.registered_tool_count
-                    ),
-                    exposed_tool_count=(
-                        tool_selection.exposed_tool_count
-                    ),
-                    estimated_tool_schema_tokens=(
-                        tool_selection.estimated_tool_schema_tokens
-                    ),
-                    selector_strategy=(
-                        tool_selection.selector_strategy
-                    ),
-                    trajectory_compacted=(
-                        compiled_context.trajectory_compacted
-                    ),
-                    compacted_source_units=(
-                        compiled_context.compacted_source_units
-                    ),
-                    compacted_tool_results=(
-                        compiled_context.compacted_tool_results
-                    ),
+                    stage=RuntimeStage.TOOL_SELECTION,
+                    error=exc,
+                    builder=record_builder,
                 )
-            )
+                raise
 
-            self._emit(
-                AgentEvent(
-                    type="model_started",
-                    data={
-                        "step": step,
-                        "registered_tool_count": (
-                            tool_selection.registered_tool_count
-                        ),
-                        "exposed_tool_count": (
-                            tool_selection.exposed_tool_count
-                        ),
-                        "estimated_tool_schema_tokens": (
-                            tool_selection.estimated_tool_schema_tokens
-                        ),
-                        "estimated_all_tool_schema_tokens": (
-                            tool_selection.estimated_all_tool_schema_tokens
-                        ),
-                        "estimated_tool_schema_tokens_saved": (
-                            tool_selection.estimated_tool_schema_tokens_saved
-                        ),
-                        "selector_strategy": (
-                            tool_selection.selector_strategy
-                        ),
-                    },
-                )
+            self._start_model_request(
+                step,
+                prepared,
+                tool_selection,
+                record_builder,
             )
 
             try:
                 output = self.model.generate(
-                    model_context,
+                    list(prepared.model_items),
                     list(tool_selection.tools),
                 )
             except Exception as exc:
-                self.trace.end_reason = "model_error"
-
-                self._emit(
-                    AgentEvent(
-                        type="model_failed",
-                        data={
-                            "step": step,
-                            "reason": "model_error",
-                            "error_type": type(exc).__name__,
-                        },
-                    )
+                self._record_runtime_failure(
+                    step=step,
+                    stage=RuntimeStage.MODEL_REQUEST,
+                    error=exc,
+                    builder=record_builder,
                 )
-
-                self._finalize_run_record(record_builder)
-
-                self._emit(
-                    AgentEvent(
-                        type="agent_failed",
-                        data={
-                            "reason": "model_error",
-                            "error_type": type(exc).__name__,
-                            "step_count": len(
-                                self.trace.steps
-                            ),
-                        },
-                    )
-                )
-
                 raise
 
-            output_kind = (
-                "message"
-                if isinstance(output, Message)
-                else "tool_calls"
-            )
-            tool_call_count = (
-                len(output)
-                if isinstance(output, list)
-                else 0
-            )
-            record_builder.record_tool_calls(tool_call_count)
-
-            self._emit(
-                AgentEvent(
-                    type="model_completed",
-                    data={
-                        "step": step,
-                        "output_kind": output_kind,
-                        "tool_call_count": tool_call_count,
-                    },
-                )
+            self._complete_model_request(
+                step,
+                output,
+                record_builder,
             )
 
-            # 情况1：模型直接回答
             if isinstance(output, Message):
-
-                self.session.append(output)
-
-                self.trace.steps.append(
-                    StepTrace(
-                        index=step,
-                        output=output,
-                        tool_result=None,
-                    )
+                return self._complete_run(
+                    step,
+                    output,
+                    record_builder,
                 )
 
-                self.trace.end_reason = "completed"
-                self._finalize_run_record(record_builder)
-                self._emit(
-                    AgentEvent(
-                        type="agent_completed",
-                        data={
-                            "reason": "completed",
-                            "step_count": len(
-                                self.trace.steps
-                            ),
-                        },
-                    )
-                )
-                return output.content
-
-
-            # 情况2：模型调用工具
             if isinstance(output, list):
-
-                tool_results = []
-
-                for tool_call in output:
-
-                    self.session.append(tool_call)
-
-                    tool_started_at: float | None = None
-
-                    def on_policy_evaluated(
-                        tool: Tool,
-                        decision: PolicyDecision,
-                    ) -> None:
-                        self._emit(
-                            AgentEvent(
-                                type="tool_policy_evaluated",
-                                data={
-                                    "step": step,
-                                    "name": tool.name,
-                                    "call_id": tool_call.call_id,
-                                    "risk_level": tool.risk_level.value,
-                                    "decision": decision.value,
-                                },
-                            )
-                        )
-
-                    def on_tool_started(tool: Tool) -> None:
-                        nonlocal tool_started_at
-                        tool_started_at = perf_counter()
-
-                        self._emit(
-                            AgentEvent(
-                                type="tool_started",
-                                data={
-                                    "step": step,
-                                    "name": tool.name,
-                                    "call_id": tool_call.call_id,
-                                    "arguments_preview": (
-                                        safe_arguments_preview(
-                                            tool_call.arguments
-                                        )
-                                    ),
-                                },
-                            )
-                        )
-
-                    def on_approval_requested(
-                        tool: Tool,
-                        request: ApprovalRequest,
-                    ) -> None:
-                        self._emit(
-                            AgentEvent(
-                                type="approval_requested",
-                                data={
-                                    "run_id": record_builder.run_id,
-                                    "step": step,
-                                    "name": tool.name,
-                                    "call_id": tool_call.call_id,
-                                    "arguments_preview": (
-                                        safe_arguments_preview(
-                                            request.arguments
-                                        )
-                                    ),
-                                },
-                            )
-                        )
-
-                    def on_approval_resolved(
-                        tool: Tool,
-                        _request: ApprovalRequest,
-                        decision: ApprovalDecision,
-                    ) -> None:
-                        self.trace.approvals.append(
-                            ApprovalTrace(
-                                step=step,
-                                tool_name=tool.name,
-                                call_id=tool_call.call_id,
-                                decision=decision,
-                            )
-                        )
-                        event_type = (
-                            "approval_granted"
-                            if decision is ApprovalDecision.APPROVE
-                            else "approval_denied"
-                        )
-                        self._emit(
-                            AgentEvent(
-                                type=event_type,
-                                data={
-                                    "run_id": record_builder.run_id,
-                                    "step": step,
-                                    "name": tool.name,
-                                    "call_id": tool_call.call_id,
-                                    "approval_decision": (
-                                        decision.value
-                                    ),
-                                },
-                            )
-                        )
-
-                    try:
-                        if (
-                            tool_call.name
-                            not in exposed_tool_names
-                        ):
-                            raise ToolNotExposedError(
-                                tool_call.name
-                            )
-
-                        result = self.tool_executor.execute(
-                            tool_call.name,
-                            tool_call.arguments,
-                            on_policy_evaluated=(
-                                on_policy_evaluated
-                            ),
-                            on_approval_requested=(
-                                on_approval_requested
-                            ),
-                            on_approval_resolved=(
-                                on_approval_resolved
-                            ),
-                            on_tool_started=on_tool_started,
-                        )
-
-                        content = str(result)
-                        is_error = False
-
-                    except Exception as exc:
-
-                        content = (
-                            f"Tool error: "
-                            f"{type(exc).__name__}: {exc}"
-                        )
-
-                        is_error = True
-
-                    tool_result = ToolResult(
-                        name=tool_call.name,
-                        content=content,
-                        call_id=tool_call.call_id,
-                        is_error=is_error,
-                    )
-
-                    self.session.append(tool_result)
-
-                    tool_results.append(tool_result)
-
-                    if tool_started_at is not None:
-                        record_builder.record_tool_execution()
-                    record_builder.record_tool_result(
-                        is_error=is_error
-                    )
-
-                    if tool_started_at is not None:
-                        duration_seconds = (
-                            perf_counter() - tool_started_at
-                        )
-
-                        self._emit(
-                            AgentEvent(
-                                type="tool_completed",
-                                data={
-                                    "step": step,
-                                    "name": tool_call.name,
-                                    "call_id": tool_call.call_id,
-                                    "is_error": is_error,
-                                    "duration_seconds": round(
-                                        duration_seconds,
-                                        6,
-                                    ),
-                                    "result_character_count": len(
-                                        content
-                                    ),
-                                },
-                            )
-                        )
-
-                self.trace.steps.append(
-                    StepTrace(
-                        index=step,
-                        output=output,
-                        tool_result=tool_results,
-                    )
+                self._execute_tool_calls(
+                    step,
+                    output,
+                    frozenset(
+                        tool.name for tool in tool_selection.tools
+                    ),
+                    record_builder,
                 )
 
-
-                continue
         self.trace.end_reason = "max_steps_exceeded"
         self._finalize_run_record(record_builder)
-
         self._emit(
             AgentEvent(
                 type="agent_failed",
@@ -717,5 +261,444 @@ class Agent:
                 },
             )
         )
-
         raise RuntimeError("Agent exceeded max steps")
+
+    def _start_run(self, user_input: str) -> RunRecordBuilder:
+        self.trace = RunTrace()
+        self.events = []
+        self.listener_errors = []
+        self.last_runtime_failure = None
+        self.last_run_record = None
+        self._active_session_size = len(self.session.items)
+        builder = RunRecordBuilder(
+            run_id=self._run_id_factory(),
+            session_id=self.session_id,
+        )
+        self._active_record_builder = builder
+
+        self._emit(
+            AgentEvent(
+                type="agent_started",
+                data={"history_item_count": len(self.session.items)},
+            )
+        )
+        self.session.append(Message(role="user", content=user_input))
+        return builder
+
+    def _start_step(self, step: int) -> list[AgentItem]:
+        history = self.session.snapshot()
+        self._emit(
+            AgentEvent(
+                type="context_build_started",
+                data={
+                    "step": step,
+                    "history_item_count": len(history),
+                },
+            )
+        )
+        return history
+
+    def _prepare_context(
+        self,
+        step: int,
+        history: list[AgentItem],
+        task_state: TaskState,
+    ) -> _PreparedContext:
+        if self.include_task_state:
+            task_state_item = render_task_state(task_state)
+            estimated_task_state_tokens = (
+                self.context_builder.estimate_tokens([task_state_item])
+            )
+        else:
+            task_state_item = None
+            estimated_task_state_tokens = 0
+
+        compiled = self.context_builder.compile(history)
+        model_items = list(compiled.items)
+        if task_state_item is not None:
+            model_items.insert(0, task_state_item)
+
+        self._emit(
+            AgentEvent(
+                type="context_built",
+                data=self._context_event_data(
+                    step,
+                    history,
+                    task_state,
+                    compiled,
+                    len(model_items),
+                    estimated_task_state_tokens,
+                ),
+            )
+        )
+        return _PreparedContext(
+            task_state=task_state,
+            compiled=compiled,
+            model_items=tuple(model_items),
+            estimated_task_state_tokens=estimated_task_state_tokens,
+        )
+
+    def _context_event_data(
+        self,
+        step: int,
+        history: list[AgentItem],
+        task_state: TaskState,
+        compiled: CompiledContext,
+        context_item_count: int,
+        estimated_task_state_tokens: int,
+    ) -> dict[str, object]:
+        data = {
+            "step": step,
+            "history_item_count": len(history),
+            "context_item_count": context_item_count,
+            "trajectory_item_count": len(compiled.items),
+            "context_strategy": compiled.strategy,
+            "estimated_history_tokens": compiled.estimated_tokens,
+            "estimated_task_state_tokens": estimated_task_state_tokens,
+            "current_request_present": (
+                task_state.current_request is not None
+            ),
+            "completed_actions_count": len(task_state.completed_actions),
+            "failed_actions_count": len(task_state.failed_actions),
+            "files_read_count": len(task_state.files_read),
+            "files_modified_count": len(task_state.files_modified),
+            "recent_errors_count": len(task_state.recent_errors),
+            "total_units": compiled.total_units,
+            "included_units": compiled.included_units,
+            "dropped_units": compiled.dropped_units,
+            "projected_tool_results": compiled.projected_tool_results,
+            "compacted_tool_results": compiled.compacted_tool_results,
+            "raw_tool_result_chars": compiled.raw_tool_result_chars,
+            "projected_tool_result_chars": (
+                compiled.projected_tool_result_chars
+            ),
+            "trajectory_compacted": compiled.trajectory_compacted,
+            "compacted_source_units": compiled.compacted_source_units,
+            "compacted_tool_actions": compiled.compacted_tool_actions,
+            "original_trajectory_estimated_tokens": (
+                compiled.original_trajectory_estimated_tokens
+            ),
+            "compacted_trajectory_estimated_tokens": (
+                compiled.compacted_trajectory_estimated_tokens
+            ),
+            "recent_raw_units": compiled.recent_raw_units,
+            "recent_raw_estimated_tokens": (
+                compiled.recent_raw_estimated_tokens
+            ),
+            "trajectory_compaction_strategy": (
+                compiled.trajectory_compaction_strategy
+            ),
+        }
+        if compiled.history_token_budget is not None:
+            data["history_token_budget"] = compiled.history_token_budget
+        return data
+
+    def _select_tools(
+        self,
+        step: int,
+        task_state: TaskState,
+    ) -> ToolSelection:
+        return prepare_tool_selection(
+            self.tools.list_tools(),
+            self.tool_selector,
+            ToolSelectionContext(step=step, task_state=task_state),
+        )
+
+    def _start_model_request(
+        self,
+        step: int,
+        prepared: _PreparedContext,
+        selection: ToolSelection,
+        builder: RunRecordBuilder,
+    ) -> None:
+        compiled = prepared.compiled
+        builder.record_model_invocation(
+            ModelInvocationRecord(
+                step=step,
+                context_strategy=compiled.strategy,
+                estimated_history_tokens=compiled.estimated_tokens,
+                estimated_task_state_tokens=(
+                    prepared.estimated_task_state_tokens
+                ),
+                registered_tool_count=selection.registered_tool_count,
+                exposed_tool_count=selection.exposed_tool_count,
+                estimated_tool_schema_tokens=(
+                    selection.estimated_tool_schema_tokens
+                ),
+                selector_strategy=selection.selector_strategy,
+                trajectory_compacted=compiled.trajectory_compacted,
+                compacted_source_units=compiled.compacted_source_units,
+                compacted_tool_results=compiled.compacted_tool_results,
+            )
+        )
+        self._emit(
+            AgentEvent(
+                type="model_started",
+                data={
+                    "step": step,
+                    "registered_tool_count": (
+                        selection.registered_tool_count
+                    ),
+                    "exposed_tool_count": selection.exposed_tool_count,
+                    "estimated_tool_schema_tokens": (
+                        selection.estimated_tool_schema_tokens
+                    ),
+                    "estimated_all_tool_schema_tokens": (
+                        selection.estimated_all_tool_schema_tokens
+                    ),
+                    "estimated_tool_schema_tokens_saved": (
+                        selection.estimated_tool_schema_tokens_saved
+                    ),
+                    "selector_strategy": selection.selector_strategy,
+                },
+            )
+        )
+
+    def _complete_model_request(
+        self,
+        step: int,
+        output: ModelOutput,
+        builder: RunRecordBuilder,
+    ) -> None:
+        output_kind = (
+            "message" if isinstance(output, Message) else "tool_calls"
+        )
+        tool_call_count = len(output) if isinstance(output, list) else 0
+        builder.record_tool_calls(tool_call_count)
+        self._emit(
+            AgentEvent(
+                type="model_completed",
+                data={
+                    "step": step,
+                    "output_kind": output_kind,
+                    "tool_call_count": tool_call_count,
+                },
+            )
+        )
+
+    def _complete_run(
+        self,
+        step: int,
+        output: Message,
+        builder: RunRecordBuilder,
+    ) -> str:
+        self.session.append(output)
+        self.trace.steps.append(
+            StepTrace(index=step, output=output, tool_result=None)
+        )
+        self.trace.end_reason = "completed"
+        self._finalize_run_record(builder)
+        self._emit(
+            AgentEvent(
+                type="agent_completed",
+                data={
+                    "reason": "completed",
+                    "step_count": len(self.trace.steps),
+                },
+            )
+        )
+        return output.content
+
+    def _record_runtime_failure(
+        self,
+        *,
+        step: int,
+        stage: RuntimeStage,
+        error: Exception,
+        builder: RunRecordBuilder,
+    ) -> None:
+        failure = self.runtime_controller.classify_failure(
+            step=step,
+            stage=stage,
+            error=error,
+        )
+        self.last_runtime_failure = failure
+        reason = self.runtime_controller.end_reason(failure)
+        self.trace.end_reason = reason
+
+        if failure.category is FailureCategory.CONTEXT:
+            self._emit(
+                AgentEvent(
+                    type="context_build_failed",
+                    data={
+                        "step": failure.step,
+                        "reason": reason,
+                        "error_type": failure.error_type,
+                    },
+                )
+            )
+        elif failure.category is FailureCategory.MODEL:
+            self._emit(
+                AgentEvent(
+                    type="model_failed",
+                    data={
+                        "step": failure.step,
+                        "reason": reason,
+                        "error_type": failure.error_type,
+                    },
+                )
+            )
+
+        self._finalize_run_record(builder)
+        event_data = {
+            "reason": reason,
+            "step_count": len(self.trace.steps),
+        }
+        if failure.category is not FailureCategory.CONTEXT:
+            event_data["error_type"] = failure.error_type
+        self._emit(AgentEvent(type="agent_failed", data=event_data))
+
+    def _execute_tool_calls(
+        self,
+        step: int,
+        tool_calls: list[ToolCall],
+        exposed_tool_names: frozenset[str],
+        builder: RunRecordBuilder,
+    ) -> None:
+        tool_results: list[ToolResult] = []
+
+        for tool_call in tool_calls:
+            self.session.append(tool_call)
+            tool_started_at: float | None = None
+
+            def on_policy_evaluated(
+                tool: Tool,
+                decision: PolicyDecision,
+            ) -> None:
+                self._emit(
+                    AgentEvent(
+                        type="tool_policy_evaluated",
+                        data={
+                            "step": step,
+                            "name": tool.name,
+                            "call_id": tool_call.call_id,
+                            "risk_level": tool.risk_level.value,
+                            "decision": decision.value,
+                        },
+                    )
+                )
+
+            def on_tool_started(tool: Tool) -> None:
+                nonlocal tool_started_at
+                tool_started_at = perf_counter()
+                self._emit(
+                    AgentEvent(
+                        type="tool_started",
+                        data={
+                            "step": step,
+                            "name": tool.name,
+                            "call_id": tool_call.call_id,
+                            "arguments_preview": safe_arguments_preview(
+                                tool_call.arguments
+                            ),
+                        },
+                    )
+                )
+
+            def on_approval_requested(
+                tool: Tool,
+                request: ApprovalRequest,
+            ) -> None:
+                self._emit(
+                    AgentEvent(
+                        type="approval_requested",
+                        data={
+                            "run_id": builder.run_id,
+                            "step": step,
+                            "name": tool.name,
+                            "call_id": tool_call.call_id,
+                            "arguments_preview": safe_arguments_preview(
+                                request.arguments
+                            ),
+                        },
+                    )
+                )
+
+            def on_approval_resolved(
+                tool: Tool,
+                _request: ApprovalRequest,
+                decision: ApprovalDecision,
+            ) -> None:
+                self.trace.approvals.append(
+                    ApprovalTrace(
+                        step=step,
+                        tool_name=tool.name,
+                        call_id=tool_call.call_id,
+                        decision=decision,
+                    )
+                )
+                event_type = (
+                    "approval_granted"
+                    if decision is ApprovalDecision.APPROVE
+                    else "approval_denied"
+                )
+                self._emit(
+                    AgentEvent(
+                        type=event_type,
+                        data={
+                            "run_id": builder.run_id,
+                            "step": step,
+                            "name": tool.name,
+                            "call_id": tool_call.call_id,
+                            "approval_decision": decision.value,
+                        },
+                    )
+                )
+
+            try:
+                if tool_call.name not in exposed_tool_names:
+                    raise ToolNotExposedError(tool_call.name)
+
+                result = self.tool_executor.execute(
+                    tool_call.name,
+                    tool_call.arguments,
+                    on_policy_evaluated=on_policy_evaluated,
+                    on_approval_requested=on_approval_requested,
+                    on_approval_resolved=on_approval_resolved,
+                    on_tool_started=on_tool_started,
+                )
+                content = str(result)
+                is_error = False
+            except Exception as exc:
+                content = f"Tool error: {type(exc).__name__}: {exc}"
+                is_error = True
+
+            tool_result = ToolResult(
+                name=tool_call.name,
+                content=content,
+                call_id=tool_call.call_id,
+                is_error=is_error,
+            )
+            self.session.append(tool_result)
+            tool_results.append(tool_result)
+
+            if tool_started_at is not None:
+                builder.record_tool_execution()
+            builder.record_tool_result(is_error=is_error)
+
+            if tool_started_at is not None:
+                duration_seconds = perf_counter() - tool_started_at
+                self._emit(
+                    AgentEvent(
+                        type="tool_completed",
+                        data={
+                            "step": step,
+                            "name": tool_call.name,
+                            "call_id": tool_call.call_id,
+                            "is_error": is_error,
+                            "duration_seconds": round(
+                                duration_seconds,
+                                6,
+                            ),
+                            "result_character_count": len(content),
+                        },
+                    )
+                )
+
+        self.trace.steps.append(
+            StepTrace(
+                index=step,
+                output=tool_calls,
+                tool_result=tool_results,
+            )
+        )
