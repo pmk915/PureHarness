@@ -86,6 +86,11 @@ class PlainTerminalRenderer:
                 "[model] request "
                 f"(tools={data.get('exposed_tool_count', 0)})"
             )
+        elif event.type == "model_retrying":
+            self.output(
+                "[model] retrying "
+                f"(attempt={data['attempt']}/{data['max_attempts']})"
+            )
         elif event.type == "tool_started":
             self.output(f"[tool] {data['name']}")
         elif event.type == "tool_completed":

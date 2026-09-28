@@ -5,7 +5,11 @@ import openai
 from openai import OpenAI
 
 from pureharness.messages import AgentItem, Message, ToolCall, ToolResult
-from pureharness.model import ModelError, ModelOutput
+from pureharness.model import (
+    MalformedModelOutputError,
+    ModelError,
+    ModelOutput,
+)
 from pureharness.tools import Tool
 
 
@@ -66,12 +70,21 @@ class DeepSeekModel:
 
             if item.type == "function_call":
 
+                try:
+                    arguments = json.loads(item.arguments)
+                except (json.JSONDecodeError, TypeError) as exc:
+                    raise MalformedModelOutputError(
+                        "DeepSeek returned malformed tool arguments."
+                    ) from exc
+                if not isinstance(arguments, dict):
+                    raise MalformedModelOutputError(
+                        "DeepSeek tool arguments must be a JSON object."
+                    )
+
                 tool_calls.append(
                     ToolCall(
                         name=item.name,
-                        arguments=json.loads(
-                            item.arguments
-                        ),
+                        arguments=arguments,
                         call_id=item.call_id,
                     )
                 )

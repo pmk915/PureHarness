@@ -63,9 +63,9 @@ system state view before the trajectory. An assistant `Message` completes the
 run; one or more `ToolCall` objects are executed before the next model step.
 
 Tool exceptions are converted into error `ToolResult` observations. A context
-compilation error, `ModelError`, or exhaustion of the step limit fails the run
-with a recorded end reason. The session remains across calls to `run`; an
-existing `Session` can be supplied to `Agent`.
+compilation error, an unrecovered model request error, or exhaustion of the step
+limit fails the run with a recorded end reason. The session remains across calls
+to `run`; an existing `Session` can be supplied to `Agent`.
 
 The loop is organized as explicit run, step, state-reduction, context-preparation,
 tool-selection, model-request, tool-execution, observation, and completion
@@ -76,11 +76,17 @@ tools, call the model, or execute effects.
 
 `RuntimeFailure` records the failing step and `RuntimeStage`, original exception
 type, broad `FailureCategory`, and whether recovery is supported. The categories
-are `CONTEXT`, `MODEL`, `TOOL`, and `POLICY`. Current failures are conservatively
-marked non-recoverable and retain the existing end reasons and public events.
+are `CONTEXT`, `MODEL`, `TOOL`, and `POLICY`. `RuntimeController` classifies only
+explicit `RecoverableModelError` failures at `MODEL_REQUEST` as recoverable and
+returns `RETRY` only while that logical request's attempt budget remains;
+otherwise it returns `FAIL`. The default `max_model_retries=1` therefore permits
+at most two attempts per logical model request. A retry stays on the same Agent
+step, reuses the already prepared context and selected tools, and does not
+mutate Session or add a correction instruction. The latest classified failure
+remains available as `last_runtime_failure` even when a later attempt succeeds.
 Ordinary tool and policy exceptions remain model-visible error `ToolResult`
-observations rather than Run-level failures. Automatic retry and finer recovery
-policy are intentionally deferred to M18.3.
+observations rather than Run-level failures and are not retried. Context recovery,
+backoff, provider fallback, and broader recovery policy remain future work.
 
 For every inference, after TaskState and trajectory compilation, the Agent asks
 the injected `ToolSelector` for a model-facing view of the complete registry.
@@ -108,7 +114,10 @@ are small local implementations used by tests and examples.
 
 `DeepSeekModel` is the concrete provider adapter. It translates core messages
 and tools to the OpenAI Responses client format and reads
-`DEEPSEEK_API_KEY`. The Agent depends on the `Model` protocol, not this adapter.
+`DEEPSEEK_API_KEY`. Malformed or non-object tool-call argument JSON is normalized
+to the provider-neutral `MalformedModelOutputError`, a
+`RecoverableModelError`; other provider/API errors remain fatal `ModelError`
+instances. The Agent depends on the `Model` protocol, not this adapter.
 
 ### Tool, ToolRegistry, ToolPolicy, and ToolExecutor
 
@@ -440,12 +449,15 @@ Agent; it is not added to Session. A trusted runtime UUID is the default
 records use frozen outer value objects, immutable invocation tuples, and an
 isolated trace snapshot, so a later run cannot alter an earlier record.
 
-Each `ModelInvocationRecord` captures the step, context and selector strategy,
-estimated history and TaskState tokens, registered/exposed tool counts,
-estimated selected-schema tokens, and existing ToolResult/trajectory
-compaction facts. Run-level sums are cumulative provider-neutral estimates,
-not provider billing tokens. `model_call_count` counts real model attempts,
-including attempts that raise `ModelError`. `tool_call_count` counts requests
+Each `ModelInvocationRecord` captures one logical Agent step's model request,
+including its context and selector strategy, estimated history and TaskState
+tokens, registered/exposed tool counts, estimated selected-schema tokens, and
+existing ToolResult/trajectory compaction facts. Run-level sums are cumulative
+provider-neutral estimates derived once per logical invocation, not provider
+billing tokens. RunRecord schema version 1 preserves
+`model_call_count == len(model_invocations)`; physical retry attempts do not add
+invocation records or alter these aggregates and remain live runtime evidence.
+Retry-attempt cost accounting is deferred. `tool_call_count` counts requests
 returned by the model, including calls rejected before execution;
 `tool_execution_count` counts calls that actually passed exposure and policy
 checks and began execution. `tool_result_error_count` counts error observations
@@ -595,7 +607,8 @@ synchronously delivered to callable listeners:
 ```text
 agent_started
   context_build_started -> context_built | context_build_failed
-  selection -> model_started -> model_completed | model_failed
+  selection -> model_started -> model_retrying (bounded, zero or more)
+                            -> model_completed | model_failed
   tool_policy_evaluated                (zero or more tools)
     ALLOW -> tool_started -> tool_completed
     DENY -> model-visible denial, no approval/tool execution event
@@ -605,9 +618,10 @@ agent_started
 agent_completed | agent_interrupted | agent_failed
 ```
 
-The lifecycle inside the loop repeats for each model step. `model_failed` is
-followed by `agent_failed`; an allowed tool that starts and then raises retains a
-`tool_completed` event with `is_error=True`. A policy rejection creates a
+The lifecycle inside the loop repeats for each model step. A recoverable failed
+attempt emits `model_retrying`; `model_failed` is emitted only when the request
+is terminal and is followed by `agent_failed`. An allowed tool that starts and
+then raises retains a `tool_completed` event with `is_error=True`. A policy rejection creates a
 model-visible `ToolResult(is_error=True)` without `tool_started` or
 `tool_completed`, because tool execution never began. Approval rejection has
 the same no-execution property but distinct approval events and error text.
@@ -627,6 +641,7 @@ Event payloads use the following current contract:
 | `context_built` | `step`, history/final-context/trajectory counts, strategy, separate estimated history and TaskState tokens, safe TaskState aggregate counts, total/included/dropped units, projected/compacted result counts, raw/projected result character counts, aggregate trajectory-compaction statistics, optional history budget |
 | `context_build_failed` | `step`, `reason`, `error_type` |
 | `model_started` | `step`, selector strategy, registered/exposed counts, selected/all schema-token estimates, estimated savings |
+| `model_retrying` | `step`, next `attempt`, `max_attempts`, `error_type`, `failure_category` |
 | `model_completed` | `step`, `output_kind`, `tool_call_count` |
 | `model_failed` | `step`, `reason`, `error_type` |
 | `tool_policy_evaluated` | `step`, `name`, `call_id`, `risk_level`, `decision` |
@@ -665,9 +680,10 @@ name explicitly into live-event wire schema version 1, preserves observation
 order, uses the event's occurrence timestamp, promotes `step` to an optional
 top-level field, and emits event-specific sanitized data under `payload`.
 Unknown events, missing run identity, non-finite numbers, and unsupported Python
-objects fail serialization rather than falling back to `repr`. JSONL rendering
-does not alter Agent control flow; the CLI detects listener failure after the
-run and reports an application/output error.
+objects fail serialization rather than falling back to `repr`. M18.3 adds
+`model_retrying` to this public live-event set without changing wire schema
+version 1. JSONL rendering does not alter Agent control flow; the CLI detects
+listener failure after the run and reports an application/output error.
 
 The live wire schema is not the RunRecord persistence schema. Live events are
 transient execution observations; RunRecord remains finalized versioned
@@ -961,9 +977,13 @@ implemented backend port provides the process-execution replacement point.
 **Current:** listener exceptions are isolated from the Agent and from other
 listeners. Tool exceptions become `ToolResult(is_error=True)` observations so a
 model can react. Context compilation errors stop before the model request and
-emit `context_build_failed` followed by `agent_failed`. Model request errors and
-maximum-step exhaustion also stop the run with explicit trace reasons and
-failure events.
+emit `context_build_failed` followed by `agent_failed`. Explicit recoverable
+model-output failures may be retried within the same logical request and budget
+without changing Session; intermediate failures emit `model_retrying`, while
+only the terminal request failure emits `model_failed` and stops the run.
+Unrecognized model exceptions, exhausted retry budgets, and maximum-step
+exhaustion stop the run with explicit trace reasons and failure events. Context,
+tool, policy, and backend failures gain no retry behavior in M18.3.
 
 Requested Session persistence has explicit failure behavior through
 `SessionStoreError`; unlike non-critical listener failures, store failures are

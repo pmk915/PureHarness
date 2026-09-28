@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from enum import Enum
 
+from pureharness.model import RecoverableModelError
 from pureharness.trace import RunEndReason
 
 
@@ -22,6 +23,11 @@ class FailureCategory(str, Enum):
     MODEL = "model"
     TOOL = "tool"
     POLICY = "policy"
+
+
+class RecoveryAction(str, Enum):
+    RETRY = "retry"
+    FAIL = "fail"
 
 
 @dataclass(frozen=True)
@@ -88,8 +94,28 @@ class RuntimeController:
             stage=stage,
             category=self._CATEGORIES[stage],
             error_type=type(error).__name__,
-            recoverable=False,
+            recoverable=(
+                stage is RuntimeStage.MODEL_REQUEST
+                and isinstance(error, RecoverableModelError)
+            ),
         )
+
+    def recovery_action(
+        self,
+        failure: RuntimeFailure,
+        *,
+        attempt: int,
+        max_attempts: int,
+    ) -> RecoveryAction:
+        """Decide whether one failed attempt may be retried."""
+        _validate_positive_integer("attempt", attempt)
+        _validate_positive_integer("max_attempts", max_attempts)
+        if attempt > max_attempts:
+            raise ValueError("attempt cannot exceed max_attempts")
+
+        if failure.recoverable and attempt < max_attempts:
+            return RecoveryAction.RETRY
+        return RecoveryAction.FAIL
 
     def end_reason(self, failure: RuntimeFailure) -> RunEndReason:
         """Map a currently fatal runtime failure to its compatible reason."""
@@ -100,3 +126,12 @@ class RuntimeController:
                 "Runtime stage has no fatal Run end reason: "
                 f"{failure.stage.value}"
             ) from exc
+
+
+def _validate_positive_integer(name: str, value: int) -> None:
+    if (
+        not isinstance(value, int)
+        or isinstance(value, bool)
+        or value <= 0
+    ):
+        raise ValueError(f"{name} must be a positive integer")

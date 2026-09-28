@@ -415,6 +415,17 @@ def test_run_record_rejects_unsupported_schema_version():
         RunRecord.from_dict(data)
 
 
+def test_run_record_rejects_model_call_count_mismatch():
+    data = _completed_record().to_dict()
+    data["model_call_count"] = 2
+
+    with pytest.raises(
+        RunRecordSerializationError,
+        match="model_call_count does not match recorded runtime facts",
+    ):
+        RunRecord.from_dict(data)
+
+
 def test_serialized_record_replay_is_ordered_and_idempotent():
     agent = Agent(
         model=AddModel(),

@@ -140,6 +140,35 @@ def test_wire_serializer_has_stable_envelope_and_tool_payload():
     }
 
 
+def test_wire_serializer_maps_model_retry_event():
+    event = AgentEvent(
+        type="model_retrying",
+        data={
+            "step": 4,
+            "attempt": 2,
+            "max_attempts": 2,
+            "error_type": "MalformedModelOutputError",
+            "failure_category": "model",
+        },
+        timestamp=datetime(2026, 9, 20, 10, 0, tzinfo=timezone.utc),
+        run_id="run-retry",
+    )
+
+    assert event_to_wire(event) == {
+        "schema_version": 1,
+        "event": "model_retrying",
+        "timestamp": "2026-09-20T10:00:00Z",
+        "run_id": "run-retry",
+        "step": 4,
+        "payload": {
+            "attempt": 2,
+            "max_attempts": 2,
+            "error_type": "MalformedModelOutputError",
+            "failure_category": "model",
+        },
+    }
+
+
 def test_wire_mapping_explicitly_covers_every_public_event_type():
     assert observability_module.SUPPORTED_EVENT_TYPES == frozenset(
         get_args(AgentEventType)

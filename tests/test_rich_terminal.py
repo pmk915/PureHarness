@@ -109,6 +109,34 @@ def test_rich_terminal_renders_context_build_failure():
     assert "Context build failed" in output.getvalue()
 
 
+@pytest.mark.parametrize(
+    ("locale", "expected"),
+    [
+        ("en", "Retrying model request: 2/2"),
+        ("zh-CN", "正在重试模型请求：2/2"),
+    ],
+)
+def test_rich_terminal_renders_model_retry(locale, expected):
+    output = StringIO()
+    renderer = RichTerminalRenderer(
+        locale=locale,
+        console=Console(
+            file=output,
+            force_terminal=False,
+            color_system=None,
+        ),
+    )
+
+    renderer(
+        AgentEvent(
+            type="model_retrying",
+            data={"attempt": 2, "max_attempts": 2},
+        )
+    )
+
+    assert expected in output.getvalue()
+
+
 def test_rich_terminal_renders_interruption_separately_from_failure():
     output = StringIO()
     renderer = RichTerminalRenderer(

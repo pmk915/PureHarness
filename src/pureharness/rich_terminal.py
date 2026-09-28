@@ -34,6 +34,7 @@ _TEXT = {
         "tools_exposed": "tools exposed",
         "schema_approx": "~",
         "schema_tokens": "schema tokens",
+        "model_retrying": "↻ Retrying model request",
         "model_completed": "✓ Model response received",
         "tool_calls": "tool calls",
         "tool_policy_evaluated": "◆ Tool policy evaluated",
@@ -75,6 +76,7 @@ _TEXT = {
         "tools_exposed": "工具暴露",
         "schema_approx": "约 ",
         "schema_tokens": "schema tokens",
+        "model_retrying": "↻ 正在重试模型请求",
         "model_completed": "✓ 已收到模型响应",
         "tool_calls": "工具调用",
         "tool_policy_evaluated": "◆ 工具策略已评估",
@@ -200,6 +202,13 @@ class RichTerminalRenderer:
                     f"{data['estimated_tool_schema_tokens']} "
                     f"{text['schema_tokens']}"
                 )
+
+        elif event.type == "model_retrying":
+            self._print(
+                f"{text['model_retrying']}"
+                f"{text['separator']}"
+                f"{data['attempt']}/{data['max_attempts']}"
+            )
 
         elif event.type == "model_completed":
             self._print(text["model_completed"])

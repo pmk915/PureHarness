@@ -80,6 +80,12 @@ _EVENT_PAYLOAD_FIELDS: dict[str, tuple[tuple[str, str], ...]] = {
         ),
         ("selector_strategy", "selector_strategy"),
     ),
+    "model_retrying": (
+        ("attempt", "attempt"),
+        ("max_attempts", "max_attempts"),
+        ("error_type", "error_type"),
+        ("failure_category", "failure_category"),
+    ),
     "model_completed": (
         ("output_kind", "output_kind"),
         ("tool_call_count", "tool_call_count"),

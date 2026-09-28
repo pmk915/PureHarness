@@ -19,6 +19,7 @@ from pureharness.run_record import (
 )
 from pureharness.runtime import (
     FailureCategory,
+    RecoveryAction,
     RuntimeController,
     RuntimeFailure,
     RuntimeStage,
@@ -68,9 +69,16 @@ class Agent:
         session_id: str | None = None,
         run_id_factory: Callable[[], str] | None = None,
         include_task_state: bool = True,
+        max_model_retries: int = 1,
     ):
         if not isinstance(include_task_state, bool):
             raise ValueError("include_task_state must be bool")
+        if (
+            not isinstance(max_model_retries, int)
+            or isinstance(max_model_retries, bool)
+            or max_model_retries < 0
+        ):
+            raise ValueError("max_model_retries must be non-negative")
 
         self.model = model
         if tool_executor is None:
@@ -103,6 +111,7 @@ class Agent:
         )
         self.session_id = session_id
         self.include_task_state = include_task_state
+        self.max_model_retries = max_model_retries
         self._run_id_factory = (
             run_id_factory
             if run_id_factory is not None
@@ -213,25 +222,13 @@ class Agent:
                 record_builder,
             )
 
-            try:
-                output = self.model.generate(
-                    list(prepared.model_items),
-                    list(tool_selection.tools),
-                )
-            except Exception as exc:
-                self._record_runtime_failure(
-                    step=step,
-                    stage=RuntimeStage.MODEL_REQUEST,
-                    error=exc,
-                    builder=record_builder,
-                )
-                raise
-
-            self._complete_model_request(
+            output = self._request_model(
                 step,
-                output,
+                prepared,
+                tool_selection,
                 record_builder,
             )
+            self._complete_model_request(step, output, record_builder)
 
             if isinstance(output, Message):
                 return self._complete_run(
@@ -454,6 +451,56 @@ class Agent:
             )
         )
 
+    def _request_model(
+        self,
+        step: int,
+        prepared: _PreparedContext,
+        selection: ToolSelection,
+        builder: RunRecordBuilder,
+    ) -> ModelOutput:
+        max_attempts = self.max_model_retries + 1
+
+        for attempt in range(1, max_attempts + 1):
+            try:
+                return self.model.generate(
+                    list(prepared.model_items),
+                    list(selection.tools),
+                )
+            except Exception as exc:
+                failure = self.runtime_controller.classify_failure(
+                    step=step,
+                    stage=RuntimeStage.MODEL_REQUEST,
+                    error=exc,
+                )
+                self.last_runtime_failure = failure
+                action = self.runtime_controller.recovery_action(
+                    failure,
+                    attempt=attempt,
+                    max_attempts=max_attempts,
+                )
+
+                if action is RecoveryAction.RETRY:
+                    self._emit(
+                        AgentEvent(
+                            type="model_retrying",
+                            data={
+                                "step": step,
+                                "attempt": attempt + 1,
+                                "max_attempts": max_attempts,
+                                "error_type": failure.error_type,
+                                "failure_category": (
+                                    failure.category.value
+                                ),
+                            },
+                        )
+                    )
+                    continue
+
+                self._finalize_runtime_failure(failure, builder)
+                raise
+
+        raise AssertionError("model attempt loop exhausted unexpectedly")
+
     def _complete_model_request(
         self,
         step: int,
@@ -513,6 +560,13 @@ class Agent:
             error=error,
         )
         self.last_runtime_failure = failure
+        self._finalize_runtime_failure(failure, builder)
+
+    def _finalize_runtime_failure(
+        self,
+        failure: RuntimeFailure,
+        builder: RunRecordBuilder,
+    ) -> None:
         reason = self.runtime_controller.end_reason(failure)
         self.trace.end_reason = reason
 

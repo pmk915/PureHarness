@@ -12,6 +12,7 @@ AgentEventType = Literal[
     "context_build_failed",
     "context_built",
     "model_started",
+    "model_retrying",
     "model_completed",
     "model_failed",
     "tool_policy_evaluated",
@@ -28,6 +29,9 @@ AgentEventType = Literal[
 
 class AgentEventData(TypedDict, total=False):
     step: int
+    attempt: int
+    max_attempts: int
+    failure_category: str
     run_id: str
     step_count: int
     reason: str

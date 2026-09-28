@@ -6,8 +6,18 @@ from pureharness.tools import Tool
 
 ModelOutput = Message | list[ToolCall]
 
+
 class ModelError(RuntimeError):
-    pass
+    """Base failure raised by a model implementation."""
+
+
+class RecoverableModelError(ModelError):
+    """A model failure that may be retried within the same request."""
+
+
+class MalformedModelOutputError(RecoverableModelError):
+    """Raised when provider output cannot form a valid ModelOutput."""
+
 
 class Model(Protocol):
     def generate(

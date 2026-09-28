@@ -50,6 +50,22 @@ Top-level fields are:
 | `step` | Optional model-step index for step-specific events |
 | `payload` | Event-specific JSON-safe data |
 
+### Compatibility within version 1
+
+The version 1 event-name namespace is additive. Producers may add new event
+names while preserving the stable top-level envelope. Consumers must tolerate
+unknown event names by ignoring them or handling them generically. Within
+version 1, existing event names are not removed or renamed, existing fields are
+not removed or reinterpreted incompatibly, and optional payload fields may be
+added. Terminal-event meanings remain stable.
+
+`model_retrying` is a non-terminal event. It means an attempt for the current
+logical model request failed and the request will be attempted again. Its
+payload includes the next `attempt`, `max_attempts`, `error_type`, and
+`failure_category`; `step` remains in the stable top-level envelope.
+`model_failed` continues to mean that the logical model request finally failed
+and no recovery will continue.
+
 All current public event types have explicit mappings. Tool argument data uses
 the same bounded, recursively redacted preview as human observability. The
 serializer does not expose environment variables, credentials, arbitrary
