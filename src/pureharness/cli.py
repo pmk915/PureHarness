@@ -19,6 +19,7 @@ from pureharness.benchmark import (
     load_benchmark_tasks,
 )
 from pureharness.coding_tools import create_coding_tools
+from pureharness.context import ContextLimits
 from pureharness.deepseek_model import DeepSeekModel
 from pureharness.events import AgentEvent
 from pureharness.experiment import (
@@ -71,6 +72,55 @@ def _positive_integer(value: str) -> int:
             "must be a positive integer"
         )
     return parsed
+
+
+def _add_context_limit_arguments(
+    parser: argparse.ArgumentParser,
+    *,
+    suppress_defaults: bool = False,
+) -> None:
+    default = argparse.SUPPRESS if suppress_defaults else None
+    parser.add_argument(
+        "--context-window-tokens",
+        type=_positive_integer,
+        default=default,
+        help="Explicit model context-window capacity in tokens.",
+    )
+    parser.add_argument(
+        "--reserved-output-tokens",
+        type=_positive_integer,
+        default=default,
+        help="Tokens reserved for model output within the context window.",
+    )
+
+
+def _context_limits_from_arguments(
+    arguments: argparse.Namespace,
+) -> ContextLimits | None:
+    context_window_tokens = getattr(
+        arguments,
+        "context_window_tokens",
+        None,
+    )
+    reserved_output_tokens = getattr(
+        arguments,
+        "reserved_output_tokens",
+        None,
+    )
+    if context_window_tokens is None and reserved_output_tokens is None:
+        return None
+    if context_window_tokens is None or reserved_output_tokens is None:
+        raise CLIError(
+            "--context-window-tokens and --reserved-output-tokens "
+            "must be provided together"
+        )
+    try:
+        return ContextLimits(
+            context_window_tokens=context_window_tokens,
+            reserved_output_tokens=reserved_output_tokens,
+        )
+    except ValueError as exc:
+        raise CLIError(str(exc)) from exc
 
 
 class PlainTerminalRenderer:
@@ -136,6 +186,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="Write one RunRecord JSON file per interactive turn.",
     )
+    _add_context_limit_arguments(parser)
     subparsers = parser.add_subparsers(dest="command")
 
     run_parser = subparsers.add_parser(
@@ -154,6 +205,10 @@ def build_parser() -> argparse.ArgumentParser:
         type=_positive_integer,
         default=10,
         help="Maximum Agent execution steps (default: 10).",
+    )
+    _add_context_limit_arguments(
+        run_parser,
+        suppress_defaults=True,
     )
     run_parser.add_argument(
         "--record",
@@ -252,8 +307,14 @@ def main(
     )
 
     try:
+        context_limits = _context_limits_from_arguments(arguments)
         if arguments.command == "run":
-            return _run_once(arguments, factory, output_fn)
+            return _run_once(
+                arguments,
+                factory,
+                output_fn,
+                context_limits=context_limits,
+            )
         if arguments.command == "inspect":
             return _inspect_record(
                 arguments.record,
@@ -283,6 +344,7 @@ def main(
                 output_fn=output_fn,
                 durable_store=durable_store,
                 durable_state=state,
+                context_limits=context_limits,
             )
         return _run_interactive(
             workspace=arguments.workspace,
@@ -292,6 +354,7 @@ def main(
             input_fn=input_fn,
             output_fn=output_fn,
             durable_store=durable_store,
+            context_limits=context_limits,
         )
     except KeyboardInterrupt:
         if not jsonl_mode:
@@ -315,6 +378,7 @@ def _run_interactive(
     output_fn: OutputFunction,
     durable_store: DurableSessionStore,
     durable_state: DurableSession | None = None,
+    context_limits: ContextLimits | None = None,
 ) -> int:
     resumed = durable_state is not None
     if durable_state is None:
@@ -385,6 +449,11 @@ def _run_interactive(
 
         if agent is None:
             try:
+                context_arguments = (
+                    {"context_limits": context_limits}
+                    if context_limits is not None
+                    else {}
+                )
                 agent = _create_agent(
                     resolved_workspace,
                     model_factory(model_name),
@@ -395,6 +464,7 @@ def _run_interactive(
                         input_fn=input_fn,
                         output_fn=output_fn,
                     ),
+                    **context_arguments,
                 )
             except CLIError as exc:
                 output_fn(f"Error: {exc}")
@@ -528,6 +598,8 @@ def _run_once(
     arguments: argparse.Namespace,
     model_factory: ModelFactory,
     output_fn: OutputFunction,
+    *,
+    context_limits: ContextLimits | None = None,
 ) -> int:
     workspace = _resolve_workspace(arguments.workspace)
     jsonl_mode = arguments.output_mode == "jsonl"
@@ -536,6 +608,11 @@ def _run_once(
         if jsonl_mode
         else PlainTerminalRenderer(output_fn)
     )
+    context_arguments = (
+        {"context_limits": context_limits}
+        if context_limits is not None
+        else {}
+    )
     agent = _create_agent(
         workspace,
         model_factory(arguments.model),
@@ -543,6 +620,7 @@ def _run_once(
         output_fn=output_fn,
         event_listener=renderer,
         max_steps=arguments.max_steps,
+        **context_arguments,
     )
     exit_code = 0
     try:
@@ -681,6 +759,7 @@ def _create_agent(
     approval_handler: ApprovalHandler | None = None,
     event_listener: Callable[[AgentEvent], None] | None = None,
     max_steps: int = 10,
+    context_limits: ContextLimits | None = None,
 ) -> Agent:
     registry = ToolRegistry()
     for tool in create_coding_tools(workspace):
@@ -701,6 +780,7 @@ def _create_agent(
         session_id=session_id,
         session=session,
         max_steps=max_steps,
+        context_limits=context_limits,
     )
 
 

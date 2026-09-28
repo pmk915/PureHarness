@@ -86,6 +86,34 @@ class ContextBudget:
             )
 
 
+@dataclass(frozen=True)
+class ContextLimits:
+    context_window_tokens: int
+    reserved_output_tokens: int
+
+    def __post_init__(self) -> None:
+        for name, value in (
+            ("context_window_tokens", self.context_window_tokens),
+            ("reserved_output_tokens", self.reserved_output_tokens),
+        ):
+            if (
+                not isinstance(value, int)
+                or isinstance(value, bool)
+                or value <= 0
+            ):
+                raise ValueError(f"{name} must be greater than 0")
+
+        if self.reserved_output_tokens >= self.context_window_tokens:
+            raise ValueError(
+                "reserved_output_tokens must be less than "
+                "context_window_tokens"
+            )
+
+    @property
+    def usable_input_tokens(self) -> int:
+        return self.context_window_tokens - self.reserved_output_tokens
+
+
 @dataclass
 class CompiledContext:
     items: list[AgentItem]
@@ -194,11 +222,52 @@ class ContextBuilder:
     ) -> CompiledContext:
         trajectory = self._prepare(history)
 
+        return self._compile_prepared(trajectory)
+
+    def compile_bounded(
+        self,
+        history: Sequence[AgentItem],
+        max_estimated_tokens: int,
+    ) -> CompiledContext:
+        """Compile history with an additional hard atomic-unit budget."""
+        dynamic_budget = ContextBudget(max_estimated_tokens)
+        trajectory = self._prepare(history)
+        normal_start, normal_budget = self._selection(trajectory)
+        effective_budget = dynamic_budget.max_estimated_tokens
+        if normal_budget is not None:
+            effective_budget = min(effective_budget, normal_budget)
+
+        start = _budgeted_start(
+            trajectory.units,
+            effective_budget,
+            minimum_start=normal_start,
+        )
+
         return _compiled_context(
             trajectory,
-            start=0,
+            start=start,
             strategy=self.strategy,
+            history_token_budget=effective_budget,
         )
+
+    def _compile_prepared(
+        self,
+        trajectory: CompactedTrajectory,
+    ) -> CompiledContext:
+        start, history_token_budget = self._selection(trajectory)
+        return _compiled_context(
+            trajectory,
+            start=start,
+            strategy=self.strategy,
+            history_token_budget=history_token_budget,
+        )
+
+    def _selection(
+        self,
+        trajectory: CompactedTrajectory,
+    ) -> tuple[int, int | None]:
+        del trajectory
+        return 0, None
 
     def build(
         self,
@@ -237,11 +306,10 @@ class RecentContextBuilder(ContextBuilder):
         )
         self.max_items = max_items
 
-    def compile(
+    def _selection(
         self,
-        history: Sequence[AgentItem],
-    ) -> CompiledContext:
-        trajectory = self._prepare(history)
+        trajectory: CompactedTrajectory,
+    ) -> tuple[int, int | None]:
         units = trajectory.units
         total_items = sum(len(unit.items) for unit in units)
 
@@ -258,11 +326,7 @@ class RecentContextBuilder(ContextBuilder):
             while start > 0 and not _is_user_message(units[start]):
                 start -= 1
 
-        return _compiled_context(
-            trajectory,
-            start=start,
-            strategy=self.strategy,
-        )
+        return start, None
 
 
 class TokenBudgetContextBuilder(ContextBuilder):
@@ -287,43 +351,44 @@ class TokenBudgetContextBuilder(ContextBuilder):
         )
         self.budget = budget
 
-    def compile(
+    def _selection(
         self,
-        history: Sequence[AgentItem],
-    ) -> CompiledContext:
-        trajectory = self._prepare(history)
-        units = trajectory.units
-        start = len(units)
-        estimated_tokens = 0
-
-        while start > 0:
-            cost = units[start - 1].estimated_tokens
-
-            if (
-                estimated_tokens + cost
-                > self.budget.max_estimated_tokens
-            ):
-                if start == len(units):
-                    raise ContextBudgetExceeded(
-                        "Newest indivisible context unit requires "
-                        f"{cost} estimated history tokens, exceeding "
-                        "the budget of "
-                        f"{self.budget.max_estimated_tokens}."
-                    )
-
-                break
-
-            start -= 1
-            estimated_tokens += cost
-
-        return _compiled_context(
-            trajectory,
-            start=start,
-            strategy=self.strategy,
-            history_token_budget=(
-                self.budget.max_estimated_tokens
+        trajectory: CompactedTrajectory,
+    ) -> tuple[int, int | None]:
+        return (
+            _budgeted_start(
+                trajectory.units,
+                self.budget.max_estimated_tokens,
             ),
+            self.budget.max_estimated_tokens,
         )
+
+
+def _budgeted_start(
+    units: Sequence[ModelContextUnit],
+    max_estimated_tokens: int,
+    *,
+    minimum_start: int = 0,
+) -> int:
+    start = len(units)
+    estimated_tokens = 0
+
+    while start > minimum_start:
+        cost = units[start - 1].estimated_tokens
+
+        if estimated_tokens + cost > max_estimated_tokens:
+            if start == len(units):
+                raise ContextBudgetExceeded(
+                    "Newest indivisible context unit requires "
+                    f"{cost} estimated history tokens, exceeding "
+                    f"the budget of {max_estimated_tokens}."
+                )
+            break
+
+        start -= 1
+        estimated_tokens += cost
+
+    return start
 
 
 def _group_context_units(

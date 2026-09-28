@@ -319,9 +319,9 @@ projection statistics: projected/compacted result counts and raw/projected
 character counts. M9 additionally reports whether trajectory compaction ran,
 source-unit/action counts, original and compacted trajectory estimates, recent
 raw unit/token estimates, and the compactor strategy. These are approximate
-**historical trajectory** tokens only:
-system instructions, tool definitions, provider wrappers, and output-token
-reservation are deliberately outside the current budget.
+**historical trajectory** tokens only. TaskState and tool definitions are
+measured separately; provider wrappers and provider-specific system
+instructions remain outside these estimates.
 
 M10 measures selected Tool schemas separately. It serializes each complete
 model-facing function definition (`type`, `name`, `description`, and
@@ -337,16 +337,52 @@ TaskState. By default, immediately before a model call the Agent prepends one
 derived `Message(role="system")` rendered from TaskState. That message is
 estimated separately through the same `TokenEstimator` as
 `estimated_task_state_tokens`; `estimated_history_tokens` and an optional
-history budget retain their trajectory-only meanings. M8 intentionally has no
-unified provider-request budget allocator. The M12-introduced disabled mode
-omits that message and records zero for this estimate without changing Session,
-trajectory compilation, TaskState derivation, or selector input.
+history budget retain their trajectory-only meanings. The M12-introduced
+disabled mode omits that message and records zero for this estimate without
+changing Session, trajectory compilation, TaskState derivation, or selector
+input.
 
 Tool selection does not belong to `CompiledContext`. Model request preparation
 keeps three independently measurable components: the derived TaskState message,
-the compiled trajectory, and selected complete Tool schemas. It does not label
-their sum as exact input tokens because provider wrappers, instructions,
-tokenization, and output reservation remain outside these estimates.
+the compiled trajectory, and selected complete Tool schemas. Their sum is the
+known request estimate, not an exact provider input-token count, because
+provider wrappers, instructions, and tokenization remain outside these
+estimates.
+
+M18.4A adds optional proactive request bounds through the immutable
+`ContextLimits(context_window_tokens, reserved_output_tokens)` value object.
+Both values are positive integers and the output reserve must be smaller than
+the context window. Limits are explicit: no provider capacity is inferred or
+enabled by default. With no limits, compilation, event order, benchmark
+configuration, and model invocation behavior remain unchanged.
+
+When limits are configured, the Agent obtains the existing selected-schema
+estimate before accepting the final context and applies these provider-neutral
+calculations:
+
+```text
+usable_input_tokens = context_window_tokens - reserved_output_tokens
+known_request_tokens = history + TaskState + exposed tool schemas
+available_history_tokens = usable_input_tokens - TaskState - exposed tool schemas
+```
+
+If the normally compiled candidate fits, it is used unchanged. If its known
+request estimate exceeds usable input, the Agent asks the same configured
+`ContextBuilder` for a bounded compilation using
+`available_history_tokens`. That seam reruns the existing grouping, ToolResult
+projection, token estimation, trajectory compaction, and strategy selection,
+then applies the existing newest-contiguous atomic-unit budget selection. For a
+builder that already has a history budget, the tighter bound wins. The Agent
+does not slice messages or implement a second compactor.
+
+The final `context_built` event and `ModelInvocationRecord` measurements describe
+the accepted bounded view, not the discarded candidate. Raw Session items and
+TaskState derivation remain untouched. If non-history costs leave no positive
+history budget, or if the newest indivisible unit cannot fit, a
+`ContextBudgetExceeded` failure occurs at context preparation before any model
+call. This is proactive accounting only; detection of a provider-reported
+context overflow and recovery after provider rejection are deferred to
+M18.4B.
 
 ### Session
 
@@ -596,6 +632,12 @@ to depend only on the Model protocol. Deterministic tests inject scripted model
 factories and make no network calls. Real-model trials are explicit, manual,
 nondeterministic, and potentially paid.
 
+One-shot and interactive/resumed Agent construction accept the optional paired
+flags `--context-window-tokens N` and `--reserved-output-tokens N`. Omitting
+both preserves the unbounded default. Supplying only one, non-positive values,
+or an output reserve greater than or equal to the window fails during CLI
+configuration. The CLI does not assign a provider-specific default.
+
 ### Events and listeners
 
 The Agent emits a structured lifecycle for agent, context, model, approval, and
@@ -638,7 +680,7 @@ Event payloads use the following current contract:
 | --- | --- |
 | `agent_started` | `history_item_count` before the new user message |
 | `context_build_started` | `step`, `history_item_count` |
-| `context_built` | `step`, history/final-context/trajectory counts, strategy, separate estimated history and TaskState tokens, safe TaskState aggregate counts, total/included/dropped units, projected/compacted result counts, raw/projected result character counts, aggregate trajectory-compaction statistics, optional history budget |
+| `context_built` | `step`, history/final-context/trajectory counts, strategy, separate estimated history and TaskState tokens, safe TaskState aggregate counts, total/included/dropped units, projected/compacted result counts, raw/projected result character counts, aggregate trajectory-compaction statistics, optional history budget, and—when explicit limits are configured—window/reserve/usable-input values, final known-request estimate, available history, pressure detection, and whether bounded history was applied |
 | `context_build_failed` | `step`, `reason`, `error_type` |
 | `model_started` | `step`, selector strategy, registered/exposed counts, selected/all schema-token estimates, estimated savings |
 | `model_retrying` | `step`, next `attempt`, `max_attempts`, `error_type`, `failure_category` |
@@ -682,8 +724,10 @@ top-level field, and emits event-specific sanitized data under `payload`.
 Unknown events, missing run identity, non-finite numbers, and unsupported Python
 objects fail serialization rather than falling back to `repr`. M18.3 adds
 `model_retrying` to this public live-event set without changing wire schema
-version 1. JSONL rendering does not alter Agent control flow; the CLI detects
-listener failure after the run and reports an application/output error.
+version 1. M18.4A adds optional context-pressure fields to `context_built`
+under the same additive compatibility rule. JSONL rendering does not alter
+Agent control flow; the CLI detects listener failure after the run and reports
+an application/output error.
 
 The live wire schema is not the RunRecord persistence schema. Live events are
 transient execution observations; RunRecord remains finalized versioned
@@ -977,7 +1021,9 @@ implemented backend port provides the process-execution replacement point.
 **Current:** listener exceptions are isolated from the Agent and from other
 listeners. Tool exceptions become `ToolResult(is_error=True)` observations so a
 model can react. Context compilation errors stop before the model request and
-emit `context_build_failed` followed by `agent_failed`. Explicit recoverable
+emit `context_build_failed` followed by `agent_failed`. This includes an
+explicit proactive limit that leaves no positive history capacity or cannot
+fit the newest atomic unit. Explicit recoverable
 model-output failures may be retried within the same logical request and budget
 without changing Session; intermediate failures emit `model_retrying`, while
 only the terminal request failure emits `model_failed` and stops the run.

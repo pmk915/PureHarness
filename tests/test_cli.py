@@ -5,6 +5,7 @@ import pytest
 import pureharness.cli as cli_module
 from pureharness.agent import Agent
 from pureharness.cli import main
+from pureharness.context import ContextLimits
 from pureharness.experiment import load_experiment_results
 from pureharness.messages import Message, ToolCall
 from pureharness.model import ModelError
@@ -430,6 +431,93 @@ def test_one_shot_explicit_max_steps_reaches_agent(tmp_path, monkeypatch):
 
     assert exit_code == 0
     assert created_agents[0].max_steps == 37
+
+
+def test_one_shot_context_limits_reach_agent(tmp_path, monkeypatch):
+    created_agents = []
+    create_agent = cli_module._create_agent
+
+    def capture_agent(*args, **kwargs):
+        agent = create_agent(*args, **kwargs)
+        created_agents.append(agent)
+        return agent
+
+    monkeypatch.setattr(cli_module, "_create_agent", capture_agent)
+
+    exit_code = main(
+        [
+            "run",
+            "hello",
+            "--workspace",
+            str(tmp_path),
+            "--context-window-tokens",
+            "100000",
+            "--reserved-output-tokens",
+            "5000",
+        ],
+        model_factory=lambda name: MultiTurnModel(),
+        output_fn=lambda value: None,
+    )
+
+    assert exit_code == 0
+    assert created_agents[0].context_limits == ContextLimits(100000, 5000)
+
+
+def test_interactive_context_limits_reach_agent(tmp_path, monkeypatch):
+    created_agents = []
+    create_agent = cli_module._create_agent
+
+    def capture_agent(*args, **kwargs):
+        agent = create_agent(*args, **kwargs)
+        created_agents.append(agent)
+        return agent
+
+    monkeypatch.setattr(cli_module, "_create_agent", capture_agent)
+
+    exit_code = main(
+        [
+            "--workspace",
+            str(tmp_path),
+            "--context-window-tokens",
+            "200",
+            "--reserved-output-tokens",
+            "50",
+        ],
+        model_factory=lambda name: MultiTurnModel(),
+        input_fn=_input(["hello", "/exit"]),
+        output_fn=lambda value: None,
+    )
+
+    assert exit_code == 0
+    assert created_agents[0].context_limits == ContextLimits(200, 50)
+
+
+@pytest.mark.parametrize(
+    ("arguments", "message"),
+    [
+        (
+            ["--context-window-tokens", "100"],
+            "must be provided together",
+        ),
+        (
+            [
+                "--context-window-tokens",
+                "100",
+                "--reserved-output-tokens",
+                "100",
+            ],
+            "must be less than context_window_tokens",
+        ),
+    ],
+)
+def test_cli_rejects_invalid_context_limit_combinations(
+    arguments,
+    message,
+):
+    output = []
+
+    assert main(arguments, output_fn=output.append) == 2
+    assert message in output[0]
 
 
 @pytest.mark.parametrize("value", ["0", "-1"])

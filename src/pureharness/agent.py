@@ -6,8 +6,10 @@ from uuid import uuid4
 from pureharness.approval import ApprovalDecision, ApprovalRequest
 from pureharness.context import (
     CompiledContext,
+    ContextBudgetExceeded,
     ContextBuilder,
     ContextCompileError,
+    ContextLimits,
 )
 from pureharness.events import AgentEvent, safe_arguments_preview
 from pureharness.messages import AgentItem, Message, ToolCall, ToolResult
@@ -52,6 +54,7 @@ class _PreparedContext:
     compiled: CompiledContext
     model_items: tuple[AgentItem, ...]
     estimated_task_state_tokens: int
+    task_state_item: Message | None
 
 
 class Agent:
@@ -70,6 +73,7 @@ class Agent:
         run_id_factory: Callable[[], str] | None = None,
         include_task_state: bool = True,
         max_model_retries: int = 1,
+        context_limits: ContextLimits | None = None,
     ):
         if not isinstance(include_task_state, bool):
             raise ValueError("include_task_state must be bool")
@@ -79,6 +83,11 @@ class Agent:
             or max_model_retries < 0
         ):
             raise ValueError("max_model_retries must be non-negative")
+        if context_limits is not None and not isinstance(
+            context_limits,
+            ContextLimits,
+        ):
+            raise ValueError("context_limits must be ContextLimits or None")
 
         self.model = model
         if tool_executor is None:
@@ -112,6 +121,7 @@ class Agent:
         self.session_id = session_id
         self.include_task_state = include_task_state
         self.max_model_retries = max_model_retries
+        self.context_limits = context_limits
         self._run_id_factory = (
             run_id_factory
             if run_id_factory is not None
@@ -215,6 +225,23 @@ class Agent:
                 )
                 raise
 
+            if self.context_limits is not None:
+                try:
+                    prepared = self._apply_context_limits(
+                        step,
+                        history,
+                        prepared,
+                        tool_selection,
+                    )
+                except ContextCompileError as exc:
+                    self._record_runtime_failure(
+                        step=step,
+                        stage=RuntimeStage.CONTEXT_PREPARATION,
+                        error=exc,
+                        builder=record_builder,
+                    )
+                    raise
+
             self._start_model_request(
                 step,
                 prepared,
@@ -315,25 +342,106 @@ class Agent:
         if task_state_item is not None:
             model_items.insert(0, task_state_item)
 
-        self._emit(
-            AgentEvent(
-                type="context_built",
-                data=self._context_event_data(
-                    step,
-                    history,
-                    task_state,
-                    compiled,
-                    len(model_items),
-                    estimated_task_state_tokens,
-                ),
-            )
-        )
-        return _PreparedContext(
+        prepared = _PreparedContext(
             task_state=task_state,
             compiled=compiled,
             model_items=tuple(model_items),
             estimated_task_state_tokens=estimated_task_state_tokens,
+            task_state_item=task_state_item,
         )
+        if self.context_limits is None:
+            self._emit_context_built(step, history, prepared)
+        return prepared
+
+    def _apply_context_limits(
+        self,
+        step: int,
+        history: list[AgentItem],
+        prepared: _PreparedContext,
+        selection: ToolSelection,
+    ) -> _PreparedContext:
+        limits = self.context_limits
+        assert limits is not None
+        usable_input_tokens = limits.usable_input_tokens
+        non_history_tokens = (
+            prepared.estimated_task_state_tokens
+            + selection.estimated_tool_schema_tokens
+        )
+        available_history_tokens = (
+            usable_input_tokens - non_history_tokens
+        )
+
+        if available_history_tokens <= 0:
+            raise ContextBudgetExceeded(
+                "TaskState and exposed tool schemas require "
+                f"{non_history_tokens} estimated input tokens, leaving "
+                "no positive history budget within the usable input "
+                f"capacity of {usable_input_tokens}."
+            )
+
+        candidate_request_tokens = (
+            prepared.compiled.estimated_tokens + non_history_tokens
+        )
+        pressure_detected = candidate_request_tokens > usable_input_tokens
+        final_prepared = prepared
+
+        if pressure_detected:
+            compiled = self.context_builder.compile_bounded(
+                history,
+                available_history_tokens,
+            )
+            model_items = list(compiled.items)
+            if prepared.task_state_item is not None:
+                model_items.insert(0, prepared.task_state_item)
+            final_prepared = _PreparedContext(
+                task_state=prepared.task_state,
+                compiled=compiled,
+                model_items=tuple(model_items),
+                estimated_task_state_tokens=(
+                    prepared.estimated_task_state_tokens
+                ),
+                task_state_item=prepared.task_state_item,
+            )
+
+        estimated_request_tokens = (
+            final_prepared.compiled.estimated_tokens
+            + non_history_tokens
+        )
+        self._emit_context_built(
+            step,
+            history,
+            final_prepared,
+            pressure_data={
+                "context_window_tokens": limits.context_window_tokens,
+                "reserved_output_tokens": limits.reserved_output_tokens,
+                "usable_input_tokens": usable_input_tokens,
+                "estimated_request_tokens": estimated_request_tokens,
+                "context_pressure_detected": pressure_detected,
+                "available_history_tokens": available_history_tokens,
+                "bounded_history_applied": pressure_detected,
+            },
+        )
+        return final_prepared
+
+    def _emit_context_built(
+        self,
+        step: int,
+        history: list[AgentItem],
+        prepared: _PreparedContext,
+        *,
+        pressure_data: dict[str, object] | None = None,
+    ) -> None:
+        data = self._context_event_data(
+            step,
+            history,
+            prepared.task_state,
+            prepared.compiled,
+            len(prepared.model_items),
+            prepared.estimated_task_state_tokens,
+        )
+        if pressure_data is not None:
+            data.update(pressure_data)
+        self._emit(AgentEvent(type="context_built", data=data))
 
     def _context_event_data(
         self,

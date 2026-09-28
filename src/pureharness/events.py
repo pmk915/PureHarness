@@ -42,6 +42,13 @@ class AgentEventData(TypedDict, total=False):
     context_strategy: str
     estimated_history_tokens: int
     estimated_task_state_tokens: int
+    context_window_tokens: int
+    reserved_output_tokens: int
+    usable_input_tokens: int
+    estimated_request_tokens: int
+    context_pressure_detected: bool
+    available_history_tokens: int
+    bounded_history_applied: bool
     current_request_present: bool
     completed_actions_count: int
     failed_actions_count: int

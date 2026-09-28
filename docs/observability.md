@@ -66,6 +66,25 @@ payload includes the next `attempt`, `max_attempts`, `error_type`, and
 `model_failed` continues to mean that the logical model request finally failed
 and no recovery will continue.
 
+When explicit context limits are configured, `context_built` adds these optional
+payload fields:
+
+| Field | Meaning |
+| --- | --- |
+| `context_window_tokens` | Explicit configured total context capacity |
+| `reserved_output_tokens` | Capacity held back for model output |
+| `usable_input_tokens` | Window minus the output reserve |
+| `estimated_request_tokens` | Final history + TaskState + exposed-schema estimate |
+| `context_pressure_detected` | Whether the normal candidate exceeded usable input |
+| `available_history_tokens` | Usable input minus TaskState and exposed schemas |
+| `bounded_history_applied` | Whether history was recompiled under that bound |
+
+These fields describe the final context accepted for the model request. Token
+values are deterministic provider-neutral estimates, not provider billing or
+exact tokenizer counts. They are absent when limits are not configured. Adding
+them is compatible with JSONL schema version 1 because payload fields are
+optional and version 1 consumers must tolerate additive fields.
+
 All current public event types have explicit mappings. Tool argument data uses
 the same bounded, recursively redacted preview as human observability. The
 serializer does not expose environment variables, credentials, arbitrary
