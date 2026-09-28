@@ -7,7 +7,10 @@ from pureharness.context import (
     TokenBudgetContextBuilder,
 )
 from pureharness.messages import Message, ToolCall, ToolResult
-from pureharness.model import RecoverableModelError
+from pureharness.model import (
+    ContextWindowExceededError,
+    RecoverableModelError,
+)
 from pureharness.run_record import RunRecord
 from pureharness.runtime import (
     FailureCategory,
@@ -110,6 +113,33 @@ def test_runtime_controller_retries_only_recognized_failure_with_budget():
     ) is RecoveryAction.RETRY
     assert controller.recovery_action(
         failure, attempt=2, max_attempts=2
+    ) is RecoveryAction.FAIL
+
+
+def test_runtime_controller_rebuilds_only_context_overflow_with_budget():
+    controller = RuntimeController()
+    failure = controller.classify_failure(
+        step=2,
+        stage=RuntimeStage.MODEL_REQUEST,
+        error=ContextWindowExceededError("too large"),
+    )
+
+    assert failure.stage is RuntimeStage.CONTEXT_PREPARATION
+    assert failure.category is FailureCategory.CONTEXT
+    assert failure.recoverable is True
+    assert controller.recovery_action(
+        failure,
+        attempt=1,
+        max_attempts=2,
+        context_recovery_attempt=0,
+        max_context_recoveries=1,
+    ) is RecoveryAction.REBUILD_CONTEXT
+    assert controller.recovery_action(
+        failure,
+        attempt=1,
+        max_attempts=2,
+        context_recovery_attempt=1,
+        max_context_recoveries=1,
     ) is RecoveryAction.FAIL
 
 

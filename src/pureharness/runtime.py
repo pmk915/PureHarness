@@ -1,7 +1,10 @@
 from dataclasses import dataclass
 from enum import Enum
 
-from pureharness.model import RecoverableModelError
+from pureharness.model import (
+    ContextWindowExceededError,
+    RecoverableModelError,
+)
 from pureharness.trace import RunEndReason
 
 
@@ -27,6 +30,7 @@ class FailureCategory(str, Enum):
 
 class RecoveryAction(str, Enum):
     RETRY = "retry"
+    REBUILD_CONTEXT = "rebuild_context"
     FAIL = "fail"
 
 
@@ -89,14 +93,26 @@ class RuntimeController:
         error: Exception,
     ) -> RuntimeFailure:
         """Return current failure evidence without applying recovery policy."""
+        context_window_exceeded = (
+            stage is RuntimeStage.MODEL_REQUEST
+            and isinstance(error, ContextWindowExceededError)
+        )
+        effective_stage = (
+            RuntimeStage.CONTEXT_PREPARATION
+            if context_window_exceeded
+            else stage
+        )
         return RuntimeFailure(
             step=step,
-            stage=stage,
-            category=self._CATEGORIES[stage],
+            stage=effective_stage,
+            category=self._CATEGORIES[effective_stage],
             error_type=type(error).__name__,
             recoverable=(
-                stage is RuntimeStage.MODEL_REQUEST
-                and isinstance(error, RecoverableModelError)
+                context_window_exceeded
+                or (
+                    stage is RuntimeStage.MODEL_REQUEST
+                    and isinstance(error, RecoverableModelError)
+                )
             ),
         )
 
@@ -106,14 +122,34 @@ class RuntimeController:
         *,
         attempt: int,
         max_attempts: int,
+        context_recovery_attempt: int = 0,
+        max_context_recoveries: int = 0,
     ) -> RecoveryAction:
         """Decide whether one failed attempt may be retried."""
         _validate_positive_integer("attempt", attempt)
         _validate_positive_integer("max_attempts", max_attempts)
+        _validate_non_negative_integer(
+            "context_recovery_attempt",
+            context_recovery_attempt,
+        )
+        _validate_non_negative_integer(
+            "max_context_recoveries",
+            max_context_recoveries,
+        )
         if attempt > max_attempts:
             raise ValueError("attempt cannot exceed max_attempts")
 
-        if failure.recoverable and attempt < max_attempts:
+        if (
+            failure.recoverable
+            and failure.category is FailureCategory.CONTEXT
+            and context_recovery_attempt < max_context_recoveries
+        ):
+            return RecoveryAction.REBUILD_CONTEXT
+        if (
+            failure.recoverable
+            and failure.category is FailureCategory.MODEL
+            and attempt < max_attempts
+        ):
             return RecoveryAction.RETRY
         return RecoveryAction.FAIL
 
@@ -135,3 +171,12 @@ def _validate_positive_integer(name: str, value: int) -> None:
         or value <= 0
     ):
         raise ValueError(f"{name} must be a positive integer")
+
+
+def _validate_non_negative_integer(name: str, value: int) -> None:
+    if (
+        not isinstance(value, int)
+        or isinstance(value, bool)
+        or value < 0
+    ):
+        raise ValueError(f"{name} must be a non-negative integer")

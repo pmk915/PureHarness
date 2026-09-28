@@ -11,6 +11,10 @@ class ModelError(RuntimeError):
     """Base failure raised by a model implementation."""
 
 
+class ContextWindowExceededError(ModelError):
+    """The provider rejected a request that exceeded its context window."""
+
+
 class RecoverableModelError(ModelError):
     """A model failure that may be retried within the same request."""
 

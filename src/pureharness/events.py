@@ -11,6 +11,8 @@ AgentEventType = Literal[
     "context_build_started",
     "context_build_failed",
     "context_built",
+    "context_window_exceeded",
+    "context_recovering",
     "model_started",
     "model_retrying",
     "model_completed",
@@ -49,6 +51,15 @@ class AgentEventData(TypedDict, total=False):
     context_pressure_detected: bool
     available_history_tokens: int
     bounded_history_applied: bool
+    recovery_attempt: int
+    max_recoveries: int
+    previous_history_tokens: int
+    recovery_history_budget: int
+    recovered_history_tokens: int
+    previous_estimated_request_tokens: int
+    recovered_estimated_request_tokens: int
+    context_recovery_available: bool
+    max_context_recoveries: int
     current_request_present: bool
     completed_actions_count: int
     failed_actions_count: int

@@ -169,6 +169,72 @@ def test_wire_serializer_maps_model_retry_event():
     }
 
 
+def test_wire_serializer_maps_context_recovery_event():
+    event = AgentEvent(
+        type="context_recovering",
+        data={
+            "step": 4,
+            "recovery_attempt": 1,
+            "max_recoveries": 1,
+            "error_type": "ContextWindowExceededError",
+            "previous_history_tokens": 100,
+            "recovery_history_budget": 50,
+            "recovered_history_tokens": 48,
+            "previous_estimated_request_tokens": 125,
+            "recovered_estimated_request_tokens": 73,
+        },
+        timestamp=datetime(2026, 9, 20, 10, 0, tzinfo=timezone.utc),
+        run_id="run-context-recovery",
+    )
+
+    assert event_to_wire(event) == {
+        "schema_version": 1,
+        "event": "context_recovering",
+        "timestamp": "2026-09-20T10:00:00Z",
+        "run_id": "run-context-recovery",
+        "step": 4,
+        "payload": {
+            "recovery_attempt": 1,
+            "max_recoveries": 1,
+            "error_type": "ContextWindowExceededError",
+            "previous_history_tokens": 100,
+            "recovery_history_budget": 50,
+            "recovered_history_tokens": 48,
+            "previous_estimated_request_tokens": 125,
+            "recovered_estimated_request_tokens": 73,
+        },
+    }
+
+
+def test_wire_serializer_maps_context_window_exceeded_event():
+    event = AgentEvent(
+        type="context_window_exceeded",
+        data={
+            "step": 4,
+            "error_type": "ContextWindowExceededError",
+            "context_recovery_available": True,
+            "recovery_attempt": 1,
+            "max_context_recoveries": 1,
+        },
+        timestamp=datetime(2026, 9, 20, 10, 0, tzinfo=timezone.utc),
+        run_id="run-context-overflow",
+    )
+
+    assert event_to_wire(event) == {
+        "schema_version": 1,
+        "event": "context_window_exceeded",
+        "timestamp": "2026-09-20T10:00:00Z",
+        "run_id": "run-context-overflow",
+        "step": 4,
+        "payload": {
+            "error_type": "ContextWindowExceededError",
+            "context_recovery_available": True,
+            "recovery_attempt": 1,
+            "max_context_recoveries": 1,
+        },
+    }
+
+
 def test_wire_mapping_explicitly_covers_every_public_event_type():
     assert observability_module.SUPPORTED_EVENT_TYPES == frozenset(
         get_args(AgentEventType)

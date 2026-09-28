@@ -461,6 +461,19 @@ class RunRecordBuilder:
             )
         self.model_invocations.append(invocation)
 
+    def replace_model_invocation(
+        self,
+        invocation: ModelInvocationRecord,
+    ) -> None:
+        if (
+            not self.model_invocations
+            or invocation.step != len(self.model_invocations) - 1
+        ):
+            raise ValueError(
+                "Only the current model invocation may be replaced"
+            )
+        self.model_invocations[-1] = invocation
+
     def record_tool_calls(self, count: int) -> None:
         _validate_non_negative_int("count", count)
         self.tool_call_count += count

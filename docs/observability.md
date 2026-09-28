@@ -66,6 +66,47 @@ payload includes the next `attempt`, `max_attempts`, `error_type`, and
 `model_failed` continues to mean that the logical model request finally failed
 and no recovery will continue.
 
+The three context-failure events have distinct meanings:
+
+```text
+context_build_failed
+    = local context compilation failed before that context could be sent
+context_window_exceeded
+    = the provider rejected an already built and sent context
+context_recovering
+    = bounded local context recovery is being attempted
+```
+
+`context_window_exceeded` is an occurrence event, not inherently terminal. Its
+payload contains the normalized `error_type`, whether
+`context_recovery_available`, `max_context_recoveries`, and the optional
+one-based `recovery_attempt` that will begin when recovery remains available.
+It contains no raw provider error text.
+
+`context_recovering` is likewise non-terminal. It means the overflow is being
+handled by rebuilding smaller history within the same logical Agent step. Its
+payload contains:
+
+| Field | Meaning |
+| --- | --- |
+| `recovery_attempt` | One-based context rebuild attempt |
+| `max_recoveries` | Independent configured rebuild limit |
+| `error_type` | Normalized overflow exception type |
+| `previous_history_tokens` | History estimate sent on the rejected attempt |
+| `recovery_history_budget` | Emergency bounded-compilation budget |
+| `recovered_history_tokens` | Successful rebuilt history estimate, when available |
+| `previous_estimated_request_tokens` | Previous history + TaskState + schemas |
+| `recovered_estimated_request_tokens` | Rebuilt history + unchanged TaskState + schemas, when available |
+
+Successful recovery emits no terminal `model_failed` or
+`context_build_failed`. If rebuilding is impossible, `context_recovering`
+omits the unavailable recovered estimates and is followed by
+`context_build_failed` because the local recovery compilation failed. If
+recovery is disabled or the provider rejects the single recovered context
+again, `context_window_exceeded` is followed by `agent_failed` without
+`context_build_failed`. Both M18.4B events are additive within live-event JSONL
+schema version 1.
+
 When explicit context limits are configured, `context_built` adds these optional
 payload fields:
 

@@ -13,7 +13,11 @@ from pureharness.context import (
 )
 from pureharness.events import AgentEvent, safe_arguments_preview
 from pureharness.messages import AgentItem, Message, ToolCall, ToolResult
-from pureharness.model import Model, ModelOutput
+from pureharness.model import (
+    ContextWindowExceededError,
+    Model,
+    ModelOutput,
+)
 from pureharness.run_record import (
     ModelInvocationRecord,
     RunRecord,
@@ -73,6 +77,7 @@ class Agent:
         run_id_factory: Callable[[], str] | None = None,
         include_task_state: bool = True,
         max_model_retries: int = 1,
+        max_context_recoveries: int = 1,
         context_limits: ContextLimits | None = None,
     ):
         if not isinstance(include_task_state, bool):
@@ -83,6 +88,14 @@ class Agent:
             or max_model_retries < 0
         ):
             raise ValueError("max_model_retries must be non-negative")
+        if (
+            not isinstance(max_context_recoveries, int)
+            or isinstance(max_context_recoveries, bool)
+            or max_context_recoveries not in {0, 1}
+        ):
+            raise ValueError(
+                "max_context_recoveries must be 0 or 1"
+            )
         if context_limits is not None and not isinstance(
             context_limits,
             ContextLimits,
@@ -121,6 +134,7 @@ class Agent:
         self.session_id = session_id
         self.include_task_state = include_task_state
         self.max_model_retries = max_model_retries
+        self.max_context_recoveries = max_context_recoveries
         self.context_limits = context_limits
         self._run_id_factory = (
             run_id_factory
@@ -251,6 +265,7 @@ class Agent:
 
             output = self._request_model(
                 step,
+                history,
                 prepared,
                 tool_selection,
                 record_builder,
@@ -516,25 +531,8 @@ class Agent:
         selection: ToolSelection,
         builder: RunRecordBuilder,
     ) -> None:
-        compiled = prepared.compiled
         builder.record_model_invocation(
-            ModelInvocationRecord(
-                step=step,
-                context_strategy=compiled.strategy,
-                estimated_history_tokens=compiled.estimated_tokens,
-                estimated_task_state_tokens=(
-                    prepared.estimated_task_state_tokens
-                ),
-                registered_tool_count=selection.registered_tool_count,
-                exposed_tool_count=selection.exposed_tool_count,
-                estimated_tool_schema_tokens=(
-                    selection.estimated_tool_schema_tokens
-                ),
-                selector_strategy=selection.selector_strategy,
-                trajectory_compacted=compiled.trajectory_compacted,
-                compacted_source_units=compiled.compacted_source_units,
-                compacted_tool_results=compiled.compacted_tool_results,
-            )
+            self._model_invocation_record(step, prepared, selection)
         )
         self._emit(
             AgentEvent(
@@ -559,19 +557,48 @@ class Agent:
             )
         )
 
+    def _model_invocation_record(
+        self,
+        step: int,
+        prepared: _PreparedContext,
+        selection: ToolSelection,
+    ) -> ModelInvocationRecord:
+        compiled = prepared.compiled
+        return ModelInvocationRecord(
+            step=step,
+            context_strategy=compiled.strategy,
+            estimated_history_tokens=compiled.estimated_tokens,
+            estimated_task_state_tokens=(
+                prepared.estimated_task_state_tokens
+            ),
+            registered_tool_count=selection.registered_tool_count,
+            exposed_tool_count=selection.exposed_tool_count,
+            estimated_tool_schema_tokens=(
+                selection.estimated_tool_schema_tokens
+            ),
+            selector_strategy=selection.selector_strategy,
+            trajectory_compacted=compiled.trajectory_compacted,
+            compacted_source_units=compiled.compacted_source_units,
+            compacted_tool_results=compiled.compacted_tool_results,
+        )
+
     def _request_model(
         self,
         step: int,
+        history: list[AgentItem],
         prepared: _PreparedContext,
         selection: ToolSelection,
         builder: RunRecordBuilder,
     ) -> ModelOutput:
         max_attempts = self.max_model_retries + 1
+        attempt = 1
+        context_recovery_attempt = 0
+        current_prepared = prepared
 
-        for attempt in range(1, max_attempts + 1):
+        while True:
             try:
                 return self.model.generate(
-                    list(prepared.model_items),
+                    list(current_prepared.model_items),
                     list(selection.tools),
                 )
             except Exception as exc:
@@ -585,15 +612,47 @@ class Agent:
                     failure,
                     attempt=attempt,
                     max_attempts=max_attempts,
+                    context_recovery_attempt=(
+                        context_recovery_attempt
+                    ),
+                    max_context_recoveries=(
+                        self.max_context_recoveries
+                    ),
                 )
 
+                if isinstance(exc, ContextWindowExceededError):
+                    recovery_available = (
+                        action is RecoveryAction.REBUILD_CONTEXT
+                    )
+                    event_data: dict[str, object] = {
+                        "step": step,
+                        "error_type": failure.error_type,
+                        "context_recovery_available": (
+                            recovery_available
+                        ),
+                        "max_context_recoveries": (
+                            self.max_context_recoveries
+                        ),
+                    }
+                    if recovery_available:
+                        event_data["recovery_attempt"] = (
+                            context_recovery_attempt + 1
+                        )
+                    self._emit(
+                        AgentEvent(
+                            type="context_window_exceeded",
+                            data=event_data,
+                        )
+                    )
+
                 if action is RecoveryAction.RETRY:
+                    attempt += 1
                     self._emit(
                         AgentEvent(
                             type="model_retrying",
                             data={
                                 "step": step,
-                                "attempt": attempt + 1,
+                                "attempt": attempt,
                                 "max_attempts": max_attempts,
                                 "error_type": failure.error_type,
                                 "failure_category": (
@@ -604,10 +663,159 @@ class Agent:
                     )
                     continue
 
-                self._finalize_runtime_failure(failure, builder)
+                if action is RecoveryAction.REBUILD_CONTEXT:
+                    next_recovery_attempt = context_recovery_attempt + 1
+                    previous_history_tokens = (
+                        current_prepared.compiled.estimated_tokens
+                    )
+                    recovery_history_budget = (
+                        previous_history_tokens // 2
+                    )
+                    try:
+                        recovered = self._recover_context(
+                            history,
+                            current_prepared,
+                            recovery_history_budget,
+                        )
+                    except ContextCompileError as recovery_exc:
+                        self._emit_context_recovering(
+                            step=step,
+                            recovery_attempt=next_recovery_attempt,
+                            error_type=failure.error_type,
+                            previous=current_prepared,
+                            selection=selection,
+                            recovery_history_budget=(
+                                recovery_history_budget
+                            ),
+                        )
+                        recovery_failure = (
+                            self.runtime_controller.classify_failure(
+                                step=step,
+                                stage=(
+                                    RuntimeStage.CONTEXT_PREPARATION
+                                ),
+                                error=recovery_exc,
+                            )
+                        )
+                        self.last_runtime_failure = recovery_failure
+                        self._finalize_runtime_failure(
+                            recovery_failure,
+                            builder,
+                        )
+                        raise recovery_exc from exc
+
+                    context_recovery_attempt = next_recovery_attempt
+                    builder.replace_model_invocation(
+                        self._model_invocation_record(
+                            step,
+                            recovered,
+                            selection,
+                        )
+                    )
+                    self._emit_context_recovering(
+                        step=step,
+                        recovery_attempt=context_recovery_attempt,
+                        error_type=failure.error_type,
+                        previous=current_prepared,
+                        selection=selection,
+                        recovery_history_budget=(
+                            recovery_history_budget
+                        ),
+                        recovered=recovered,
+                    )
+                    current_prepared = recovered
+                    continue
+
+                self._finalize_runtime_failure(
+                    failure,
+                    builder,
+                    emit_context_build_failed=(
+                        not isinstance(
+                            exc,
+                            ContextWindowExceededError,
+                        )
+                    ),
+                )
                 raise
 
-        raise AssertionError("model attempt loop exhausted unexpectedly")
+    def _recover_context(
+        self,
+        history: list[AgentItem],
+        previous: _PreparedContext,
+        recovery_history_budget: int,
+    ) -> _PreparedContext:
+        if recovery_history_budget <= 0:
+            raise ContextBudgetExceeded(
+                "Provider context recovery cannot derive a positive "
+                "history budget from the previous estimated history "
+                f"size of {previous.compiled.estimated_tokens}."
+            )
+
+        compiled = self.context_builder.compile_bounded(
+            history,
+            recovery_history_budget,
+        )
+        if compiled.estimated_tokens >= previous.compiled.estimated_tokens:
+            raise ContextBudgetExceeded(
+                "Provider context recovery did not produce strictly "
+                "smaller estimated history."
+            )
+
+        model_items = list(compiled.items)
+        if previous.task_state_item is not None:
+            model_items.insert(0, previous.task_state_item)
+        return _PreparedContext(
+            task_state=previous.task_state,
+            compiled=compiled,
+            model_items=tuple(model_items),
+            estimated_task_state_tokens=(
+                previous.estimated_task_state_tokens
+            ),
+            task_state_item=previous.task_state_item,
+        )
+
+    def _emit_context_recovering(
+        self,
+        *,
+        step: int,
+        recovery_attempt: int,
+        error_type: str,
+        previous: _PreparedContext,
+        selection: ToolSelection,
+        recovery_history_budget: int,
+        recovered: _PreparedContext | None = None,
+    ) -> None:
+        non_history_tokens = (
+            previous.estimated_task_state_tokens
+            + selection.estimated_tool_schema_tokens
+        )
+        data: dict[str, object] = {
+            "step": step,
+            "recovery_attempt": recovery_attempt,
+            "max_recoveries": self.max_context_recoveries,
+            "error_type": error_type,
+            "previous_history_tokens": (
+                previous.compiled.estimated_tokens
+            ),
+            "recovery_history_budget": recovery_history_budget,
+            "previous_estimated_request_tokens": (
+                previous.compiled.estimated_tokens
+                + non_history_tokens
+            ),
+        }
+        if recovered is not None:
+            data.update(
+                {
+                    "recovered_history_tokens": (
+                        recovered.compiled.estimated_tokens
+                    ),
+                    "recovered_estimated_request_tokens": (
+                        recovered.compiled.estimated_tokens
+                        + non_history_tokens
+                    ),
+                }
+            )
+        self._emit(AgentEvent(type="context_recovering", data=data))
 
     def _complete_model_request(
         self,
@@ -674,11 +882,16 @@ class Agent:
         self,
         failure: RuntimeFailure,
         builder: RunRecordBuilder,
+        *,
+        emit_context_build_failed: bool = True,
     ) -> None:
         reason = self.runtime_controller.end_reason(failure)
         self.trace.end_reason = reason
 
-        if failure.category is FailureCategory.CONTEXT:
+        if (
+            failure.category is FailureCategory.CONTEXT
+            and emit_context_build_failed
+        ):
             self._emit(
                 AgentEvent(
                     type="context_build_failed",

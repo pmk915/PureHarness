@@ -76,17 +76,23 @@ tools, call the model, or execute effects.
 
 `RuntimeFailure` records the failing step and `RuntimeStage`, original exception
 type, broad `FailureCategory`, and whether recovery is supported. The categories
-are `CONTEXT`, `MODEL`, `TOOL`, and `POLICY`. `RuntimeController` classifies only
-explicit `RecoverableModelError` failures at `MODEL_REQUEST` as recoverable and
-returns `RETRY` only while that logical request's attempt budget remains;
-otherwise it returns `FAIL`. The default `max_model_retries=1` therefore permits
-at most two attempts per logical model request. A retry stays on the same Agent
-step, reuses the already prepared context and selected tools, and does not
-mutate Session or add a correction instruction. The latest classified failure
-remains available as `last_runtime_failure` even when a later attempt succeeds.
-Ordinary tool and policy exceptions remain model-visible error `ToolResult`
-observations rather than Run-level failures and are not retried. Context recovery,
-backoff, provider fallback, and broader recovery policy remain future work.
+are `CONTEXT`, `MODEL`, `TOOL`, and `POLICY`. `RuntimeController` distinguishes
+two bounded actions. An explicit `RecoverableModelError` at `MODEL_REQUEST`
+returns `RETRY` while the same-context attempt budget remains. A provider-
+normalized `ContextWindowExceededError` is classified as
+`CONTEXT_PREPARATION` / `CONTEXT` and returns `REBUILD_CONTEXT` while the
+independent context-recovery budget remains. Otherwise it returns `FAIL`.
+
+The defaults `max_model_retries=1` and `max_context_recoveries=1` permit one
+same-context model retry and one smaller-context rebuild respectively. Both
+stay on the same logical Agent step and reuse its TaskState and selected tools.
+Neither mutates Session nor adds a correction instruction. The latest
+classified failure remains available as `last_runtime_failure` even when a
+later attempt succeeds; after a successful overflow recovery it therefore
+retains the overflow unless a later failure supersedes it. Ordinary tool and
+policy exceptions remain model-visible error `ToolResult` observations rather
+than Run-level failures and are not retried. Backoff, provider fallback, and
+broader recovery policy remain future work.
 
 For every inference, after TaskState and trajectory compilation, the Agent asks
 the injected `ToolSelector` for a model-facing view of the complete registry.
@@ -116,8 +122,16 @@ are small local implementations used by tests and examples.
 and tools to the OpenAI Responses client format and reads
 `DEEPSEEK_API_KEY`. Malformed or non-object tool-call argument JSON is normalized
 to the provider-neutral `MalformedModelOutputError`, a
-`RecoverableModelError`; other provider/API errors remain fatal `ModelError`
-instances. The Agent depends on the `Model` protocol, not this adapter.
+`RecoverableModelError`. Context overflow is normalized to the provider-neutral
+`ContextWindowExceededError` only from an OpenAI SDK `BadRequestError` whose
+decoded, flattened `error` body has an explicit `context_length_exceeded` or
+`context_window_exceeded` code/type, the DeepSeek
+`quota_limit_reached` / `api_error` tuple with the exact input-token-limit
+message shape, or the structured `invalid_request_error` maximum-context-length
+message shape. Other 400s and provider/API errors remain fatal `ModelError`
+instances. This intentionally narrow matcher may fail closed if DeepSeek adds a
+new overflow payload shape. The Agent depends on the `Model` protocol, not this
+adapter.
 
 ### Tool, ToolRegistry, ToolPolicy, and ToolExecutor
 
@@ -380,9 +394,30 @@ the accepted bounded view, not the discarded candidate. Raw Session items and
 TaskState derivation remain untouched. If non-history costs leave no positive
 history budget, or if the newest indivisible unit cannot fit, a
 `ContextBudgetExceeded` failure occurs at context preparation before any model
-call. This is proactive accounting only; detection of a provider-reported
-context overflow and recovery after provider rejection are deferred to
-M18.4B.
+call.
+
+M18.4B adds the distinct reactive path for the approximation gap that remains
+after proactive accounting. If the provider rejects an attempted request with
+`ContextWindowExceededError`, one emergency rebuild is allowed by default:
+
+```text
+recovery_history_budget = floor(previous_estimated_history_tokens / 2)
+```
+
+The Agent calls the same configured `ContextBuilder.compile_bounded()` against
+the raw step Session snapshot. The result must have strictly fewer estimated
+history tokens. TaskState and exposed tools remain unchanged, and the smaller
+context is retried in the same logical step. This works whether or not explicit
+`ContextLimits` were configured because it derives the emergency budget from
+the history actually attempted rather than guessing a provider capacity.
+
+The supported `max_context_recoveries` values are zero and one; zero fails
+immediately. A zero derived budget, atomic unit that cannot fit, or
+non-shrinking result fails as context preparation without another provider
+call. A second provider overflow after the one allowed rebuild also terminates
+with `context_error`; it does not become a same-context model retry or
+`max_steps_exceeded`. Adaptive shrinking, provider token calibration, and
+additional emergency tiers remain deferred.
 
 ### Session
 
@@ -492,9 +527,12 @@ existing ToolResult/trajectory compaction facts. Run-level sums are cumulative
 provider-neutral estimates derived once per logical invocation, not provider
 billing tokens. RunRecord schema version 1 preserves
 `model_call_count == len(model_invocations)`; physical retry attempts do not add
-invocation records or alter these aggregates and remain live runtime evidence.
-Retry-attempt cost accounting is deferred. `tool_call_count` counts requests
-returned by the model, including calls rejected before execution;
+invocation records. If overflow recovery changes the context, the current
+logical invocation's metrics are replaced with the last effective context
+actually attempted; attempt-level before/after metrics remain live runtime
+evidence. Abandoned physical attempts and their token/cost metrics are not
+persisted in RunRecord v1. Retry-attempt cost accounting is deferred.
+`tool_call_count` counts requests returned by the model, including calls rejected before execution;
 `tool_execution_count` counts calls that actually passed exposure and policy
 checks and began execution. `tool_result_error_count` counts error observations
 and is intentionally not named an execution-error count.
@@ -649,7 +687,9 @@ synchronously delivered to callable listeners:
 ```text
 agent_started
   context_build_started -> context_built | context_build_failed
-  selection -> model_started -> model_retrying (bounded, zero or more)
+  selection -> model_started -> context_window_exceeded (occurrence)
+                            -> context_recovering (bounded, zero or one)
+                            -> model_retrying (bounded, zero or more)
                             -> model_completed | model_failed
   tool_policy_evaluated                (zero or more tools)
     ALLOW -> tool_started -> tool_completed
@@ -660,9 +700,16 @@ agent_started
 agent_completed | agent_interrupted | agent_failed
 ```
 
-The lifecycle inside the loop repeats for each model step. A recoverable failed
-attempt emits `model_retrying`; `model_failed` is emitted only when the request
-is terminal and is followed by `agent_failed`. An allowed tool that starts and
+The lifecycle inside the loop repeats for each model step. A recoverable
+malformed-output failure emits `model_retrying`. A provider overflow that can
+be rebuilt emits `context_window_exceeded` and then `context_recovering`; it
+does not emit terminal `model_failed`. Disabled or exhausted overflow recovery
+emits `context_window_exceeded` followed by `agent_failed`, without
+`context_build_failed`, because the rejected context was already successfully
+built and sent. If the bounded recovery compilation itself fails,
+`context_build_failed` is emitted before `agent_failed`.
+`model_failed` is emitted only for a terminal model-category request failure
+and is followed by `agent_failed`. An allowed tool that starts and
 then raises retains a `tool_completed` event with `is_error=True`. A policy rejection creates a
 model-visible `ToolResult(is_error=True)` without `tool_started` or
 `tool_completed`, because tool execution never began. Approval rejection has
@@ -681,6 +728,8 @@ Event payloads use the following current contract:
 | `agent_started` | `history_item_count` before the new user message |
 | `context_build_started` | `step`, `history_item_count` |
 | `context_built` | `step`, history/final-context/trajectory counts, strategy, separate estimated history and TaskState tokens, safe TaskState aggregate counts, total/included/dropped units, projected/compacted result counts, raw/projected result character counts, aggregate trajectory-compaction statistics, optional history budget, and—when explicit limits are configured—window/reserve/usable-input values, final known-request estimate, available history, pressure detection, and whether bounded history was applied |
+| `context_window_exceeded` | `step`, normalized error type, whether recovery remains available, optional next recovery attempt, and maximum context recoveries |
+| `context_recovering` | `step`, recovery attempt/limit, overflow error type, previous history/request estimates, emergency history budget, and optional recovered history/request estimates when recompilation succeeds |
 | `context_build_failed` | `step`, `reason`, `error_type` |
 | `model_started` | `step`, selector strategy, registered/exposed counts, selected/all schema-token estimates, estimated savings |
 | `model_retrying` | `step`, next `attempt`, `max_attempts`, `error_type`, `failure_category` |
@@ -725,9 +774,10 @@ Unknown events, missing run identity, non-finite numbers, and unsupported Python
 objects fail serialization rather than falling back to `repr`. M18.3 adds
 `model_retrying` to this public live-event set without changing wire schema
 version 1. M18.4A adds optional context-pressure fields to `context_built`
-under the same additive compatibility rule. JSONL rendering does not alter
-Agent control flow; the CLI detects listener failure after the run and reports
-an application/output error.
+under the same additive compatibility rule. M18.4B adds the non-terminal
+`context_window_exceeded` occurrence and `context_recovering` recovery event
+under that rule. JSONL rendering does not alter Agent control flow; the CLI
+detects listener failure after the run and reports an application/output error.
 
 The live wire schema is not the RunRecord persistence schema. Live events are
 transient execution observations; RunRecord remains finalized versioned
@@ -1027,6 +1077,11 @@ fit the newest atomic unit. Explicit recoverable
 model-output failures may be retried within the same logical request and budget
 without changing Session; intermediate failures emit `model_retrying`, while
 only the terminal request failure emits `model_failed` and stops the run.
+Provider context overflow instead performs at most one smaller deterministic
+history rebuild by default; rebuild failure or exhaustion terminates as a
+context failure without a terminal `model_failed` event. Provider rejection
+alone does not emit `context_build_failed`; that event is reserved for local
+context compilation failures, including failed bounded recovery compilation.
 Unrecognized model exceptions, exhausted retry budgets, and maximum-step
 exhaustion stop the run with explicit trace reasons and failure events. Context,
 tool, policy, and backend failures gain no retry behavior in M18.3.

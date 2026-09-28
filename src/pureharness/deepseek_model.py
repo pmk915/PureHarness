@@ -1,11 +1,14 @@
 import json
 import os
+import re
+from collections.abc import Mapping
 
 import openai
 from openai import OpenAI
 
 from pureharness.messages import AgentItem, Message, ToolCall, ToolResult
 from pureharness.model import (
+    ContextWindowExceededError,
     MalformedModelOutputError,
     ModelError,
     ModelOutput,
@@ -58,6 +61,15 @@ class DeepSeekModel:
                     "effort": "none",
                 },
             )
+        except openai.BadRequestError as exc:
+            if _is_context_window_exceeded(exc):
+                raise ContextWindowExceededError(
+                    "DeepSeek rejected the request because its context "
+                    "window was exceeded."
+                ) from exc
+            raise ModelError(
+                f"DeepSeek request failed: {exc}"
+            ) from exc
         except openai.APIError as exc:
             raise ModelError(
                 f"DeepSeek request failed: {exc}"
@@ -136,3 +148,52 @@ class DeepSeekModel:
         raise TypeError(
             f"Unsupported agent item: {type(item)}"
         )
+
+
+_CONTEXT_WINDOW_CODES = frozenset(
+    {"context_length_exceeded", "context_window_exceeded"}
+)
+_DEEPSEEK_INPUT_LIMIT_MESSAGE = re.compile(
+    r"Input token exceed the limit"
+    r"(?: \(request id: [^)]+\))?\.?",
+    re.IGNORECASE,
+)
+_MAX_CONTEXT_LENGTH_MESSAGE = re.compile(
+    r"This model's maximum context length is \d+ tokens\. "
+    r"However, you requested (?:about )?\d+ tokens"
+    r"(?: \([^)]*\))?\. Please reduce the length of "
+    r"(?:either )?(?:the )?messages or completion\.?",
+    re.IGNORECASE,
+)
+
+
+def _is_context_window_exceeded(
+    error: openai.BadRequestError,
+) -> bool:
+    body = error.body
+    if not isinstance(body, Mapping):
+        return False
+
+    code = body.get("code")
+    error_type = body.get("type")
+    if code in _CONTEXT_WINDOW_CODES or error_type in _CONTEXT_WINDOW_CODES:
+        return True
+
+    message = body.get("message")
+    deepseek_input_limit = (
+        code == "quota_limit_reached"
+        and error_type == "api_error"
+        and body.get("param") in {None, ""}
+        and isinstance(message, str)
+        and _DEEPSEEK_INPUT_LIMIT_MESSAGE.fullmatch(message.strip())
+        is not None
+    )
+    maximum_context_length = (
+        code in {None, "invalid_request_error"}
+        and error_type == "invalid_request_error"
+        and body.get("param") in {None, ""}
+        and isinstance(message, str)
+        and _MAX_CONTEXT_LENGTH_MESSAGE.fullmatch(message.strip())
+        is not None
+    )
+    return deepseek_input_limit or maximum_context_length

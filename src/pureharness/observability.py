@@ -76,6 +76,31 @@ _EVENT_PAYLOAD_FIELDS: dict[str, tuple[tuple[str, str], ...]] = {
             "trajectory_compaction_strategy",
         ),
     ),
+    "context_recovering": (
+        ("recovery_attempt", "recovery_attempt"),
+        ("max_recoveries", "max_recoveries"),
+        ("error_type", "error_type"),
+        ("previous_history_tokens", "previous_history_tokens"),
+        ("recovery_history_budget", "recovery_history_budget"),
+        ("recovered_history_tokens", "recovered_history_tokens"),
+        (
+            "previous_estimated_request_tokens",
+            "previous_estimated_request_tokens",
+        ),
+        (
+            "recovered_estimated_request_tokens",
+            "recovered_estimated_request_tokens",
+        ),
+    ),
+    "context_window_exceeded": (
+        ("error_type", "error_type"),
+        (
+            "context_recovery_available",
+            "context_recovery_available",
+        ),
+        ("recovery_attempt", "recovery_attempt"),
+        ("max_context_recoveries", "max_context_recoveries"),
+    ),
     "model_started": (
         ("registered_tool_count", "registered_tool_count"),
         ("exposed_tool_count", "exposed_tool_count"),
