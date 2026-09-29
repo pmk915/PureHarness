@@ -49,6 +49,7 @@ from pureharness.session_store import (
 from pureharness.terminal_approval import TerminalApprovalHandler
 from pureharness.tool_executor import ToolExecutor
 from pureharness.tools import ToolRegistry
+from pureharness.workspace_discipline import WorkspaceDiscipline
 
 
 DEFAULT_MODEL = "deepseek-v4-flash"
@@ -832,6 +833,7 @@ def _create_agent(
     tool_executor = ToolExecutor(
         registry,
         approval_handler=approval_handler,
+        precondition=WorkspaceDiscipline(workspace),
     )
     return Agent(
         model=model,

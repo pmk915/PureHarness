@@ -6,6 +6,10 @@ from pureharness.execution import (
     LocalExecutionBackend,
 )
 from pureharness.tools import RiskLevel, Tool
+from pureharness.workspace_discipline import (
+    resolve_workspace_path as _resolve_workspace_path,
+    workspace_relative_path as _relative_path,
+)
 
 
 _IGNORED_DIRECTORY_NAMES = {
@@ -25,33 +29,6 @@ _MAX_SEARCH_MATCHES = 200
 _MAX_SEARCH_FILE_BYTES = 1_000_000
 _MATCH_PREVIEW_LENGTH = 160
 _DEFAULT_COMMAND_TIMEOUT_SECONDS = 10.0
-
-
-def _resolve_workspace_path(
-    workspace: Path,
-    path: str,
-) -> Path:
-    workspace = workspace.resolve()
-    target = (workspace / path).resolve()
-
-    if target != workspace and workspace not in target.parents:
-        raise ValueError(
-            f"Path escapes workspace: {path}"
-        )
-
-    return target
-
-
-def _relative_path(
-    workspace: Path,
-    target: Path,
-) -> str:
-    relative = target.relative_to(workspace.resolve())
-
-    if relative == Path("."):
-        return "."
-
-    return relative.as_posix()
 
 
 def _validate_bounded_integer(
@@ -432,8 +409,9 @@ def create_write_file_tool(workspace: Path) -> Tool:
         name="write_file",
         description=(
             "Create or fully rewrite a UTF-8 file inside the workspace. Use it "
-            "for new files or complete replacements; prefer apply_patch for a "
-            "small targeted change to an existing file."
+            "for new files or complete replacements. Existing files must be "
+            "read successfully with read_file earlier in the current run; "
+            "prefer apply_patch for a small targeted change."
         ),
         parameters={
             "type": "object",
@@ -501,8 +479,10 @@ def create_apply_patch_tool(workspace: Path) -> Tool:
         name="apply_patch",
         description=(
             "Replace one exact, unique text block in an existing UTF-8 "
-            "workspace file. The edit fails without writing if old_text has "
-            "zero or multiple matches. Use write_file for full rewrites."
+            "workspace file after reading that file successfully with "
+            "read_file in the current run. The edit fails without writing if "
+            "old_text has zero or multiple matches. Use write_file for full "
+            "rewrites."
         ),
         parameters={
             "type": "object",

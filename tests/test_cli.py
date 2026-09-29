@@ -14,6 +14,7 @@ from pureharness.runtime import ExecutionBudget
 from pureharness.tool_executor import ToolExecutor
 from pureharness.tool_policy import PolicyDecision
 from pureharness.tools import Tool, ToolRegistry
+from pureharness.workspace_discipline import WorkspaceDiscipline
 
 
 @pytest.fixture(autouse=True)
@@ -58,6 +59,11 @@ class FixSimpleTaskModel:
         self.call_count += 1
         if self.call_count == 1:
             return [
+                ToolCall(
+                    name="read_file",
+                    arguments={"path": "calculator.py"},
+                    call_id="read-before-fix",
+                ),
                 ToolCall(
                     name="apply_patch",
                     arguments={
@@ -649,6 +655,10 @@ def test_one_shot_agent_has_no_interactive_approval_handler(tmp_path):
     )
 
     assert agent.tool_executor.approval_handler is None
+    assert isinstance(
+        agent.tool_executor.precondition,
+        WorkspaceDiscipline,
+    )
 
 
 def test_one_shot_failure_has_nonzero_exit_without_traceback(tmp_path):

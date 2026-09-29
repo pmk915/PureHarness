@@ -75,6 +75,24 @@ with end reason `execution_budget_exceeded`. Its payload contains `resource`,
 `model_failed`, fabricated ToolResult, or `context_build_failed` for the budget
 refusal. The event is additive within JSONL wire schema version 1.
 
+`workspace_precondition_failed` is emitted when a standard structured file
+mutation is blocked by M19.1 read-before-edit. It is an occurrence event, not a
+terminal Run failure. `step` remains in the top-level envelope; its payload is:
+
+| Field | Meaning |
+| --- | --- |
+| `tool_name` | Blocked structured mutation tool |
+| `call_id` | Provider call identity, when supplied |
+| `path` | Canonical workspace-relative target; never a host absolute path |
+| `reason` | Stable reason, currently `read_required` |
+
+The event occurs after the exposed batch has passed execution-budget preflight
+and progress has observed the attempted action, but before ToolPolicy,
+approval, or underlying tool execution. The associated ToolResult has
+`is_error=true`, so the model may recover by reading the file and trying again.
+It adds no RunRecord end reason and is additive within JSONL wire schema version
+1.
+
 `progress_snapshot` reports deterministic facts for the current
 `Agent.run()`. Its payload is:
 
@@ -223,10 +241,10 @@ RunRecord    = finalized persisted evidence for one Agent.run()
 Replay       = read-only ordered reconstruction from RunRecord
 ```
 
-`ExecutionUsage` and `ProgressSnapshot` are live per-run diagnostic state rather
-than persisted evidence. No progress counter or snapshot is added to RunRecord
-v2 or BenchmarkResult. RunRecord v1 retains its original six-value closed
-end-reason contract.
+`ExecutionUsage`, `ProgressSnapshot`, and run-scoped workspace observation are
+live diagnostic state rather than persisted evidence. No progress or workspace
+discipline state is added to RunRecord v2 or BenchmarkResult. RunRecord v1
+retains its original six-value closed end-reason contract.
 RunRecord v2 has the same persisted structure and adds only
 `execution_budget_exceeded`; current writers emit v2 and current readers accept
 and preserve v1 and v2. Older PureHarness versions are not expected to read v2.

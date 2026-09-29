@@ -32,6 +32,7 @@ from pureharness.tool_selection import (
     StaticToolSelector,
     ToolSelector,
 )
+from pureharness.tool_executor import ToolExecutor
 from pureharness.tools import ToolRegistry
 from pureharness.trace import RunEndReason
 from pureharness.trajectory_compaction import (
@@ -39,6 +40,7 @@ from pureharness.trajectory_compaction import (
     IdentityTrajectoryCompactor,
     default_compactor_for_history_budget,
 )
+from pureharness.workspace_discipline import WorkspaceDiscipline
 
 
 BENCHMARK_RESULT_SCHEMA_VERSION = 1
@@ -628,6 +630,10 @@ class BenchmarkRunner:
             agent = Agent(
                 model=model,
                 tools=registry,
+                tool_executor=ToolExecutor(
+                    registry,
+                    precondition=WorkspaceDiscipline(workspace),
+                ),
                 max_steps=config.max_steps,
                 context_builder=context_builder,
                 tool_selector=tool_selector,

@@ -105,6 +105,11 @@ def _passing_model():
         [
             [
                 ToolCall(
+                    name="read_file",
+                    arguments={"path": "value.txt"},
+                    call_id="read-1",
+                ),
+                ToolCall(
                     name="write_file",
                     arguments={
                         "path": "value.txt",
@@ -360,8 +365,8 @@ def test_scripted_model_can_pass_external_oracle(tmp_path):
     assert result.task_success is True
     assert result.verification_exit_code == 0
     assert result.agent_end_reason == "completed"
-    assert result.run_record.tool_call_count == 1
-    assert result.run_record.tool_execution_count == 1
+    assert result.run_record.tool_call_count == 2
+    assert result.run_record.tool_execution_count == 2
     assert (
         task.fixture_path / "value.txt"
     ).read_text(encoding="utf-8") == "broken"
@@ -684,8 +689,8 @@ def test_summary_uses_run_record_metrics_without_composite_score(tmp_path):
     assert summary.mean_model_calls == 2.0
     assert summary.total_steps == 4
     assert summary.mean_steps == 2.0
-    assert summary.total_tool_calls == 2
-    assert summary.total_tool_executions == 2
+    assert summary.total_tool_calls == 4
+    assert summary.total_tool_executions == 4
     assert summary.sum_estimated_history_tokens == sum(
         result.run_record.sum_estimated_history_tokens
         for result in results

@@ -41,7 +41,7 @@ from pureharness.task_state import (
     TaskStateReducer,
     render_task_state,
 )
-from pureharness.tool_executor import ToolExecutor
+from pureharness.tool_executor import ToolExecutor, ToolPreconditionError
 from pureharness.tool_policy import PolicyDecision
 from pureharness.tool_selection import (
     AllToolsSelector,
@@ -340,6 +340,7 @@ class Agent:
         self.last_run_record = None
         self._execution_usage = ExecutionUsage()
         self._progress_tracker = ProgressTracker()
+        self.tool_executor.reset_run_state()
         self._active_session_size = len(self.session.items)
         builder = RunRecordBuilder(
             run_id=self._run_id_factory(),
@@ -1125,6 +1126,25 @@ class Agent:
                     )
                 )
 
+            def on_precondition_failed(
+                tool: Tool,
+                error: ToolPreconditionError,
+            ) -> None:
+                data: dict[str, object] = {
+                    "step": step,
+                    "name": tool.name,
+                    "call_id": tool_call.call_id,
+                    "reason": error.reason,
+                }
+                if error.path is not None:
+                    data["path"] = error.path
+                self._emit(
+                    AgentEvent(
+                        type="workspace_precondition_failed",
+                        data=data,
+                    )
+                )
+
             def on_approval_requested(
                 tool: Tool,
                 request: ApprovalRequest,
@@ -1190,6 +1210,9 @@ class Agent:
                     on_approval_requested=on_approval_requested,
                     on_approval_resolved=on_approval_resolved,
                     on_tool_started=on_tool_started,
+                    on_precondition_failed=(
+                        on_precondition_failed
+                    ),
                 )
                 content = str(result)
                 is_error = False

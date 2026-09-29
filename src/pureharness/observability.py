@@ -163,6 +163,12 @@ _EVENT_PAYLOAD_FIELDS: dict[str, tuple[tuple[str, str], ...]] = {
         ("risk_level", "risk_level"),
         ("decision", "decision"),
     ),
+    "workspace_precondition_failed": (
+        ("name", "tool_name"),
+        ("call_id", "call_id"),
+        ("path", "path"),
+        ("reason", "reason"),
+    ),
     "approval_requested": (
         ("name", "tool_name"),
         ("call_id", "call_id"),

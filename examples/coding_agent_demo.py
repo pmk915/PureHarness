@@ -11,7 +11,9 @@ from pureharness.agent import Agent
 from pureharness.coding_tools import create_coding_tools
 from pureharness.deepseek_model import DeepSeekModel
 from pureharness.messages import Message, ToolCall
+from pureharness.tool_executor import ToolExecutor
 from pureharness.tools import ToolRegistry
+from pureharness.workspace_discipline import WorkspaceDiscipline
 
 
 def main(
@@ -64,6 +66,10 @@ def main(
         agent = Agent(
             model=DeepSeekModel(),
             tools=registry,
+            tool_executor=ToolExecutor(
+                registry,
+                precondition=WorkspaceDiscipline(workspace),
+            ),
             max_steps=10,
             listeners=listeners,
         )

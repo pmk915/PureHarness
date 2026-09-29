@@ -33,8 +33,9 @@ CLI/user input -> Agent -> Session.snapshot()                            +-> Mod
   |              ToolRegistry -> ToolSelector -> selected tool schemas -------+
   |                                                                           |
   |                                            Message or ToolCall(s) <--------+
-  +-> exposure validation -> ToolExecutor -> ToolRegistry lookup
-                    -> ToolPolicy -> ApprovalHandler? -> Tool callable
+  +-> exposure/budget validation -> ToolExecutor -> ToolRegistry lookup
+                    -> workspace precondition? -> ToolPolicy
+                    -> ApprovalHandler? -> Tool callable
   +-> Session + RunTrace + AgentEvent listeners
                                   |-> human renderer
                                   `-> JSONL renderer
@@ -139,6 +140,26 @@ fit, no call in the batch is appended to Session, evaluated by policy, sent for
 approval, or executed. Calls admitted to ToolExecutor consume usage even when
 policy or approval denies them or execution returns an error observation.
 
+For the standard coding-tool composition, M19.1 injects a run-scoped
+`WorkspaceDiscipline` precondition into `ToolExecutor`. The complete order is:
+
+```text
+execution-budget batch preflight
+    -> workspace precondition
+    -> ToolPolicy
+    -> ApprovalHandler when required
+    -> tool execution
+```
+
+Only a successful structured `read_file` records prior observation of its exact
+canonical workspace-relative path. That evidence resets at every `Agent.run()`
+and never comes from Session or TaskState history. Existing-file `write_file`
+and `apply_patch` calls without evidence become recoverable error ToolResults;
+policy, approval, and the underlying tool are not reached. New-file
+`write_file` remains allowed, and a successful creation or structured mutation
+keeps its canonical target known for the rest of the Run. Budget usage and
+progress attempted-action accounting occur before this per-call precondition.
+
 Each known completion or failure path finalizes one `RunRecord`. The existing
 `run()` return value remains the assistant text for compatibility; callers read
 the structured result from `agent.last_run_record`. Recording consumes facts
@@ -202,9 +223,11 @@ Tool definitions are the atomic exposure unit; descriptions and parameter
 schemas are never truncated or rewritten.
 
 `ToolExecutor` is the canonical runtime path from an Agent tool call to a tool
-implementation. It looks up the tool and asks the injected `ToolPolicy` to
-classify the tool and arguments. `ALLOW` proceeds directly; `DENY` raises a
-concise `ToolPolicyError`; `REQUIRE_APPROVAL` constructs an `ApprovalRequest`
+implementation. It looks up the tool, evaluates an optional run-scoped
+execution precondition, and then asks the injected `ToolPolicy` to classify the
+tool and arguments. The precondition is state validity, not authorization, and
+generic executors have none by default. `ALLOW` proceeds directly; `DENY`
+raises a concise `ToolPolicyError`; `REQUIRE_APPROVAL` constructs an `ApprovalRequest`
 and consults the injected `ApprovalHandler`. Only `ApprovalDecision.APPROVE`
 continues to `Tool.execute()`. A denied decision raises `ToolApprovalError`, and
 no handler is equivalent to denial. The Agent converts both rejection paths to
@@ -755,7 +778,7 @@ agent_started
                             -> model_retrying (bounded, zero or more)
                             -> model_completed | model_failed
                             -> execution_budget_exhausted (terminal)
-  tool_policy_evaluated                (zero or more tools)
+  workspace_precondition_failed | tool_policy_evaluated (zero or more tools)
     ALLOW -> tool_started -> tool_completed
     DENY -> model-visible denial, no approval/tool execution event
     REQUIRE_APPROVAL -> approval_requested
@@ -795,6 +818,9 @@ emits `agent_failed(reason="tool_selection_error")` without `model_started` or a
 model request; M10 adds no retry behavior. A cumulative budget refusal emits
 `execution_budget_exhausted` followed by `agent_failed`, without inventing a
 model, tool, or context failure for work that never started.
+An unmet read-before-edit condition emits `workspace_precondition_failed` and a
+model-visible error ToolResult, then execution may continue. It emits no policy,
+approval, `tool_started`, or `tool_completed` event for that call.
 
 Event payloads use the following current contract:
 
@@ -813,6 +839,7 @@ Event payloads use the following current contract:
 | `model_completed` | `step`, `output_kind`, `tool_call_count` |
 | `model_failed` | `step`, `reason`, `error_type` |
 | `tool_policy_evaluated` | `step`, `name`, `call_id`, `risk_level`, `decision` |
+| `workspace_precondition_failed` | `step`, `name`, `call_id`, canonical workspace-relative `path`, and `reason` |
 | `approval_requested` | `step`, `name`, `call_id`, redacted `arguments_preview` |
 | `approval_granted` / `approval_denied` | `step`, `name`, `call_id`, `approval_decision` |
 | `tool_started` | `step`, `name`, `call_id`, `arguments_preview` |
@@ -863,6 +890,10 @@ M18.6 adds `progress_snapshot` under that additive rule. Snapshots remain live
 runtime diagnostics: they are not written to RunRecord v2 or BenchmarkResult,
 and they never change model, tool, budget, context, or termination behavior.
 
+M19.1 adds `workspace_precondition_failed` under the same additive JSONL v1
+rule. It is a recoverable tool-call occurrence, not a Run failure or persisted
+schema change.
+
 The live wire schema is not the RunRecord persistence schema. Live events are
 transient execution observations; RunRecord remains finalized versioned
 evidence, and replay remains a side-effect-free ordered reconstruction of that
@@ -890,6 +921,15 @@ and symlinks. `search_text` performs bounded case-sensitive literal search over
 small UTF-8 files and skips binary, undecodable, large, noisy-directory, and
 symlink content. `apply_patch` performs one exact replacement only after proving
 the old text occurs exactly once.
+
+M19.1 canonicalizes all structured file targets with these same workspace path
+resolution rules, so aliases such as `src/./a.py` and `src/foo/../a.py` share
+one identity and resolved escapes remain rejected. Only full, successful
+`read_file` calls establish read-before-edit evidence; `search_text`,
+`list_files`, Git tools, `run_command`, TaskState, and previous Runs do not.
+`run_command` can still mutate arbitrary workspace files and is explicitly
+outside this structured-tool rule. M19.1 proves prior observation only; content
+fingerprints and freshness against external changes are deferred to M19.2.
 
 `run_command`, `git_status`, and `git_diff` send argv, the resolved workspace,
 and a timeout through the same injected `ExecutionBackend`. Git tools retain
