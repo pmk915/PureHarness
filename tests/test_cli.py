@@ -752,7 +752,10 @@ def test_console_script_is_registered():
 
     assert project["version"] == "0.1.0"
     assert project["readme"] == "README.md"
-    assert project["optional-dependencies"]["dev"] == ["pytest>=8"]
+    assert project["optional-dependencies"]["dev"] == [
+        "pytest>=8",
+        "httpx>=0.28,<1",
+    ]
     assert project["scripts"]["pureharness"] == (
         "pureharness.cli:main"
     )
