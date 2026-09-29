@@ -144,8 +144,9 @@ def test_model_attempt_limit_blocks_third_physical_call():
     assert agent.last_runtime_failure is not None
     assert agent.last_runtime_failure.stage is RuntimeStage.EXECUTION
     assert agent.last_runtime_failure.category is FailureCategory.BUDGET
-    assert [event.type for event in agent.events[-2:]] == [
+    assert [event.type for event in agent.events[-3:]] == [
         "execution_budget_exhausted",
+        "progress_snapshot",
         "agent_failed",
     ]
     assert all(event.type != "model_failed" for event in agent.events)
@@ -178,6 +179,7 @@ def test_model_retry_is_blocked_by_global_attempt_budget():
 
     assert model.call_count == 1
     assert agent.execution_usage.model_attempts == 1
+    assert agent.progress_snapshot.model_retries == 0
     assert "model_retrying" in [event.type for event in agent.events]
     assert all(event.type != "model_failed" for event in agent.events)
     assert agent.trace.end_reason == "execution_budget_exceeded"
@@ -211,11 +213,14 @@ def test_context_recovery_retry_is_blocked_by_global_attempt_budget():
 
     assert model.call_count == 1
     assert agent.execution_usage.model_attempts == 1
+    assert agent.progress_snapshot.context_window_exceeded_count == 1
+    assert agent.progress_snapshot.context_recoveries == 1
     event_types = [event.type for event in agent.events]
     assert "context_window_exceeded" in event_types
     assert "context_recovering" in event_types
-    assert event_types[-2:] == [
+    assert event_types[-3:] == [
         "execution_budget_exhausted",
+        "progress_snapshot",
         "agent_failed",
     ]
     assert "context_build_failed" not in event_types

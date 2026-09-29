@@ -281,6 +281,9 @@ def test_recoverable_model_failure_retries_in_same_step():
     assert agent.last_runtime_failure is not None
     assert agent.last_runtime_failure.step == 0
     assert agent.last_runtime_failure.recoverable is True
+    assert agent.progress_snapshot.logical_steps_completed == 1
+    assert agent.progress_snapshot.model_attempts == 2
+    assert agent.progress_snapshot.model_retries == 1
     assert [event.type for event in agent.events] == [
         "agent_started",
         "context_build_started",
@@ -288,6 +291,7 @@ def test_recoverable_model_failure_retries_in_same_step():
         "model_started",
         "model_retrying",
         "model_completed",
+        "progress_snapshot",
         "agent_completed",
     ]
     retrying = agent.events[4]
@@ -340,9 +344,10 @@ def test_recoverable_model_failure_stops_when_budget_is_exhausted():
     assert agent.last_runtime_failure.error_type == (
         "RecoverableModelError"
     )
-    assert [event.type for event in agent.events[-3:]] == [
+    assert [event.type for event in agent.events[-4:]] == [
         "model_retrying",
         "model_failed",
+        "progress_snapshot",
         "agent_failed",
     ]
     record = agent.last_run_record

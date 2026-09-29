@@ -75,6 +75,28 @@ omitted execution limit is unlimited. `Agent.execution_usage` exposes an
 immutable per-run snapshot of physical `model_attempts` and accepted
 `tool_calls`; it resets at the start of each `run()`.
 
+`Agent.progress_snapshot` composes those authoritative usage values with
+immutable, factual per-run activity telemetry: completed logical steps, tool
+result outcomes, exact tool-action repetition, model retries, reactive context
+recoveries, proactive context pressure, and provider context-window
+rejections. It resets for every `Agent.run()` even when the Session retains
+earlier history. Progress telemetry is observation only: it is not semantic
+task progress, a quality or productivity score, loop/stall detection, or a
+stop/replanning policy, and none of its counters feeds runtime decisions.
+
+A dispatched tool action is identified internally by a stable hash of canonical
+JSON containing its tool name and arguments. Dictionary keys are sorted, list
+order remains meaningful, and `call_id` is ignored. Raw arguments and hashes
+are never emitted in progress events. An action is observed immediately before
+an exposed, batch-budget-admitted call enters `ToolExecutor`, so policy or
+approval denial and tool failure still count; hidden calls and atomically
+rejected batches do not. If arguments cannot be canonicalized, repeat
+classification for that action is skipped without affecting dispatch and no
+shared fallback identity is invented. For observed identities,
+`unique_tool_actions` is the distinct count, `repeated_tool_actions` is the sum
+of every occurrence after each identity's first, and
+`max_identical_tool_action_count` is the largest identity count.
+
 The loop is organized as explicit run, step, state-reduction, context-preparation,
 tool-selection, model-request, tool-execution, observation, and completion
 stages. `Agent` still owns and advances that synchronous loop. Focused private
@@ -742,6 +764,15 @@ agent_started
 agent_completed | agent_interrupted | agent_failed
 ```
 
+After every completed tool step the Agent emits `progress_snapshot` with
+`terminal=false`. A successful final-answer step and a terminal runtime failure
+emit one final snapshot with `terminal=true` immediately before
+`agent_completed` or `agent_failed`. Model retries are counted only after the
+global model-attempt budget gate admits the physical retry. Reactive context
+recovery is counted after a smaller context is successfully rebuilt; provider
+overflow occurrences and proactive configured-limit pressure are separate
+counters.
+
 The lifecycle inside the loop repeats for each model step. A recoverable
 malformed-output failure emits `model_retrying`. A provider overflow that can
 be rebuilt emits `context_window_exceeded` and then `context_recovering`; it
@@ -776,6 +807,7 @@ Event payloads use the following current contract:
 | `context_recovering` | `step`, recovery attempt/limit, overflow error type, previous history/request estimates, emergency history budget, and optional recovered history/request estimates when recompilation succeeds |
 | `context_build_failed` | `step`, `reason`, `error_type` |
 | `execution_budget_exhausted` | `step`, `resource`, `used`, `limit`, and optional batch `requested` / `remaining` |
+| `progress_snapshot` | `step`, completed logical steps, physical model attempts/tool calls, successful/failed tool results, unique/repeated/max-identical tool-action counts, model retries, context recoveries, proactive pressure count, provider overflow count, and `terminal` |
 | `model_started` | `step`, selector strategy, registered/exposed counts, selected/all schema-token estimates, estimated savings |
 | `model_retrying` | `step`, next `attempt`, `max_attempts`, `error_type`, `failure_category` |
 | `model_completed` | `step`, `output_kind`, `tool_call_count` |
@@ -826,6 +858,10 @@ detects listener failure after the run and reports an application/output error.
 
 M18.5 adds `execution_budget_exhausted` under the same additive rule without
 changing wire schema version 1.
+
+M18.6 adds `progress_snapshot` under that additive rule. Snapshots remain live
+runtime diagnostics: they are not written to RunRecord v2 or BenchmarkResult,
+and they never change model, tool, budget, context, or termination behavior.
 
 The live wire schema is not the RunRecord persistence schema. Live events are
 transient execution observations; RunRecord remains finalized versioned

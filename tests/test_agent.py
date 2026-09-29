@@ -159,6 +159,7 @@ def test_agent_records_lifecycle_events():
         "context_built",
         "model_started",
         "model_completed",
+        "progress_snapshot",
         "agent_completed",
     ]
 
@@ -284,6 +285,8 @@ def test_agent_stops_after_max_steps():
         "tool_policy_evaluated",
         "tool_started",
         "tool_completed",
+        "progress_snapshot",
+        "progress_snapshot",
         "agent_failed",
     ]
 
@@ -418,10 +421,11 @@ def test_agent_records_model_error_end_reason():
         "context_built",
         "model_started",
         "model_failed",
+        "progress_snapshot",
         "agent_failed",
     ]
 
-    assert agent.events[-2].data == {
+    assert agent.events[-3].data == {
         "step": 0,
         "reason": "model_error",
         "error_type": "ModelError",
@@ -449,8 +453,8 @@ def test_agent_finalizes_unexpected_model_exception_and_reraises_it():
     assert exc_info.value is failure
     assert agent.trace.end_reason == "model_error"
     assert len(agent.trace.steps) == 1
-    assert agent.events[-2].type == "model_failed"
-    assert agent.events[-2].data == {
+    assert agent.events[-3].type == "model_failed"
+    assert agent.events[-3].data == {
         "step": 1,
         "reason": "model_error",
         "error_type": "ValueError",
@@ -522,10 +526,12 @@ def test_agent_records_tool_lifecycle_events():
         "tool_policy_evaluated",
         "tool_started",
         "tool_completed",
+        "progress_snapshot",
         "context_build_started",
         "context_built",
         "model_started",
         "model_completed",
+        "progress_snapshot",
         "agent_completed",
     ]
 
@@ -692,6 +698,7 @@ def test_agent_notifies_event_listener():
         "context_built",
         "model_started",
         "model_completed",
+        "progress_snapshot",
         "agent_completed",
     ]
 
@@ -723,10 +730,11 @@ def test_listener_error_does_not_stop_agent():
         "context_built",
         "model_started",
         "model_completed",
+        "progress_snapshot",
         "agent_completed",
     ]
 
-    assert len(agent.listener_errors) == 6
+    assert len(agent.listener_errors) == 7
 
     assert all(
         isinstance(error, ValueError)
@@ -765,6 +773,7 @@ def test_listener_error_does_not_block_other_listeners():
         "context_built",
         "model_started",
         "model_completed",
+        "progress_snapshot",
         "agent_completed",
     ]
 
@@ -1069,6 +1078,7 @@ def test_context_budget_failure_stops_before_model_call():
         "agent_started",
         "context_build_started",
         "context_build_failed",
+        "progress_snapshot",
         "agent_failed",
     ]
     assert agent.events[2].data == {
@@ -1076,7 +1086,7 @@ def test_context_budget_failure_stops_before_model_call():
         "reason": "context_error",
         "error_type": "ContextBudgetExceeded",
     }
-    assert agent.events[3].data["reason"] == "context_error"
+    assert agent.events[4].data["reason"] == "context_error"
 
 
 def test_task_state_failure_stops_before_model_call():
@@ -1104,6 +1114,7 @@ def test_task_state_failure_stops_before_model_call():
         "agent_started",
         "context_build_started",
         "context_build_failed",
+        "progress_snapshot",
         "agent_failed",
     ]
     assert agent.events[2].data["error_type"] == "TaskStateError"

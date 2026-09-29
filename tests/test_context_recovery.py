@@ -158,6 +158,10 @@ def test_provider_overflow_recovers_smaller_context_without_limits():
         Message(role="assistant", content="recovered"),
     ]
     assert [step.index for step in agent.trace.steps] == [0]
+    assert agent.progress_snapshot.logical_steps_completed == 1
+    assert agent.progress_snapshot.model_attempts == 2
+    assert agent.progress_snapshot.context_window_exceeded_count == 1
+    assert agent.progress_snapshot.context_recoveries == 1
 
     failure = agent.last_runtime_failure
     assert failure is not None
@@ -234,11 +238,12 @@ def test_context_recovery_can_be_disabled():
     assert all(
         event.type != "context_recovering" for event in agent.events
     )
-    assert [event.type for event in agent.events[-2:]] == [
+    assert [event.type for event in agent.events[-3:]] == [
         "context_window_exceeded",
+        "progress_snapshot",
         "agent_failed",
     ]
-    exceeded = agent.events[-2]
+    exceeded = agent.events[-3]
     assert exceeded.data["context_recovery_available"] is False
     assert "recovery_attempt" not in exceeded.data
     assert all(
@@ -280,11 +285,15 @@ def test_context_recovery_exhaustion_stops_after_second_provider_call():
         if event.type == "context_window_exceeded"
     ]
     assert len(exceeded) == 2
+    assert agent.progress_snapshot.model_attempts == 2
+    assert agent.progress_snapshot.context_window_exceeded_count == 2
+    assert agent.progress_snapshot.context_recoveries == 1
     assert exceeded[0].data["context_recovery_available"] is True
     assert exceeded[1].data["context_recovery_available"] is False
     assert all(event.type != "model_failed" for event in agent.events)
-    assert [event.type for event in agent.events[-2:]] == [
+    assert [event.type for event in agent.events[-3:]] == [
         "context_window_exceeded",
+        "progress_snapshot",
         "agent_failed",
     ]
     assert all(
@@ -373,14 +382,17 @@ def test_atomic_recovery_failure_does_not_call_provider_again():
     assert session.items == [Message(role="user", content="new")]
     assert agent.last_runtime_failure is not None
     assert agent.last_runtime_failure.error_type == "ContextBudgetExceeded"
+    assert agent.progress_snapshot.context_window_exceeded_count == 1
+    assert agent.progress_snapshot.context_recoveries == 0
     event = _recovery_event(agent)
     assert event.data["previous_history_tokens"] == 3
     assert event.data["recovery_history_budget"] == 1
     assert "recovered_history_tokens" not in event.data
-    assert [item.type for item in agent.events[-4:]] == [
+    assert [item.type for item in agent.events[-5:]] == [
         "context_window_exceeded",
         "context_recovering",
         "context_build_failed",
+        "progress_snapshot",
         "agent_failed",
     ]
 

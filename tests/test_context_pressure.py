@@ -216,6 +216,10 @@ def test_pressure_bounds_atomic_history_and_preserves_raw_session():
 
     assert agent.run("new") == "done"
 
+    assert agent.progress_snapshot.context_pressure_count == 1
+    assert agent.progress_snapshot.context_recoveries == 0
+    assert agent.progress_snapshot.context_window_exceeded_count == 0
+
     sent = model.contexts[0]
     assert sent[1:] == [
         ToolCall(name="lookup", arguments={}, call_id="lookup-1"),
@@ -370,6 +374,7 @@ def test_non_history_pressure_fails_before_model_call():
         "agent_started",
         "context_build_started",
         "context_build_failed",
+        "progress_snapshot",
         "agent_failed",
     ]
     assert agent.last_run_record is not None

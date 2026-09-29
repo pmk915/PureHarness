@@ -14,6 +14,7 @@ AgentEventType = Literal[
     "context_window_exceeded",
     "context_recovering",
     "execution_budget_exhausted",
+    "progress_snapshot",
     "model_started",
     "model_retrying",
     "model_completed",
@@ -66,6 +67,19 @@ class AgentEventData(TypedDict, total=False):
     limit: int
     requested: int
     remaining: int
+    logical_steps_completed: int
+    model_attempts: int
+    tool_calls: int
+    successful_tool_results: int
+    failed_tool_results: int
+    unique_tool_actions: int
+    repeated_tool_actions: int
+    max_identical_tool_action_count: int
+    model_retries: int
+    context_recoveries: int
+    context_pressure_count: int
+    context_window_exceeded_count: int
+    terminal: bool
     current_request_present: bool
     completed_actions_count: int
     failed_actions_count: int

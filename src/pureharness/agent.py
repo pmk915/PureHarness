@@ -18,6 +18,7 @@ from pureharness.model import (
     Model,
     ModelOutput,
 )
+from pureharness.progress import ProgressSnapshot, ProgressTracker
 from pureharness.run_record import (
     ModelInvocationRecord,
     RunRecord,
@@ -149,6 +150,7 @@ class Agent:
         self.context_limits = context_limits
         self.execution_budget = execution_budget or ExecutionBudget()
         self._execution_usage = ExecutionUsage()
+        self._progress_tracker = ProgressTracker()
         self._run_id_factory = (
             run_id_factory
             if run_id_factory is not None
@@ -167,6 +169,13 @@ class Agent:
     @property
     def execution_usage(self) -> ExecutionUsage:
         return self._execution_usage
+
+    @property
+    def progress_snapshot(self) -> ProgressSnapshot:
+        return self._progress_tracker.snapshot(
+            self._execution_usage,
+            logical_steps_completed=len(self.trace.steps),
+        )
 
     def _emit(self, event: AgentEvent) -> None:
         if event.run_id is None and self._active_record_builder is not None:
@@ -308,6 +317,10 @@ class Agent:
 
         self.trace.end_reason = "max_steps_exceeded"
         self._finalize_run_record(record_builder)
+        self._emit_progress_snapshot(
+            step=(self.trace.steps[-1].index if self.trace.steps else None),
+            terminal=True,
+        )
         self._emit(
             AgentEvent(
                 type="agent_failed",
@@ -326,6 +339,7 @@ class Agent:
         self.last_runtime_failure = None
         self.last_run_record = None
         self._execution_usage = ExecutionUsage()
+        self._progress_tracker = ProgressTracker()
         self._active_session_size = len(self.session.items)
         builder = RunRecordBuilder(
             run_id=self._run_id_factory(),
@@ -419,6 +433,7 @@ class Agent:
         final_prepared = prepared
 
         if pressure_detected:
+            self._progress_tracker.record_context_pressure()
             compiled = self.context_builder.compile_bounded(
                 history,
                 available_history_tokens,
@@ -612,6 +627,7 @@ class Agent:
         attempt = 1
         context_recovery_attempt = 0
         current_prepared = prepared
+        retry_pending = False
 
         while True:
             try:
@@ -624,6 +640,9 @@ class Agent:
                     builder=builder,
                 )
                 raise
+            if retry_pending:
+                self._progress_tracker.record_model_retry()
+                retry_pending = False
             try:
                 return self.model.generate(
                     list(current_prepared.model_items),
@@ -649,6 +668,7 @@ class Agent:
                 )
 
                 if isinstance(exc, ContextWindowExceededError):
+                    self._progress_tracker.record_context_window_exceeded()
                     recovery_available = (
                         action is RecoveryAction.REBUILD_CONTEXT
                     )
@@ -675,6 +695,7 @@ class Agent:
 
                 if action is RecoveryAction.RETRY:
                     attempt += 1
+                    retry_pending = True
                     self._emit(
                         AgentEvent(
                             type="model_retrying",
@@ -733,6 +754,7 @@ class Agent:
                         raise recovery_exc from exc
 
                     context_recovery_attempt = next_recovery_attempt
+                    self._progress_tracker.record_context_recovery()
                     builder.replace_model_invocation(
                         self._model_invocation_record(
                             step,
@@ -879,6 +901,7 @@ class Agent:
         )
         self.trace.end_reason = "completed"
         self._finalize_run_record(builder)
+        self._emit_progress_snapshot(step=step, terminal=True)
         self._emit(
             AgentEvent(
                 type="agent_completed",
@@ -994,6 +1017,10 @@ class Agent:
             )
 
         self._finalize_run_record(builder)
+        self._emit_progress_snapshot(
+            step=failure.step,
+            terminal=True,
+        )
         event_data = {
             "reason": reason,
             "step_count": len(self.trace.steps),
@@ -1001,6 +1028,40 @@ class Agent:
         if failure.category is not FailureCategory.CONTEXT:
             event_data["error_type"] = failure.error_type
         self._emit(AgentEvent(type="agent_failed", data=event_data))
+
+    def _emit_progress_snapshot(
+        self,
+        *,
+        step: int | None,
+        terminal: bool,
+    ) -> None:
+        snapshot = self.progress_snapshot
+        data: dict[str, object] = {
+            "logical_steps_completed": (
+                snapshot.logical_steps_completed
+            ),
+            "model_attempts": snapshot.model_attempts,
+            "tool_calls": snapshot.tool_calls,
+            "successful_tool_results": (
+                snapshot.successful_tool_results
+            ),
+            "failed_tool_results": snapshot.failed_tool_results,
+            "unique_tool_actions": snapshot.unique_tool_actions,
+            "repeated_tool_actions": snapshot.repeated_tool_actions,
+            "max_identical_tool_action_count": (
+                snapshot.max_identical_tool_action_count
+            ),
+            "model_retries": snapshot.model_retries,
+            "context_recoveries": snapshot.context_recoveries,
+            "context_pressure_count": snapshot.context_pressure_count,
+            "context_window_exceeded_count": (
+                snapshot.context_window_exceeded_count
+            ),
+            "terminal": terminal,
+        }
+        if step is not None:
+            data["step"] = step
+        self._emit(AgentEvent(type="progress_snapshot", data=data))
 
     def _execute_tool_calls(
         self,
@@ -1118,6 +1179,10 @@ class Agent:
                 if tool_call.name not in exposed_tool_names:
                     raise ToolNotExposedError(tool_call.name)
 
+                self._progress_tracker.record_tool_action(
+                    tool_call.name,
+                    tool_call.arguments,
+                )
                 result = self.tool_executor.execute(
                     tool_call.name,
                     tool_call.arguments,
@@ -1140,6 +1205,9 @@ class Agent:
             )
             self.session.append(tool_result)
             tool_results.append(tool_result)
+            self._progress_tracker.record_tool_result(
+                is_error=is_error
+            )
 
             if tool_started_at is not None:
                 builder.record_tool_execution()
@@ -1171,3 +1239,4 @@ class Agent:
                 tool_result=tool_results,
             )
         )
+        self._emit_progress_snapshot(step=step, terminal=False)

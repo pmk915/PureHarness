@@ -75,6 +75,39 @@ with end reason `execution_budget_exceeded`. Its payload contains `resource`,
 `model_failed`, fabricated ToolResult, or `context_build_failed` for the budget
 refusal. The event is additive within JSONL wire schema version 1.
 
+`progress_snapshot` reports deterministic facts for the current
+`Agent.run()`. Its payload is:
+
+| Field | Meaning |
+| --- | --- |
+| `logical_steps_completed` | Existing Agent steps fully appended to the Run trace |
+| `model_attempts` | Physical attempts from authoritative `ExecutionUsage` |
+| `tool_calls` | Batch-budget-admitted exposed calls from `ExecutionUsage` |
+| `successful_tool_results` / `failed_tool_results` | Runtime-produced ToolResults grouped by `is_error` |
+| `unique_tool_actions` | Distinct canonical tool-name + arguments identities dispatched |
+| `repeated_tool_actions` | Occurrences after each observed identity's first occurrence |
+| `max_identical_tool_action_count` | Largest occurrence count for one identity |
+| `model_retries` | Same-context physical retry attempts admitted by all gates |
+| `context_recoveries` | Successful smaller-context rebuilds after provider overflow |
+| `context_pressure_count` | Logical requests where configured proactive pressure handling was applied |
+| `context_window_exceeded_count` | Provider `ContextWindowExceededError` occurrences |
+| `terminal` | Whether this is the Run's final progress snapshot |
+
+`step` remains in the top-level event envelope. A non-terminal snapshot is
+emitted after each completed tool step. Exactly one terminal snapshot is
+emitted immediately before `agent_completed` or `agent_failed` for ordinary
+completion/runtime-failure paths. Counters reset at the beginning of every Run,
+not every Session.
+
+Tool-action identity ignores `call_id` and hashes canonical JSON of the tool
+name and arguments with sorted dictionary keys; list order remains meaningful.
+Neither raw arguments nor fingerprints are exposed by this event. If an action
+cannot be canonicalized, its repeat classification is skipped without failing
+execution or merging unknown actions. These values are factual telemetry, not
+a progress percentage, usefulness judgment, loop/stall detector, verification
+guess, or stop policy. The event is additive within JSONL wire schema version
+1.
+
 The three context-failure events have distinct meanings:
 
 ```text
@@ -190,8 +223,10 @@ RunRecord    = finalized persisted evidence for one Agent.run()
 Replay       = read-only ordered reconstruction from RunRecord
 ```
 
-`ExecutionUsage` is live per-run diagnostic state rather than persisted
-evidence. RunRecord v1 retains its original six-value closed end-reason contract.
+`ExecutionUsage` and `ProgressSnapshot` are live per-run diagnostic state rather
+than persisted evidence. No progress counter or snapshot is added to RunRecord
+v2 or BenchmarkResult. RunRecord v1 retains its original six-value closed
+end-reason contract.
 RunRecord v2 has the same persisted structure and adds only
 `execution_budget_exceeded`; current writers emit v2 and current readers accept
 and preserve v1 and v2. Older PureHarness versions are not expected to read v2.

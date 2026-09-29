@@ -108,6 +108,27 @@ _EVENT_PAYLOAD_FIELDS: dict[str, tuple[tuple[str, str], ...]] = {
         ("requested", "requested"),
         ("remaining", "remaining"),
     ),
+    "progress_snapshot": (
+        ("logical_steps_completed", "logical_steps_completed"),
+        ("model_attempts", "model_attempts"),
+        ("tool_calls", "tool_calls"),
+        ("successful_tool_results", "successful_tool_results"),
+        ("failed_tool_results", "failed_tool_results"),
+        ("unique_tool_actions", "unique_tool_actions"),
+        ("repeated_tool_actions", "repeated_tool_actions"),
+        (
+            "max_identical_tool_action_count",
+            "max_identical_tool_action_count",
+        ),
+        ("model_retries", "model_retries"),
+        ("context_recoveries", "context_recoveries"),
+        ("context_pressure_count", "context_pressure_count"),
+        (
+            "context_window_exceeded_count",
+            "context_window_exceeded_count",
+        ),
+        ("terminal", "terminal"),
+    ),
     "model_started": (
         ("registered_tool_count", "registered_tool_count"),
         ("exposed_tool_count", "exposed_tool_count"),

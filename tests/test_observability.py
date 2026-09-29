@@ -497,11 +497,12 @@ def test_jsonl_model_failure_emits_events_and_writes_record(
 
     assert exit_code == 1
     assert captured.err == ""
-    assert [event["event"] for event in events[-2:]] == [
+    assert [event["event"] for event in events[-3:]] == [
         "model_failed",
+        "progress_snapshot",
         "agent_failed",
     ]
-    assert events[-2]["payload"] == {
+    assert events[-3]["payload"] == {
         "reason": "model_error",
         "error_type": "ValueError",
     }
