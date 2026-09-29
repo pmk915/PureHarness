@@ -29,6 +29,11 @@ _MAX_SEARCH_MATCHES = 200
 _MAX_SEARCH_FILE_BYTES = 1_000_000
 _MATCH_PREVIEW_LENGTH = 160
 _DEFAULT_COMMAND_TIMEOUT_SECONDS = 10.0
+_MIN_COMMAND_TIMEOUT_SECONDS = 1.0
+_MAX_COMMAND_TIMEOUT_SECONDS = 120.0
+_MAX_COMMAND_STREAM_CHARS = 20_000
+_COMMAND_STREAM_HEAD_CHARS = 10_000
+_COMMAND_STREAM_TAIL_CHARS = 10_000
 
 
 def _validate_bounded_integer(
@@ -44,6 +49,21 @@ def _validate_bounded_integer(
     if value < minimum or value > maximum:
         raise ValueError(
             f"{name} must be between {minimum} and {maximum}."
+        )
+
+
+def _validate_bounded_number(
+    name: str,
+    value: float,
+    *,
+    minimum: float,
+    maximum: float,
+) -> None:
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        raise ValueError(f"{name} must be a number.")
+    if value < minimum or value > maximum:
+        raise ValueError(
+            f"{name} must be between {minimum:g} and {maximum:g}."
         )
 
 
@@ -520,34 +540,48 @@ def create_run_command_tool(
         if execution_backend is not None
         else LocalExecutionBackend()
     )
+    default_timeout_seconds = timeout_seconds
 
     def run_command(
         argv: list[str],
+        cwd: str = ".",
+        timeout_seconds: float = default_timeout_seconds,
     ) -> str:
         if not argv:
             raise ValueError(
                 "Command argv must not be empty."
             )
+        _validate_bounded_number(
+            "timeout_seconds",
+            timeout_seconds,
+            minimum=_MIN_COMMAND_TIMEOUT_SECONDS,
+            maximum=_MAX_COMMAND_TIMEOUT_SECONDS,
+        )
+        command_cwd = _resolve_workspace_path(workspace, cwd)
+        if not command_cwd.is_dir():
+            raise NotADirectoryError(
+                f"Command cwd is not a directory inside workspace: {cwd}"
+            )
 
         result = backend.execute(
             argv,
-            cwd=workspace.resolve(),
+            cwd=command_cwd,
             timeout=timeout_seconds,
         )
 
         return (
             f"exit_code: {result.exit_code}\n"
-            f"stdout:\n{result.stdout}\n"
-            f"stderr:\n{result.stderr}"
+            f"stdout:\n{_bound_command_stream(result.stdout, 'stdout')}\n"
+            f"stderr:\n{_bound_command_stream(result.stderr, 'stderr')}"
         )
 
     return Tool(
         name="run_command",
         description=(
             "Run an argv command through the configured execution backend "
-            "with the workspace as its current directory, returning exit "
-            "code, stdout, and stderr. Use it for tests and validation. The "
-            "default local backend has a timeout and is not a secure sandbox."
+            "with a workspace-relative current directory and bounded timeout, "
+            "returning exit code, stdout, and stderr. Use it for tests and "
+            "validation. The default local backend is not a secure sandbox."
         ),
         parameters={
             "type": "object",
@@ -562,6 +596,20 @@ def create_run_command_tool(
                         'Example: ["pytest", "-q"].'
                     ),
                 },
+                "cwd": {
+                    "type": "string",
+                    "description": (
+                        "Workspace-relative directory in which to run."
+                    ),
+                    "default": ".",
+                },
+                "timeout_seconds": {
+                    "type": "number",
+                    "description": "Per-call timeout in seconds.",
+                    "minimum": _MIN_COMMAND_TIMEOUT_SECONDS,
+                    "maximum": _MAX_COMMAND_TIMEOUT_SECONDS,
+                    "default": default_timeout_seconds,
+                },
             },
             "required": ["argv"],
         },
@@ -569,6 +617,24 @@ def create_run_command_tool(
         category="execution",
         risk_level=RiskLevel.EXECUTE,
         side_effects=True,
+    )
+
+
+def _bound_command_stream(value: str, stream_name: str) -> str:
+    if len(value) <= _MAX_COMMAND_STREAM_CHARS:
+        return value
+
+    omitted = len(value) - (
+        _COMMAND_STREAM_HEAD_CHARS + _COMMAND_STREAM_TAIL_CHARS
+    )
+    notice = (
+        f"\n... {stream_name} truncated; original character count: "
+        f"{len(value)}; omitted: {omitted} ...\n"
+    )
+    return (
+        value[:_COMMAND_STREAM_HEAD_CHARS]
+        + notice
+        + value[-_COMMAND_STREAM_TAIL_CHARS:]
     )
 
 

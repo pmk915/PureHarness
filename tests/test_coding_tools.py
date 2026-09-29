@@ -14,7 +14,7 @@ from pureharness.coding_tools import (
     create_search_text_tool,
     create_write_file_tool,
 )
-from pureharness.execution import CommandResult
+from pureharness.execution import CommandResult, ExecutionTimeoutError
 from pureharness.tools import RiskLevel
 
 
@@ -431,6 +431,114 @@ def test_run_command_tool_executes_in_workspace(
 
     assert "exit_code: 0" in result
     assert "hello from command" in result
+
+
+def test_run_command_supports_workspace_relative_cwd(tmp_path):
+    subdirectory = tmp_path / "src/runtime"
+    subdirectory.mkdir(parents=True)
+    tool = create_run_command_tool(tmp_path)
+
+    result = tool.execute(
+        {
+            "argv": [
+                sys.executable,
+                "-c",
+                "from pathlib import Path; print(Path.cwd())",
+            ],
+            "cwd": "src/runtime",
+        }
+    )
+
+    assert str(subdirectory.resolve()) in result
+
+
+def test_run_command_rejects_cwd_escape_and_missing_directory(tmp_path):
+    tool = create_run_command_tool(tmp_path)
+
+    with pytest.raises(ValueError, match="Path escapes workspace"):
+        tool.execute({"argv": ["true"], "cwd": "../outside"})
+
+    with pytest.raises(NotADirectoryError, match="cwd is not a directory"):
+        tool.execute({"argv": ["true"], "cwd": "missing"})
+
+
+def test_run_command_forwards_custom_bounded_timeout(tmp_path):
+    backend = FakeExecutionBackend(
+        [CommandResult(exit_code=0, stdout="ok", stderr="")]
+    )
+    tool = create_run_command_tool(tmp_path, execution_backend=backend)
+
+    tool.execute(
+        {
+            "argv": ["build"],
+            "cwd": ".",
+            "timeout_seconds": 120,
+        }
+    )
+
+    assert backend.calls == [
+        {
+            "argv": ["build"],
+            "cwd": tmp_path.resolve(),
+            "timeout": 120,
+        }
+    ]
+
+
+@pytest.mark.parametrize("timeout", [0, 121, True, "10"])
+def test_run_command_rejects_invalid_timeout(tmp_path, timeout):
+    tool = create_run_command_tool(tmp_path)
+
+    with pytest.raises(ValueError, match="timeout_seconds"):
+        tool.execute(
+            {
+                "argv": ["true"],
+                "timeout_seconds": timeout,
+            }
+        )
+
+
+def test_run_command_preserves_typed_timeout_failure(tmp_path):
+    class TimeoutBackend:
+        def execute(self, argv, *, cwd, timeout):
+            raise ExecutionTimeoutError("controlled timeout")
+
+    tool = create_run_command_tool(
+        tmp_path,
+        execution_backend=TimeoutBackend(),
+    )
+
+    with pytest.raises(ExecutionTimeoutError, match="controlled timeout"):
+        tool.execute({"argv": ["slow"], "timeout_seconds": 30})
+
+
+def test_run_command_bounds_large_streams_deterministically(tmp_path):
+    stdout = "HEAD" + ("x" * 24_000) + "TAIL"
+    stderr = "ERRHEAD" + ("y" * 24_000) + "ERRTAIL"
+    backend = FakeExecutionBackend(
+        [
+            CommandResult(
+                exit_code=7,
+                stdout=stdout,
+                stderr=stderr,
+            )
+        ]
+    )
+    tool = create_run_command_tool(tmp_path, execution_backend=backend)
+
+    result = tool.execute({"argv": ["large-output"]})
+
+    assert result.startswith("exit_code: 7\nstdout:\nHEAD")
+    assert "stdout truncated; original character count: 24008" in result
+    assert "stderr truncated; original character count: 24014" in result
+    assert "TAIL\nstderr:\nERRHEAD" in result
+    assert result.endswith("ERRTAIL")
+    assert result == create_run_command_tool(
+        tmp_path,
+        execution_backend=FakeExecutionBackend(
+            [CommandResult(exit_code=7, stdout=stdout, stderr=stderr)]
+        ),
+    ).execute({"argv": ["large-output"]})
 
 
 def test_coding_command_tools_share_injected_backend(
