@@ -84,8 +84,12 @@ class ToolExecutor:
         self.precondition = precondition
 
     def reset_run_state(self) -> None:
+        self.registry.reset_run_state()
         if self.precondition is not None:
             self.precondition.reset()
+
+    def cleanup_run_state(self) -> None:
+        self.registry.cleanup_run_state()
 
     def execute(
         self,

@@ -68,3 +68,32 @@ def test_registry_preserves_tool_metadata():
     assert listed[0].category == "utility"
     assert listed[0].risk_level is RiskLevel.READ
     assert listed[0].side_effects is False
+
+
+def test_registry_deduplicates_and_manages_shared_run_resources():
+    calls = []
+
+    class Resource:
+        def reset_run_state(self):
+            calls.append("reset")
+
+        def cleanup_run_state(self):
+            calls.append("cleanup")
+
+    resource = Resource()
+    registry = ToolRegistry()
+    for name in ["one", "two"]:
+        registry.register(
+            Tool(
+                name=name,
+                description=name,
+                parameters={"type": "object", "properties": {}},
+                function=lambda: None,
+                run_resource=resource,
+            )
+        )
+
+    registry.reset_run_state()
+    registry.cleanup_run_state()
+
+    assert calls == ["reset", "cleanup"]

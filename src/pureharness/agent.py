@@ -228,8 +228,11 @@ class Agent:
                 )
             raise
         finally:
-            self._active_record_builder = None
-            self._active_session_size = None
+            try:
+                self.tool_executor.cleanup_run_state()
+            finally:
+                self._active_record_builder = None
+                self._active_session_size = None
 
     def _run(self, user_input: str) -> str:
         record_builder = self._start_run(user_input)

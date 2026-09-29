@@ -7,6 +7,12 @@ from pureharness.execution import (
     ExecutionBackend,
     LocalExecutionBackend,
 )
+from pureharness.processes import (
+    LocalProcessManager,
+    ProcessManager,
+    ProcessObservation,
+    UnavailableProcessManager,
+)
 from pureharness.tools import RiskLevel, Tool
 from pureharness.workspace_discipline import (
     resolve_workspace_path as _resolve_workspace_path,
@@ -883,6 +889,135 @@ def _bound_command_stream(value: str, stream_name: str) -> str:
     )
 
 
+def create_process_tools(
+    workspace: Path,
+    *,
+    process_manager: ProcessManager | None = None,
+) -> list[Tool]:
+    manager = (
+        process_manager
+        if process_manager is not None
+        else LocalProcessManager(workspace)
+    )
+
+    def start_process(
+        argv: list[str],
+        cwd: str = ".",
+    ) -> str:
+        observation = manager.start(argv, cwd=Path(cwd))
+        return _format_process_observation(
+            observation,
+            include_output=False,
+        )
+
+    def poll_process(job_id: str) -> str:
+        return _format_process_observation(manager.poll(job_id))
+
+    def stop_process(job_id: str) -> str:
+        return _format_process_observation(manager.stop(job_id))
+
+    return [
+        Tool(
+            name="start_process",
+            description=(
+                "Start a bounded background process from an argv list in a "
+                "workspace-relative directory. Returns an opaque job ID for "
+                "poll_process or stop_process. This is not a shell or PTY."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "argv": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Command and arguments as a list.",
+                    },
+                    "cwd": {
+                        "type": "string",
+                        "description": (
+                            "Workspace-relative directory in which to start."
+                        ),
+                        "default": ".",
+                    },
+                },
+                "required": ["argv"],
+            },
+            function=start_process,
+            category="process",
+            risk_level=RiskLevel.EXECUTE,
+            side_effects=True,
+            run_resource=manager,
+        ),
+        Tool(
+            name="poll_process",
+            description=(
+                "Poll a Run-scoped background job and return its status, exit "
+                "code when available, and bounded output produced since the "
+                "previous poll."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "job_id": {
+                        "type": "string",
+                        "description": "Opaque ID returned by start_process.",
+                    },
+                },
+                "required": ["job_id"],
+            },
+            function=poll_process,
+            category="process",
+            risk_level=RiskLevel.READ,
+            side_effects=False,
+            run_resource=manager,
+        ),
+        Tool(
+            name="stop_process",
+            description=(
+                "Stop a Run-scoped background job with graceful termination "
+                "followed by forced cleanup if needed, then return final "
+                "status and remaining bounded output."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "job_id": {
+                        "type": "string",
+                        "description": "Opaque ID returned by start_process.",
+                    },
+                },
+                "required": ["job_id"],
+            },
+            function=stop_process,
+            category="process",
+            risk_level=RiskLevel.EXECUTE,
+            side_effects=True,
+            run_resource=manager,
+        ),
+    ]
+
+
+def _format_process_observation(
+    observation: ProcessObservation,
+    *,
+    include_output: bool = True,
+) -> str:
+    fields = [
+        f"job_id: {observation.job_id}",
+        f"status: {observation.status}",
+    ]
+    if observation.exit_code is not None:
+        fields.append(f"exit_code: {observation.exit_code}")
+    if include_output:
+        fields.extend(
+            [
+                f"stdout:\n{observation.stdout}",
+                f"stderr:\n{observation.stderr}",
+            ]
+        )
+    return "\n".join(fields)
+
+
 def create_git_status_tool(
     workspace: Path,
     *,
@@ -983,12 +1118,21 @@ def create_coding_tools(
     workspace: Path,
     *,
     execution_backend: ExecutionBackend | None = None,
+    process_manager: ProcessManager | None = None,
 ) -> list[Tool]:
     backend = (
         execution_backend
         if execution_backend is not None
         else LocalExecutionBackend()
     )
+
+    manager = process_manager
+    if manager is None:
+        manager = (
+            LocalProcessManager(workspace)
+            if isinstance(backend, LocalExecutionBackend)
+            else UnavailableProcessManager()
+        )
 
     return [
         create_list_files_tool(workspace),
@@ -1001,6 +1145,10 @@ def create_coding_tools(
         create_run_command_tool(
             workspace,
             execution_backend=backend,
+        ),
+        *create_process_tools(
+            workspace,
+            process_manager=manager,
         ),
         create_git_status_tool(
             workspace,

@@ -17,6 +17,7 @@ from pureharness.coding_tools import (
     create_write_file_tool,
 )
 from pureharness.execution import CommandResult, ExecutionTimeoutError
+from pureharness.processes import ProcessCapabilityUnavailableError
 from pureharness.tools import RiskLevel
 
 
@@ -54,6 +55,9 @@ def test_coding_tools_have_expected_metadata(tmp_path):
         "write_file",
         "apply_patch",
         "run_command",
+        "start_process",
+        "poll_process",
+        "stop_process",
         "git_status",
         "git_diff",
     ]
@@ -76,6 +80,9 @@ def test_coding_tools_have_expected_metadata(tmp_path):
         "write_file": ("filesystem", RiskLevel.WRITE, True),
         "apply_patch": ("filesystem", RiskLevel.WRITE, True),
         "run_command": ("execution", RiskLevel.EXECUTE, True),
+        "start_process": ("process", RiskLevel.EXECUTE, True),
+        "poll_process": ("process", RiskLevel.READ, False),
+        "stop_process": ("process", RiskLevel.EXECUTE, True),
         "git_status": ("git", RiskLevel.READ, False),
         "git_diff": ("git", RiskLevel.READ, False),
     }
@@ -717,6 +724,11 @@ def test_coding_command_tools_share_injected_backend(
     diff_output = tools["git_diff"].execute(
         {"path": "example.py"}
     )
+    with pytest.raises(
+        ProcessCapabilityUnavailableError,
+        match="unavailable",
+    ):
+        tools["start_process"].execute({"argv": ["fake"]})
 
     assert command_output == (
         "exit_code: 0\n"
