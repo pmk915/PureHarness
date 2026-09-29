@@ -76,22 +76,40 @@ with end reason `execution_budget_exceeded`. Its payload contains `resource`,
 refusal. The event is additive within JSONL wire schema version 1.
 
 `workspace_precondition_failed` is emitted when a standard structured file
-mutation is blocked by M19.1 read-before-edit. It is an occurrence event, not a
-terminal Run failure. `step` remains in the top-level envelope; its payload is:
+mutation is blocked by read-before-edit or stale-file protection. It is an
+occurrence event, not a terminal Run failure. `step` remains in the top-level
+envelope; its payload is:
 
 | Field | Meaning |
 | --- | --- |
 | `tool_name` | Blocked structured mutation tool |
 | `call_id` | Provider call identity, when supplied |
 | `path` | Canonical workspace-relative target; never a host absolute path |
-| `reason` | Stable reason, currently `read_required` |
+| `reason` | `read_required` or `stale_observation` |
+| `change` | Optional stale fact: `content_changed`, `target_missing`, or `target_appeared` |
 
-The event occurs after the exposed batch has passed execution-budget preflight
-and progress has observed the attempted action, but before ToolPolicy,
-approval, or underlying tool execution. The associated ToolResult has
+Initial prepare failures occur after the exposed batch has passed
+execution-budget preflight and progress has observed the attempted action, but
+before ToolPolicy, approval, or underlying tool execution. Revalidation also
+runs after policy and any approval; a stale failure there may follow approval
+events but still precedes `tool_started`. The associated ToolResult has
 `is_error=true`, so the model may recover by reading the file and trying again.
-It adds no RunRecord end reason and is additive within JSONL wire schema version
-1.
+No fingerprint is exposed. The event adds no RunRecord end reason and is
+additive within JSONL wire schema version 1.
+
+`workspace_mutated` is emitted only after a structured mutation succeeds and
+after its `tool_completed` event. Its payload is:
+
+| Field | Meaning |
+| --- | --- |
+| `tool_name` | `write_file` or `apply_patch` |
+| `call_id` | Provider call identity, when supplied |
+| `path` | Canonical workspace-relative target |
+| `operation` | `created`, `overwritten`, or `patched` |
+
+It contains no content, patch text, fingerprint, or absolute host path. Failed,
+blocked, denied, and merely requested mutations do not emit it. The event is
+additive within JSONL wire schema version 1.
 
 `progress_snapshot` reports deterministic facts for the current
 `Agent.run()`. Its payload is:
@@ -241,9 +259,10 @@ RunRecord    = finalized persisted evidence for one Agent.run()
 Replay       = read-only ordered reconstruction from RunRecord
 ```
 
-`ExecutionUsage`, `ProgressSnapshot`, and run-scoped workspace observation are
-live diagnostic state rather than persisted evidence. No progress or workspace
-discipline state is added to RunRecord v2 or BenchmarkResult. RunRecord v1
+`ExecutionUsage`, `ProgressSnapshot`, and the run-scoped workspace snapshot and
+mutation ledger are live diagnostic state rather than persisted evidence. No
+progress or workspace discipline state is added to RunRecord v2 or
+BenchmarkResult. RunRecord v1
 retains its original six-value closed end-reason contract.
 RunRecord v2 has the same persisted structure and adds only
 `execution_budget_exceeded`; current writers emit v2 and current readers accept

@@ -168,6 +168,13 @@ _EVENT_PAYLOAD_FIELDS: dict[str, tuple[tuple[str, str], ...]] = {
         ("call_id", "call_id"),
         ("path", "path"),
         ("reason", "reason"),
+        ("change", "change"),
+    ),
+    "workspace_mutated": (
+        ("name", "tool_name"),
+        ("call_id", "call_id"),
+        ("path", "path"),
+        ("operation", "operation"),
     ),
     "approval_requested": (
         ("name", "tool_name"),

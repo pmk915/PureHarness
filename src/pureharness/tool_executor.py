@@ -25,9 +25,11 @@ class ToolPreconditionError(Exception):
         *,
         reason: str,
         path: str | None = None,
+        change: str | None = None,
     ) -> None:
         self.reason = reason
         self.path = path
+        self.change = change
         super().__init__(message)
 
 
@@ -44,12 +46,21 @@ class ToolExecutionPrecondition(Protocol):
     ) -> object | None:
         ...
 
+    def revalidate(
+        self,
+        tool: Tool,
+        arguments: dict[str, object],
+        prepared: object | None,
+    ) -> object | None:
+        ...
+
     def record_success(
         self,
         tool: Tool,
         arguments: dict[str, object],
         prepared: object | None,
-    ) -> None:
+        result: object,
+    ) -> object | None:
         ...
 
 
@@ -98,6 +109,7 @@ class ToolExecutor:
         on_precondition_failed: (
             Callable[[Tool, ToolPreconditionError], None] | None
         ) = None,
+        on_precondition_recorded: Callable[[object], None] | None = None,
     ) -> object:
         tool = self.registry.get(name)
         prepared: object | None = None
@@ -150,14 +162,29 @@ class ToolExecutor:
                     handler_configured=handler_configured,
                 )
 
+        if self.precondition is not None:
+            try:
+                prepared = self.precondition.revalidate(
+                    tool,
+                    arguments,
+                    prepared,
+                )
+            except ToolPreconditionError as exc:
+                if on_precondition_failed is not None:
+                    on_precondition_failed(tool, exc)
+                raise
+
         if on_tool_started is not None:
             on_tool_started(tool)
 
         result = tool.execute(arguments)
         if self.precondition is not None:
-            self.precondition.record_success(
+            evidence = self.precondition.record_success(
                 tool,
                 arguments,
                 prepared,
+                result,
             )
+            if evidence is not None and on_precondition_recorded is not None:
+                on_precondition_recorded(evidence)
         return result

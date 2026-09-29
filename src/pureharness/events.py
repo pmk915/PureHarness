@@ -21,6 +21,7 @@ AgentEventType = Literal[
     "model_failed",
     "tool_policy_evaluated",
     "workspace_precondition_failed",
+    "workspace_mutated",
     "approval_requested",
     "approval_granted",
     "approval_denied",
@@ -121,6 +122,8 @@ class AgentEventData(TypedDict, total=False):
     duration_seconds: float
     result_character_count: int
     path: str
+    change: str
+    operation: str
 
 
 @dataclass

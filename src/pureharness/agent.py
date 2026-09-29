@@ -54,6 +54,10 @@ from pureharness.tool_selection import (
 )
 from pureharness.tools import Tool, ToolRegistry
 from pureharness.trace import ApprovalTrace, RunTrace, StepTrace
+from pureharness.workspace_discipline import (
+    WorkspaceMutation,
+    WorkspaceSnapshot,
+)
 
 
 @dataclass(frozen=True)
@@ -176,6 +180,11 @@ class Agent:
             self._execution_usage,
             logical_steps_completed=len(self.trace.steps),
         )
+
+    @property
+    def workspace_snapshot(self) -> WorkspaceSnapshot | None:
+        snapshot = getattr(self.tool_executor.precondition, "snapshot", None)
+        return snapshot if isinstance(snapshot, WorkspaceSnapshot) else None
 
     def _emit(self, event: AgentEvent) -> None:
         if event.run_id is None and self._active_record_builder is not None:
@@ -1091,6 +1100,7 @@ class Agent:
         for tool_call in tool_calls:
             self.session.append(tool_call)
             tool_started_at: float | None = None
+            workspace_mutation: WorkspaceMutation | None = None
 
             def on_policy_evaluated(
                 tool: Tool,
@@ -1138,12 +1148,19 @@ class Agent:
                 }
                 if error.path is not None:
                     data["path"] = error.path
+                if error.change is not None:
+                    data["change"] = error.change
                 self._emit(
                     AgentEvent(
                         type="workspace_precondition_failed",
                         data=data,
                     )
                 )
+
+            def on_precondition_recorded(evidence: object) -> None:
+                nonlocal workspace_mutation
+                if isinstance(evidence, WorkspaceMutation):
+                    workspace_mutation = evidence
 
             def on_approval_requested(
                 tool: Tool,
@@ -1213,6 +1230,9 @@ class Agent:
                     on_precondition_failed=(
                         on_precondition_failed
                     ),
+                    on_precondition_recorded=(
+                        on_precondition_recorded
+                    ),
                 )
                 content = str(result)
                 is_error = False
@@ -1254,6 +1274,19 @@ class Agent:
                         },
                     )
                 )
+                if workspace_mutation is not None:
+                    self._emit(
+                        AgentEvent(
+                            type="workspace_mutated",
+                            data={
+                                "step": step,
+                                "name": workspace_mutation.tool_name,
+                                "call_id": tool_call.call_id,
+                                "path": workspace_mutation.path,
+                                "operation": workspace_mutation.operation,
+                            },
+                        )
+                    )
 
         self.trace.steps.append(
             StepTrace(
