@@ -2,7 +2,7 @@
 
 This document separates the implementation that exists today from the intended
 architecture. Sections marked **Current** describe repository behavior through
-the M21.1 coding-evidence milestone. Sections marked **Target**
+the M21.2 Skills-lite milestone. Sections marked **Target**
 describe direction, not implemented APIs.
 
 ## 1. Project positioning
@@ -26,6 +26,7 @@ over a broad framework or a coding-agent product.
 `src/pureharness`. The runtime flow is:
 
 ```text
+             optional pinned Skills -> system guidance -----------------+
                              +-> TaskStateReducer -> system state view --+
 CLI/user input -> Agent -> Session.snapshot()                            +-> Model
   |                          +-> Context compiler -> trajectory view ----+    ^
@@ -59,9 +60,10 @@ construction do not enter the Agent kernel.
 the per-run trace, events, and listener errors, appends the user message to its
 session, and iterates up to `max_steps`. Each step builds model context from a
 session snapshot and calls the model. It independently derives TaskState from
-raw history and compiles the model-facing trajectory, then places the derived
-system state view before the trajectory. An assistant `Message` completes the
-run; one or more `ToolCall` objects are executed before the next model step.
+raw history and compiles the model-facing trajectory, then places optional
+pinned Skill system messages and the derived system state view before the
+trajectory. An assistant `Message` completes the run; one or more `ToolCall`
+objects are executed before the next model step.
 
 Tool exceptions are converted into error `ToolResult` observations. A context
 compilation error, an unrecovered model request error, or exhaustion of the step
@@ -107,6 +109,22 @@ correctness. It does not prove verification success, enter model context or
 TaskState, affect selection/policy/budget, reject completion, or add retries.
 Like ProgressSnapshot, it remains live API and JSONL evidence and is not added
 to RunRecord v2, BenchmarkResult v1, or durable Session v1.
+
+M21.2 adds Skills-lite: a frozen, versioned procedural-guidance value and a
+strict package-resource loader for PureHarness's small built-in Skill document
+format. The generic `Agent` has no active Skills by default. The coding CLI and
+normal internal coding benchmark statically activate `coding-task@1`; benchmark
+callers can pass an explicit empty Skill sequence for a lower-level no-guidance
+baseline. There is no directory discovery, dynamic selection, installation,
+dependency system, executable helper, or plugin mechanism.
+
+Active Skills are deterministically rendered as pinned system messages before
+TaskState and the compiled trajectory on every inference. They are Agent
+configuration, never Session items, so repeated runs re-inject one copy without
+persisting or accumulating guidance. M21.1 CodingEvidence is factual
+observation; an M21.2 Skill is procedural guidance. Neither one controls
+completion yet, and a final model Message retains the existing immediate
+completion behavior.
 
 A dispatched tool action is identified internally by a stable hash of canonical
 JSON containing its tool name and arguments. Dictionary keys are sorted, list
@@ -434,9 +452,9 @@ projection statistics: projected/compacted result counts and raw/projected
 character counts. M9 additionally reports whether trajectory compaction ran,
 source-unit/action counts, original and compacted trajectory estimates, recent
 raw unit/token estimates, and the compactor strategy. These are approximate
-**historical trajectory** tokens only. TaskState and tool definitions are
-measured separately; provider wrappers and provider-specific system
-instructions remain outside these estimates.
+**historical trajectory** tokens only. Active Skills, TaskState, and tool
+definitions are measured separately; provider wrappers and provider-specific
+system instructions remain outside these estimates.
 
 M10 measures selected Tool schemas separately. It serializes each complete
 model-facing function definition (`type`, `name`, `description`, and
@@ -447,22 +465,24 @@ estimates. Selection also reports registered/exposed counts, the all-tools
 schema estimate, and estimated savings. None of these fields is an exact
 provider input-token count.
 
-`CompiledContext.items` remains the trajectory view and does not mix in
-TaskState. By default, immediately before a model call the Agent prepends one
-derived `Message(role="system")` rendered from TaskState. That message is
-estimated separately through the same `TokenEstimator` as
+`CompiledContext.items` remains the trajectory view and does not mix in Skills
+or TaskState. Immediately before a model call the Agent prepends each active
+Skill as a deterministic `Message(role="system")`, followed by the derived
+TaskState system message when enabled. Both are estimated separately through
+the same `TokenEstimator`; Skill estimates are reported as
+`estimated_skill_tokens`, while TaskState uses
 `estimated_task_state_tokens`; `estimated_history_tokens` and an optional
 history budget retain their trajectory-only meanings. The M12-introduced
-disabled mode omits that message and records zero for this estimate without
-changing Session, trajectory compilation, TaskState derivation, or selector
-input.
+TaskState-disabled mode omits only that state message and records zero for its
+estimate without changing active Skills, Session, trajectory compilation,
+TaskState derivation, or selector input.
 
 Tool selection does not belong to `CompiledContext`. Model request preparation
-keeps three independently measurable components: the derived TaskState message,
-the compiled trajectory, and selected complete Tool schemas. Their sum is the
-known request estimate, not an exact provider input-token count, because
-provider wrappers, instructions, and tokenization remain outside these
-estimates.
+keeps four independently measurable components: pinned Skill messages, the
+derived TaskState message, the compiled trajectory, and selected complete Tool
+schemas. Their sum is the known request estimate, not an exact provider
+input-token count, because provider wrappers, instructions, and tokenization
+remain outside these estimates.
 
 M18.4A adds optional proactive request bounds through the immutable
 `ContextLimits(context_window_tokens, reserved_output_tokens)` value object.
@@ -477,8 +497,8 @@ calculations:
 
 ```text
 usable_input_tokens = context_window_tokens - reserved_output_tokens
-known_request_tokens = history + TaskState + exposed tool schemas
-available_history_tokens = usable_input_tokens - TaskState - exposed tool schemas
+known_request_tokens = history + Skills + TaskState + exposed tool schemas
+available_history_tokens = usable_input_tokens - Skills - TaskState - exposed tool schemas
 ```
 
 If the normally compiled candidate fits, it is used unchanged. If its known
@@ -495,7 +515,8 @@ the accepted bounded view, not the discarded candidate. Raw Session items and
 TaskState derivation remain untouched. If non-history costs leave no positive
 history budget, or if the newest indivisible unit cannot fit, a
 `ContextBudgetExceeded` failure occurs at context preparation before any model
-call.
+call. Skills are pinned non-history context and are never dropped to make room
+for history.
 
 M18.4B adds the distinct reactive path for the approximation gap that remains
 after proactive accounting. If the provider rejects an attempted request with
@@ -507,8 +528,9 @@ recovery_history_budget = floor(previous_estimated_history_tokens / 2)
 
 The Agent calls the same configured `ContextBuilder.compile_bounded()` against
 the raw step Session snapshot. The result must have strictly fewer estimated
-history tokens. TaskState and exposed tools remain unchanged, and the smaller
-context is retried in the same logical step. This works whether or not explicit
+history tokens. Active Skills, TaskState, and exposed tools remain unchanged,
+and the smaller context is retried in the same logical step. This works whether
+or not explicit
 `ContextLimits` were configured because it derives the emergency budget from
 the history actually attempted rather than guessing a provider capacity.
 
@@ -640,6 +662,10 @@ evidence. Abandoned physical attempts and their token/cost metrics are not
 persisted in RunRecord v1 or v2. Retry-attempt cost accounting is deferred.
 Physical `ExecutionUsage` counters and execution-budget event payloads likewise
 remain runtime evidence and are not added to either persisted schema.
+Skill token accounting is observable in live `context_built` telemetry in
+M21.2 but is not persisted in RunRecord v2. It is not folded into history or
+TaskState estimates, whose meanings remain unchanged. A future RunRecord schema
+may add a dedicated Skill metric if persistence is justified.
 `tool_call_count` counts requests returned by the model, including calls
 rejected before execution;
 `tool_execution_count` counts calls that actually passed exposure and policy
@@ -878,7 +904,7 @@ Event payloads use the following current contract:
 | --- | --- |
 | `agent_started` | `history_item_count` before the new user message |
 | `context_build_started` | `step`, `history_item_count` |
-| `context_built` | `step`, history/final-context/trajectory counts, strategy, separate estimated history and TaskState tokens, safe TaskState aggregate counts, total/included/dropped units, projected/compacted result counts, raw/projected result character counts, aggregate trajectory-compaction statistics, optional history budget, and—when explicit limits are configured—window/reserve/usable-input values, final known-request estimate, available history, pressure detection, and whether bounded history was applied |
+| `context_built` | `step`, history/final-context/trajectory counts, strategy, active Skill count/versioned IDs and separate estimated Skill/history/TaskState tokens, safe TaskState aggregate counts, total/included/dropped units, projected/compacted result counts, raw/projected result character counts, aggregate trajectory-compaction statistics, optional history budget, and—when explicit limits are configured—window/reserve/usable-input values, final known-request estimate, available history, pressure detection, and whether bounded history was applied |
 | `context_window_exceeded` | `step`, normalized error type, whether recovery remains available, optional next recovery attempt, and maximum context recoveries |
 | `context_recovering` | `step`, recovery attempt/limit, overflow error type, previous history/request estimates, emergency history budget, and optional recovered history/request estimates when recompilation succeeds |
 | `context_build_failed` | `step`, `reason`, `error_type` |
@@ -950,6 +976,10 @@ schema change. M19.2 adds the optional factual stale `change`; M19.3 adds
 M21.1 adds `coding_evidence_snapshot` under the same additive JSONL v1 rule.
 The snapshot remains live telemetry and is not written to RunRecord v2,
 BenchmarkResult v1, or durable Session v1.
+
+M21.2 adds `active_skill_count`, `active_skill_ids`, and
+`estimated_skill_tokens` to `context_built` under that same additive JSONL v1
+rule. It does not change the event wire version.
 
 The live wire schema is not the RunRecord persistence schema. Live events are
 transient execution observations; RunRecord remains finalized versioned

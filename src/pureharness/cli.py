@@ -40,6 +40,7 @@ from pureharness.run_record import (
 )
 from pureharness.runtime import ExecutionBudget
 from pureharness.session import Session
+from pureharness.skills import default_coding_skills
 from pureharness.session_store import (
     DurableSession,
     DurableSessionStore,
@@ -849,6 +850,7 @@ def _create_agent(
         max_steps=max_steps,
         context_limits=context_limits,
         execution_budget=execution_budget,
+        skills=default_coding_skills(),
     )
 
 

@@ -48,6 +48,9 @@ class AgentEventData(TypedDict, total=False):
     trajectory_item_count: int
     context_strategy: str
     estimated_history_tokens: int
+    active_skill_count: int
+    active_skill_ids: list[str]
+    estimated_skill_tokens: int
     estimated_task_state_tokens: int
     context_window_tokens: int
     reserved_output_tokens: int

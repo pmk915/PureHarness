@@ -398,6 +398,7 @@ def test_task_state_disabled_baseline_sends_only_trajectory(tmp_path):
     runner = BenchmarkRunner(
         lambda task, config: model,
         run_id_factory=lambda: "raw-baseline-run",
+        skills=(),
     )
 
     result = runner.run_case(
@@ -411,6 +412,27 @@ def test_task_state_disabled_baseline_sends_only_trajectory(tmp_path):
         if isinstance(item, Message)
     ] == [task.prompt]
     assert result.run_record.sum_estimated_task_state_tokens == 0
+
+
+def test_benchmark_coding_profile_activates_builtin_skill_by_default(
+    tmp_path,
+):
+    task = _fixture_task(tmp_path)
+    model = ScriptedModel(
+        [Message(role="assistant", content="done")]
+    )
+    runner = BenchmarkRunner(lambda task, config: model)
+
+    runner.run_case(task, default_benchmark_configs()[0])
+
+    first = model.contexts[0][0]
+    assert isinstance(first, Message)
+    assert first.role == "system"
+    assert first.content.startswith("[PureHarness Active Skill]")
+    assert "Name: coding-task" in first.content
+    assert tuple(skill.identifier for skill in runner.skills) == (
+        "coding-task@1",
+    )
 
 
 def test_large_output_fixture_records_tool_result_projection():

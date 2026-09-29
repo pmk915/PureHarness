@@ -1,4 +1,4 @@
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from time import perf_counter
 from uuid import uuid4
@@ -39,6 +39,7 @@ from pureharness.runtime import (
     RuntimeStage,
 )
 from pureharness.session import Session
+from pureharness.skills import Skill, normalize_skills, render_skill
 from pureharness.task_state import (
     TaskState,
     TaskStateError,
@@ -69,6 +70,8 @@ class _PreparedContext:
     task_state: TaskState
     compiled: CompiledContext
     model_items: tuple[AgentItem, ...]
+    skill_items: tuple[Message, ...]
+    estimated_skill_tokens: int
     estimated_task_state_tokens: int
     task_state_item: Message | None
 
@@ -92,6 +95,7 @@ class Agent:
         max_context_recoveries: int = 1,
         context_limits: ContextLimits | None = None,
         execution_budget: ExecutionBudget | None = None,
+        skills: Sequence[Skill] = (),
     ):
         if not isinstance(include_task_state, bool):
             raise ValueError("include_task_state must be bool")
@@ -157,6 +161,7 @@ class Agent:
         self.max_context_recoveries = max_context_recoveries
         self.context_limits = context_limits
         self.execution_budget = execution_budget or ExecutionBudget()
+        self._skills = normalize_skills(skills)
         self._execution_usage = ExecutionUsage()
         self._progress_tracker = ProgressTracker()
         self._coding_evidence_tracker = CodingEvidenceTracker()
@@ -189,6 +194,10 @@ class Agent:
     @property
     def coding_evidence_snapshot(self) -> CodingEvidenceSnapshot:
         return self._coding_evidence_tracker.snapshot
+
+    @property
+    def active_skill_ids(self) -> tuple[str, ...]:
+        return tuple(skill.identifier for skill in self._skills)
 
     @property
     def workspace_snapshot(self) -> WorkspaceSnapshot | None:
@@ -410,6 +419,12 @@ class Agent:
         history: list[AgentItem],
         task_state: TaskState,
     ) -> _PreparedContext:
+        skill_items = tuple(render_skill(skill) for skill in self._skills)
+        estimated_skill_tokens = (
+            self.context_builder.estimate_tokens(skill_items)
+            if skill_items
+            else 0
+        )
         if self.include_task_state:
             task_state_item = render_task_state(task_state)
             estimated_task_state_tokens = (
@@ -420,14 +435,17 @@ class Agent:
             estimated_task_state_tokens = 0
 
         compiled = self.context_builder.compile(history)
-        model_items = list(compiled.items)
+        model_items: list[AgentItem] = list(skill_items)
         if task_state_item is not None:
-            model_items.insert(0, task_state_item)
+            model_items.append(task_state_item)
+        model_items.extend(compiled.items)
 
         prepared = _PreparedContext(
             task_state=task_state,
             compiled=compiled,
             model_items=tuple(model_items),
+            skill_items=skill_items,
+            estimated_skill_tokens=estimated_skill_tokens,
             estimated_task_state_tokens=estimated_task_state_tokens,
             task_state_item=task_state_item,
         )
@@ -446,7 +464,8 @@ class Agent:
         assert limits is not None
         usable_input_tokens = limits.usable_input_tokens
         non_history_tokens = (
-            prepared.estimated_task_state_tokens
+            prepared.estimated_skill_tokens
+            + prepared.estimated_task_state_tokens
             + selection.estimated_tool_schema_tokens
         )
         available_history_tokens = (
@@ -455,7 +474,8 @@ class Agent:
 
         if available_history_tokens <= 0:
             raise ContextBudgetExceeded(
-                "TaskState and exposed tool schemas require "
+                "Pinned non-history context (active Skills, TaskState, and "
+                "exposed tool schemas) requires "
                 f"{non_history_tokens} estimated input tokens, leaving "
                 "no positive history budget within the usable input "
                 f"capacity of {usable_input_tokens}."
@@ -473,13 +493,16 @@ class Agent:
                 history,
                 available_history_tokens,
             )
-            model_items = list(compiled.items)
+            model_items: list[AgentItem] = list(prepared.skill_items)
             if prepared.task_state_item is not None:
-                model_items.insert(0, prepared.task_state_item)
+                model_items.append(prepared.task_state_item)
+            model_items.extend(compiled.items)
             final_prepared = _PreparedContext(
                 task_state=prepared.task_state,
                 compiled=compiled,
                 model_items=tuple(model_items),
+                skill_items=prepared.skill_items,
+                estimated_skill_tokens=prepared.estimated_skill_tokens,
                 estimated_task_state_tokens=(
                     prepared.estimated_task_state_tokens
                 ),
@@ -520,6 +543,7 @@ class Agent:
             prepared.task_state,
             prepared.compiled,
             len(prepared.model_items),
+            prepared.estimated_skill_tokens,
             prepared.estimated_task_state_tokens,
         )
         if pressure_data is not None:
@@ -533,6 +557,7 @@ class Agent:
         task_state: TaskState,
         compiled: CompiledContext,
         context_item_count: int,
+        estimated_skill_tokens: int,
         estimated_task_state_tokens: int,
     ) -> dict[str, object]:
         data = {
@@ -542,6 +567,9 @@ class Agent:
             "trajectory_item_count": len(compiled.items),
             "context_strategy": compiled.strategy,
             "estimated_history_tokens": compiled.estimated_tokens,
+            "active_skill_count": len(self._skills),
+            "active_skill_ids": list(self.active_skill_ids),
+            "estimated_skill_tokens": estimated_skill_tokens,
             "estimated_task_state_tokens": estimated_task_state_tokens,
             "current_request_present": (
                 task_state.current_request is not None
@@ -846,13 +874,16 @@ class Agent:
                 "smaller estimated history."
             )
 
-        model_items = list(compiled.items)
+        model_items: list[AgentItem] = list(previous.skill_items)
         if previous.task_state_item is not None:
-            model_items.insert(0, previous.task_state_item)
+            model_items.append(previous.task_state_item)
+        model_items.extend(compiled.items)
         return _PreparedContext(
             task_state=previous.task_state,
             compiled=compiled,
             model_items=tuple(model_items),
+            skill_items=previous.skill_items,
+            estimated_skill_tokens=previous.estimated_skill_tokens,
             estimated_task_state_tokens=(
                 previous.estimated_task_state_tokens
             ),
@@ -871,7 +902,8 @@ class Agent:
         recovered: _PreparedContext | None = None,
     ) -> None:
         non_history_tokens = (
-            previous.estimated_task_state_tokens
+            previous.estimated_skill_tokens
+            + previous.estimated_task_state_tokens
             + selection.estimated_tool_schema_tokens
         )
         data: dict[str, object] = {

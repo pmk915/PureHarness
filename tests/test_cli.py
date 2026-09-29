@@ -659,6 +659,7 @@ def test_one_shot_agent_has_no_interactive_approval_handler(tmp_path):
         agent.tool_executor.precondition,
         WorkspaceDiscipline,
     )
+    assert agent.active_skill_ids == ("coding-task@1",)
 
 
 def test_one_shot_failure_has_nonzero_exit_without_traceback(tmp_path):

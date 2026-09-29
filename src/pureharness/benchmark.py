@@ -23,6 +23,7 @@ from pureharness.execution import (
 )
 from pureharness.model import Model
 from pureharness.run_record import RunRecord, run_record_end_reasons
+from pureharness.skills import Skill, default_coding_skills, normalize_skills
 from pureharness.tool_result_projection import (
     DeterministicToolResultProjector,
     IdentityToolResultProjector,
@@ -520,6 +521,7 @@ class BenchmarkRunner:
         ),
         workspace_parent: str | Path | None = None,
         run_id_factory: Callable[[], str] | None = None,
+        skills: Sequence[Skill] | None = None,
     ) -> None:
         if not callable(model_factory):
             raise ValueError("model_factory must be callable")
@@ -548,6 +550,11 @@ class BenchmarkRunner:
             else Path(workspace_parent)
         )
         self.run_id_factory = run_id_factory
+        self.skills = (
+            default_coding_skills()
+            if skills is None
+            else normalize_skills(skills)
+        )
 
     def run_case(
         self,
@@ -639,6 +646,7 @@ class BenchmarkRunner:
                 tool_selector=tool_selector,
                 include_task_state=config.include_task_state,
                 run_id_factory=self.run_id_factory,
+                skills=self.skills,
             )
             agent_error_type: str | None = None
 

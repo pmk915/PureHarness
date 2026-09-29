@@ -206,6 +206,33 @@ def test_wire_serializer_maps_context_recovery_event():
     }
 
 
+def test_wire_serializer_maps_additive_skill_context_fields():
+    event = AgentEvent(
+        type="context_built",
+        data={
+            "step": 0,
+            "active_skill_count": 1,
+            "active_skill_ids": ["coding-task@1"],
+            "estimated_skill_tokens": 42,
+        },
+        timestamp=datetime(2026, 9, 20, 10, 0, tzinfo=timezone.utc),
+        run_id="run-skills",
+    )
+
+    assert event_to_wire(event) == {
+        "schema_version": 1,
+        "event": "context_built",
+        "timestamp": "2026-09-20T10:00:00Z",
+        "run_id": "run-skills",
+        "step": 0,
+        "payload": {
+            "active_skill_count": 1,
+            "active_skill_ids": ["coding-task@1"],
+            "estimated_skill_tokens": 42,
+        },
+    }
+
+
 def test_wire_serializer_maps_context_window_exceeded_event():
     event = AgentEvent(
         type="context_window_exceeded",
