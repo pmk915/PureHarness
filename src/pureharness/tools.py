@@ -21,6 +21,10 @@ class RiskLevel(str, Enum):
     DESTRUCTIVE = "destructive"
 
 
+class ToolArgumentError(ValueError):
+    """A tool call does not match its basic object argument contract."""
+
+
 @dataclass
 class Tool:
     name: str
@@ -32,7 +36,42 @@ class Tool:
     side_effects: bool = False
     run_resource: ToolRunResource | None = None
 
+    def validate_arguments(self, arguments: dict[str, object]) -> None:
+        properties = self.parameters.get("properties", {})
+        if not isinstance(properties, dict):
+            return
+        allowed = sorted(str(name) for name in properties)
+        unknown = (
+            sorted(
+                str(name) for name in arguments if name not in properties
+            )
+            if self.parameters.get("additionalProperties") is False
+            else []
+        )
+        if unknown:
+            noun = "argument" if len(unknown) == 1 else "arguments"
+            values = ", ".join(repr(name) for name in unknown)
+            allowed_values = ", ".join(allowed) or "(none)"
+            raise ToolArgumentError(
+                f"Tool '{self.name}' received unknown {noun} {values}. "
+                f"Allowed arguments: {allowed_values}."
+            )
+
+        required = self.parameters.get("required", [])
+        if not isinstance(required, list):
+            return
+        missing = sorted(
+            str(name) for name in required if name not in arguments
+        )
+        if missing:
+            noun = "argument" if len(missing) == 1 else "arguments"
+            values = ", ".join(repr(name) for name in missing)
+            raise ToolArgumentError(
+                f"Tool '{self.name}' is missing required {noun} {values}."
+            )
+
     def execute(self, arguments: dict[str, object]) -> object:
+        self.validate_arguments(arguments)
         return self.function(**arguments)
 
 
@@ -76,6 +115,7 @@ ADD_TOOL = Tool(
     description="Add two integers and return the result.",
     parameters={
         "type": "object",
+        "additionalProperties": False,
         "properties": {
             "a": {
                 "type": "integer",

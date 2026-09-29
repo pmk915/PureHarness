@@ -202,6 +202,7 @@ def create_list_files_tool(workspace: Path) -> Tool:
         ),
         parameters={
             "type": "object",
+            "additionalProperties": False,
             "properties": {
                 "path": {
                     "type": "string",
@@ -348,6 +349,7 @@ def create_search_text_tool(workspace: Path) -> Tool:
         ),
         parameters={
             "type": "object",
+            "additionalProperties": False,
             "properties": {
                 "query": {
                     "type": "string",
@@ -502,6 +504,7 @@ def create_find_files_tool(workspace: Path) -> Tool:
         ),
         parameters={
             "type": "object",
+            "additionalProperties": False,
             "properties": {
                 "pattern": {
                     "type": "string",
@@ -549,6 +552,7 @@ def create_read_file_tool(workspace: Path) -> Tool:
         ),
         parameters={
             "type": "object",
+            "additionalProperties": False,
             "properties": {
                 "path": {
                     "type": "string",
@@ -626,6 +630,7 @@ def create_read_file_range_tool(workspace: Path) -> Tool:
         ),
         parameters={
             "type": "object",
+            "additionalProperties": False,
             "properties": {
                 "path": {
                     "type": "string",
@@ -686,6 +691,7 @@ def create_write_file_tool(workspace: Path) -> Tool:
         ),
         parameters={
             "type": "object",
+            "additionalProperties": False,
             "properties": {
                 "path": {
                     "type": "string",
@@ -757,6 +763,7 @@ def create_apply_patch_tool(workspace: Path) -> Tool:
         ),
         parameters={
             "type": "object",
+            "additionalProperties": False,
             "properties": {
                 "path": {
                     "type": "string",
@@ -836,6 +843,7 @@ def create_run_command_tool(
         ),
         parameters={
             "type": "object",
+            "additionalProperties": False,
             "properties": {
                 "argv": {
                     "type": "array",
@@ -926,6 +934,7 @@ def create_process_tools(
             ),
             parameters={
                 "type": "object",
+                "additionalProperties": False,
                 "properties": {
                     "argv": {
                         "type": "array",
@@ -957,6 +966,7 @@ def create_process_tools(
             ),
             parameters={
                 "type": "object",
+                "additionalProperties": False,
                 "properties": {
                     "job_id": {
                         "type": "string",
@@ -980,6 +990,7 @@ def create_process_tools(
             ),
             parameters={
                 "type": "object",
+                "additionalProperties": False,
                 "properties": {
                     "job_id": {
                         "type": "string",
@@ -1047,6 +1058,7 @@ def create_git_status_tool(
         ),
         parameters={
             "type": "object",
+            "additionalProperties": False,
             "properties": {},
             "required": [],
         },
@@ -1097,6 +1109,7 @@ def create_git_diff_tool(
         ),
         parameters={
             "type": "object",
+            "additionalProperties": False,
             "properties": {
                 "path": {
                     "type": "string",

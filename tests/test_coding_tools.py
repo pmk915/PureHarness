@@ -86,6 +86,10 @@ def test_coding_tools_have_expected_metadata(tmp_path):
         "git_status": ("git", RiskLevel.READ, False),
         "git_diff": ("git", RiskLevel.READ, False),
     }
+    assert all(
+        tool.parameters["additionalProperties"] is False
+        for tool in tools
+    )
 
 
 def test_list_files_returns_nested_deterministic_listing(

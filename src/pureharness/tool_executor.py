@@ -116,6 +116,7 @@ class ToolExecutor:
         on_precondition_recorded: Callable[[object], None] | None = None,
     ) -> object:
         tool = self.registry.get(name)
+        tool.validate_arguments(arguments)
         prepared: object | None = None
         if self.precondition is not None:
             try:

@@ -54,8 +54,13 @@ class CapturingModel:
 
 
 class ToolThenMessageModel:
-    def __init__(self, tool_name: str) -> None:
+    def __init__(
+        self,
+        tool_name: str,
+        arguments: dict[str, object] | None = None,
+    ) -> None:
         self.tool_name = tool_name
+        self.arguments = arguments or {}
         self.tool_lists = []
 
     def generate(self, messages, tools):
@@ -65,7 +70,7 @@ class ToolThenMessageModel:
             return [
                 ToolCall(
                     name=self.tool_name,
-                    arguments={},
+                    arguments=self.arguments,
                     call_id="call-1",
                 )
             ]
@@ -290,16 +295,18 @@ def test_hidden_tool_call_becomes_error_before_policy_or_side_effect():
 
     visible = _tool("visible")
     hidden = _tool("hidden", function=hidden_tool)
+    run_command = _tool("run_command")
     registry = ToolRegistry()
     registry.register(visible)
     registry.register(hidden)
+    registry.register(run_command)
     policy = RecordingPolicy(PolicyDecision.ALLOW)
     model = ToolThenMessageModel("hidden")
     agent = Agent(
         model=model,
         tools=registry,
         tool_executor=ToolExecutor(registry, policy),
-        tool_selector=StaticToolSelector(["visible"]),
+        tool_selector=StaticToolSelector(["visible", "run_command"]),
         max_steps=2,
     )
 
@@ -313,11 +320,42 @@ def test_hidden_tool_call_becomes_error_before_policy_or_side_effect():
     )
     assert result.is_error is True
     assert "ToolNotExposedError" in result.content
-    assert "was not exposed" in result.content
+    assert "is unavailable for this inference" in result.content
+    assert "Available tools: run_command, visible" in result.content
+    assert "Use run_command for external commands" in result.content
     assert not any(
         event.type == "tool_policy_evaluated"
         for event in agent.events
     )
+
+
+def test_invalid_tool_arguments_are_recoverable_without_dispatch():
+    effects = []
+    tool = _tool("visible", function=lambda value=None: effects.append(value))
+    tool.parameters["additionalProperties"] = False
+    registry = ToolRegistry()
+    registry.register(tool)
+    policy = RecordingPolicy(PolicyDecision.ALLOW)
+    agent = Agent(
+        model=ToolThenMessageModel(
+            "visible",
+            {"unexpected": True},
+        ),
+        tools=registry,
+        tool_executor=ToolExecutor(registry, policy),
+        max_steps=2,
+    )
+
+    assert agent.run("try malformed arguments") == "done"
+    assert effects == []
+    assert policy.calls == []
+    result = next(
+        item for item in agent.messages if isinstance(item, ToolResult)
+    )
+    assert result.is_error is True
+    assert "ToolArgumentError" in result.content
+    assert "unexpected" in result.content
+    assert not any(event.type == "tool_started" for event in agent.events)
 
 
 def test_exposed_tool_call_still_requires_policy_authorization():

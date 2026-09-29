@@ -4,6 +4,7 @@ from pureharness.tools import (
     ADD_TOOL,
     RiskLevel,
     Tool,
+    ToolArgumentError,
     ToolRegistry,
 )
 
@@ -97,3 +98,55 @@ def test_registry_deduplicates_and_manages_shared_run_resources():
     registry.cleanup_run_state()
 
     assert calls == ["reset", "cleanup"]
+
+
+def test_tool_preserves_explicit_object_schema_contract():
+    parameters = {
+        "type": "object",
+        "properties": {"value": {"type": "string"}},
+        "additionalProperties": True,
+    }
+
+    tool = Tool(
+        name="identity",
+        description="Return a value.",
+        parameters=parameters,
+        function=lambda value: value,
+    )
+
+    assert tool.parameters["additionalProperties"] is True
+    assert parameters["additionalProperties"] is True
+
+
+def test_tool_rejects_unknown_arguments_with_deterministic_feedback():
+    tool = Tool(
+        name="inspect",
+        description="Inspect a path.",
+        parameters={
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "path": {"type": "string"},
+                "max_depth": {"type": "integer"},
+            },
+            "required": ["path"],
+        },
+        function=lambda path, max_depth=1: (path, max_depth),
+    )
+
+    with pytest.raises(
+        ToolArgumentError,
+        match=(
+            r"Tool 'inspect' received unknown argument 'surprise'\. "
+            r"Allowed arguments: max_depth, path\."
+        ),
+    ):
+        tool.execute({"path": ".", "surprise": True})
+
+
+def test_tool_rejects_missing_required_arguments_deterministically():
+    with pytest.raises(
+        ToolArgumentError,
+        match=r"Tool 'add' is missing required arguments 'a', 'b'\.",
+    ):
+        ADD_TOOL.execute({})

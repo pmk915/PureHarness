@@ -1217,7 +1217,10 @@ class Agent:
 
             try:
                 if tool_call.name not in exposed_tool_names:
-                    raise ToolNotExposedError(tool_call.name)
+                    raise ToolNotExposedError(
+                        tool_call.name,
+                        exposed_tool_names,
+                    )
 
                 self._progress_tracker.record_tool_action(
                     tool_call.name,

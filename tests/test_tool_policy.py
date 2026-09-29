@@ -11,7 +11,12 @@ from pureharness.tool_policy import (
     PolicyDecision,
     ToolPolicyError,
 )
-from pureharness.tools import RiskLevel, Tool, ToolRegistry
+from pureharness.tools import (
+    RiskLevel,
+    Tool,
+    ToolArgumentError,
+    ToolRegistry,
+)
 
 
 class StaticPolicy:
@@ -111,6 +116,37 @@ def test_executor_evaluates_policy_before_allowed_tool():
 
     assert result == {"unchanged": True}
     assert calls == ["policy", "tool"]
+
+
+def test_executor_rejects_invalid_arguments_before_policy_or_tool():
+    calls = []
+
+    class RecordingPolicy:
+        def evaluate(self, tool, arguments):
+            calls.append("policy")
+            return PolicyDecision.ALLOW
+
+    tool = Tool(
+        name="required_tool",
+        description="Requires a value.",
+        parameters={
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {"value": {"type": "string"}},
+            "required": ["value"],
+        },
+        function=lambda value: calls.append(value),
+    )
+    registry = ToolRegistry()
+    registry.register(tool)
+
+    with pytest.raises(ToolArgumentError, match="missing required"):
+        ToolExecutor(registry, RecordingPolicy()).execute(
+            "required_tool",
+            {},
+        )
+
+    assert calls == []
 
 
 @pytest.mark.parametrize(

@@ -16,10 +16,22 @@ class ToolSelectionError(RuntimeError):
 class ToolNotExposedError(RuntimeError):
     """Raised when a model calls a tool absent from its exposed schemas."""
 
-    def __init__(self, tool_name: str) -> None:
+    def __init__(
+        self,
+        tool_name: str,
+        available_tools: Iterable[str] = (),
+    ) -> None:
         self.tool_name = tool_name
+        self.available_tools = tuple(sorted(available_tools))
+        available = ", ".join(self.available_tools) or "(none)"
+        command_guidance = (
+            " Use run_command for external commands."
+            if "run_command" in self.available_tools
+            else ""
+        )
         super().__init__(
-            f"Tool '{tool_name}' was not exposed for this inference."
+            f"Tool '{tool_name}' is unavailable for this inference. "
+            f"Available tools: {available}.{command_guidance}"
         )
 
 
