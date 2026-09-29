@@ -2,7 +2,7 @@
 
 This document separates the implementation that exists today from the intended
 architecture. Sections marked **Current** describe repository behavior through
-the M16 observability and machine-interface milestone. Sections marked **Target**
+the M20 coding-capability milestone. Sections marked **Target**
 describe direction, not implemented APIs.
 
 ## 1. Project positioning
@@ -146,6 +146,7 @@ For the standard coding-tool composition, M19 injects a run-scoped
 ```text
 execution-budget batch preflight
     -> progress action observation
+    -> basic closed-schema argument validation
     -> workspace prepare (read-before-edit and initial freshness check)
     -> ToolPolicy
     -> ApprovalHandler when required
@@ -212,9 +213,11 @@ the Python callable that executes the tool. M2 adds explicit `category`,
 read-only defaults for backward compatibility. `RiskLevel` contains only
 `READ`, `WRITE`, `EXECUTE`, and the reserved `DESTRUCTIVE` value.
 
-`ToolRegistry` only registers tools by name, looks them up, and lists its full
+`ToolRegistry` registers tools by name, looks them up, and lists its full
 capability set. Registration replaces an existing tool with the same name. It
-does not execute tools, select tools, enforce policy, inspect model context, or
+also deduplicates optional run-scoped resources attached to tools so Agent can
+reset and clean those resources without learning their concrete type. It does
+not execute tools, select tools, enforce policy, inspect model context, or
 choose an execution backend.
 
 `ToolSelector` is the narrow per-inference visibility port. Its input is the
@@ -234,7 +237,9 @@ Tool definitions are the atomic exposure unit; descriptions and parameter
 schemas are never truncated or rewritten.
 
 `ToolExecutor` is the canonical runtime path from an Agent tool call to a tool
-implementation. It looks up the tool, evaluates an optional run-scoped
+implementation. It looks up the tool, validates the basic declared object
+contract (unknown fields for explicitly closed schemas and missing required
+fields), then evaluates an optional run-scoped
 execution precondition, and then asks the injected `ToolPolicy` to classify the
 tool and arguments. The precondition is state validity, not authorization, and
 generic executors have none by default. `ALLOW` proceeds directly; `DENY`
@@ -920,30 +925,38 @@ evidence.
 ### Coding tools
 
 `coding_tools.py` remains outside the runtime loop and exposes explicit factory
-functions assembled by `create_coding_tools(workspace, execution_backend=...)`:
+functions assembled by `create_coding_tools(workspace, execution_backend=...,
+process_manager=...)`:
 
 | Tool | Category | Risk | Side effects |
 | --- | --- | --- | --- |
 | `list_files` | filesystem | `READ` | no |
+| `find_files` | filesystem | `READ` | no |
 | `search_text` | filesystem | `READ` | no |
+| `read_file_range` | filesystem | `READ` | no |
 | `read_file` | filesystem | `READ` | no |
 | `write_file` | filesystem | `WRITE` | yes |
 | `apply_patch` | filesystem | `WRITE` | yes |
 | `run_command` | execution | `EXECUTE` | yes |
+| `start_process` | process | `EXECUTE` | yes |
+| `poll_process` | process | `READ` | no |
+| `stop_process` | process | `EXECUTE` | yes |
 | `git_status` | git | `READ` | no |
 | `git_diff` | git | `READ` | no |
 
 Filesystem tools reject resolved paths outside the selected workspace.
-`list_files` is deterministic, depth/entry bounded, and skips noisy directories
-and symlinks. `search_text` performs bounded case-sensitive literal search over
-small UTF-8 files and skips binary, undecodable, large, noisy-directory, and
-symlink content. `apply_patch` performs one exact replacement only after proving
-the old text occurs exactly once.
+`list_files` and `find_files` are deterministic and bounded and skip noisy
+directories and symlinks. `search_text` retains case-sensitive literal matching
+by default and adds bounded regex, case-insensitive, and file-glob filtering over
+small UTF-8 files. `read_file_range` returns bounded line-numbered inspection;
+`read_file` remains the full-file observation operation. `apply_patch` performs
+one exact replacement only after proving the old text occurs exactly once.
 
 M19 canonicalizes all structured file targets with these same workspace path
 resolution rules, so aliases such as `src/./a.py` and `src/foo/../a.py` share
 one identity and resolved escapes remain rejected. Only full, successful
-`read_file` calls establish read-before-edit evidence; `search_text`,
+`read_file` calls establish read-before-edit evidence; `read_file_range`,
+`find_files`, `search_text`,
 `list_files`, Git tools, `run_command`, TaskState, and previous Runs do not.
 M19.1 establishes current-Run prior observation. M19.2 stores an internal
 SHA-256 fingerprint of the exact model-visible UTF-8 read result, compares it
@@ -962,13 +975,22 @@ structured edit detects command-induced content changes through the normal
 freshness check. Revalidation narrows the TOCTOU window; it does not provide
 filesystem locking, an atomic compare-and-swap, or transaction guarantees.
 
-`run_command`, `git_status`, and `git_diff` send argv, the resolved workspace,
-and a timeout through the same injected `ExecutionBackend`. Git tools retain
+`run_command`, `git_status`, and `git_diff` send argv, a resolved working
+directory, and a bounded timeout through the same injected `ExecutionBackend`.
+`run_command` accepts workspace-relative `cwd` and a per-call timeout from one
+to 120 seconds. Its model-facing stdout and stderr are independently bounded
+with deterministic head/tail retention; this does not claim an OS pipe-memory
+limit. Git tools retain
 fixed local read-only commands without arbitrary Git arguments or remote access;
 `git_diff` also disables external diff drivers and text conversion. The tool
 layer converts `CommandResult` back to the existing model-facing strings and
 preserves non-zero Git handling. Filesystem tools continue to use direct Python
 filesystem APIs; M5A still does not introduce a filesystem backend.
+
+Every built-in object tool schema is explicitly closed with
+`additionalProperties: false`. Basic contract errors and unavailable-tool calls
+remain recoverable error ToolResults, with deterministic allowed/available-tool
+feedback. PureHarness does not rewrite a mistaken tool name into another call.
 
 ### Command execution
 
@@ -1027,6 +1049,34 @@ Filesystem tools remain host-side while command and Git tools use the selected
 backend. A Docker command can modify the same writable workspace immediately
 visible to host-side tools. `ToolPolicy` authorization happens above both local
 and Docker execution and does not inspect or select either backend.
+
+### Background process capability
+
+One-shot execution and background jobs are separate ports:
+
+```text
+run_command -----------------------> ExecutionBackend -> CommandResult
+start/poll/stop_process -> ProcessManager -> ProcessObservation
+```
+
+`LocalProcessManager` owns a Run-scoped set of opaque UUID jobs. Start accepts
+argv without a shell and a contained workspace-relative cwd. Poll returns status,
+an exit code when available, and independently bounded stdout/stderr produced
+since the previous poll. Stop sends graceful termination, waits for a bounded
+interval, then force-kills if necessary. At most four jobs may be active.
+
+The shared manager is attached to the three process tools as a run resource.
+`ToolRegistry` deduplicates it, `ToolExecutor` exposes generic reset/cleanup, and
+`Agent.run()` cleans remaining jobs on completion, failure, and interruption.
+The Agent loop does not inspect jobs or implement process workflow. M20 provides
+only local persistent processes; when a custom one-shot backend has no explicit
+process manager, these tools fail with a capability-unavailable error. There is
+no PTY, stdin streaming, interactive terminal, or cross-Run persistence.
+
+Workspace Discipline remains a separate ToolExecutor precondition around
+structured file observation and editing. It does not parse mutations performed
+by `run_command` or a background process; a later structured edit still detects
+changed content through its normal freshness check.
 
 ## 3. Design principles
 
