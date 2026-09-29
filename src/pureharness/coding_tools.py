@@ -1,5 +1,7 @@
+import re
+
 from collections.abc import Iterator
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from pureharness.execution import (
     ExecutionBackend,
@@ -28,6 +30,10 @@ _DEFAULT_SEARCH_MATCHES = 50
 _MAX_SEARCH_MATCHES = 200
 _MAX_SEARCH_FILE_BYTES = 1_000_000
 _MATCH_PREVIEW_LENGTH = 160
+_DEFAULT_RANGE_LINES = 200
+_MAX_RANGE_LINES = 500
+_DEFAULT_FIND_MATCHES = 100
+_MAX_FIND_MATCHES = 500
 _DEFAULT_COMMAND_TIMEOUT_SECONDS = 10.0
 _MIN_COMMAND_TIMEOUT_SECONDS = 1.0
 _MAX_COMMAND_TIMEOUT_SECONDS = 120.0
@@ -227,9 +233,18 @@ def create_search_text_tool(workspace: Path) -> Tool:
         query: str,
         path: str = ".",
         max_matches: int = _DEFAULT_SEARCH_MATCHES,
+        regex: bool = False,
+        case_sensitive: bool = True,
+        file_glob: str | None = None,
     ) -> str:
         if not query:
             raise ValueError("Search query must not be empty.")
+        if not isinstance(regex, bool):
+            raise ValueError("regex must be bool.")
+        if not isinstance(case_sensitive, bool):
+            raise ValueError("case_sensitive must be bool.")
+        if file_glob is not None and not file_glob:
+            raise ValueError("file_glob must not be empty when provided.")
 
         _validate_bounded_integer(
             "max_matches",
@@ -240,6 +255,11 @@ def create_search_text_tool(workspace: Path) -> Tool:
 
         workspace_root = workspace.resolve()
         target = _resolve_workspace_path(workspace_root, path)
+        flags = 0 if case_sensitive else re.IGNORECASE
+        try:
+            pattern = re.compile(query, flags) if regex else None
+        except re.error as exc:
+            raise ValueError(f"Invalid search regex: {exc}") from exc
 
         if target.is_file():
             candidates: Iterator[Path] = iter([target])
@@ -254,6 +274,15 @@ def create_search_text_tool(workspace: Path) -> Tool:
         truncated = False
 
         for candidate in candidates:
+            relative = _relative_path(
+                workspace_root,
+                candidate,
+            )
+            if file_glob is not None and not _glob_matches(
+                relative,
+                file_glob,
+            ):
+                continue
             try:
                 if candidate.stat().st_size > _MAX_SEARCH_FILE_BYTES:
                     continue
@@ -267,16 +296,17 @@ def create_search_text_tool(workspace: Path) -> Tool:
             except (OSError, UnicodeDecodeError):
                 continue
 
-            relative = _relative_path(
-                workspace_root,
-                candidate,
-            )
-
             for line_number, line in enumerate(
                 content.splitlines(),
                 start=1,
             ):
-                if query not in line:
+                match_start = _search_match_start(
+                    line,
+                    query,
+                    pattern=pattern,
+                    case_sensitive=case_sensitive,
+                )
+                if match_start is None:
                     continue
 
                 if len(matches) >= max_matches:
@@ -285,7 +315,7 @@ def create_search_text_tool(workspace: Path) -> Tool:
 
                 matches.append(
                     f"{relative}:{line_number}: "
-                    f"{_matching_line_preview(line, query)}"
+                    f"{_matching_line_preview(line, match_start)}"
                 )
 
             if truncated:
@@ -304,8 +334,9 @@ def create_search_text_tool(workspace: Path) -> Tool:
     return Tool(
         name="search_text",
         description=(
-            "Search UTF-8 text files recursively for a case-sensitive literal "
-            "string and return sorted path:line previews. Results are bounded; "
+            "Search UTF-8 text files recursively using literal or regular-"
+            "expression matching and return sorted path:line previews. Literal, "
+            "case-sensitive matching remains the default. Results are bounded; "
             "binary, large, undecodable, noisy-directory, and symlink content "
             "is skipped. Use read_file to inspect a known match in full."
         ),
@@ -330,6 +361,22 @@ def create_search_text_tool(workspace: Path) -> Tool:
                     "maximum": _MAX_SEARCH_MATCHES,
                     "default": _DEFAULT_SEARCH_MATCHES,
                 },
+                "regex": {
+                    "type": "boolean",
+                    "description": "Interpret query as a regular expression.",
+                    "default": False,
+                },
+                "case_sensitive": {
+                    "type": "boolean",
+                    "description": "Use case-sensitive matching.",
+                    "default": True,
+                },
+                "file_glob": {
+                    "type": "string",
+                    "description": (
+                        "Optional glob matched against workspace-relative files."
+                    ),
+                },
             },
             "required": ["query"],
         },
@@ -340,16 +387,32 @@ def create_search_text_tool(workspace: Path) -> Tool:
     )
 
 
-def _matching_line_preview(
+def _search_match_start(
     line: str,
     query: str,
-) -> str:
+    *,
+    pattern: re.Pattern[str] | None,
+    case_sensitive: bool,
+) -> int | None:
+    if pattern is not None:
+        match = pattern.search(line)
+        return None if match is None else match.start()
+
+    if case_sensitive:
+        index = line.find(query)
+    else:
+        index = line.casefold().find(query.casefold())
+    return None if index < 0 else index
+
+
+def _matching_line_preview(line: str, match_start: int) -> str:
+    leading_characters = len(line) - len(line.lstrip())
     line = line.strip()
+    match_index = max(0, match_start - leading_characters)
 
     if len(line) <= _MATCH_PREVIEW_LENGTH:
         return line
 
-    match_index = line.find(query)
     start = max(0, match_index - 60)
     end = min(
         len(line),
@@ -364,6 +427,100 @@ def _matching_line_preview(
         preview = preview[:-1] + "…"
 
     return preview
+
+
+def _glob_matches(path: str, pattern: str) -> bool:
+    variants = {pattern}
+    pending = [pattern]
+    while pending:
+        candidate = pending.pop()
+        marker = candidate.find("**/")
+        if marker < 0:
+            continue
+        without_recursive_directory = (
+            candidate[:marker] + candidate[marker + 3 :]
+        )
+        if without_recursive_directory not in variants:
+            variants.add(without_recursive_directory)
+            pending.append(without_recursive_directory)
+    relative = PurePosixPath(path)
+    return any(relative.match(candidate) for candidate in variants)
+
+
+def create_find_files_tool(workspace: Path) -> Tool:
+    def find_files(
+        pattern: str,
+        path: str = ".",
+        max_matches: int = _DEFAULT_FIND_MATCHES,
+    ) -> str:
+        if not pattern:
+            raise ValueError("File pattern must not be empty.")
+        _validate_bounded_integer(
+            "max_matches",
+            max_matches,
+            minimum=1,
+            maximum=_MAX_FIND_MATCHES,
+        )
+        workspace_root = workspace.resolve()
+        target = _resolve_workspace_path(workspace_root, path)
+        if not target.is_dir():
+            raise NotADirectoryError(
+                f"Find path is not a directory inside workspace: {path}"
+            )
+
+        matches: list[str] = []
+        truncated = False
+        for candidate in _iter_workspace_files(target):
+            relative = _relative_path(workspace_root, candidate)
+            if not _glob_matches(relative, pattern):
+                continue
+            if len(matches) >= max_matches:
+                truncated = True
+                break
+            matches.append(relative)
+
+        if not matches:
+            return f"No files matching {pattern!r}."
+        if truncated:
+            matches.append(
+                f"... truncated after {max_matches} matches"
+            )
+        return "\n".join(matches)
+
+    return Tool(
+        name="find_files",
+        description=(
+            "Find workspace files by glob pattern with deterministic, bounded "
+            "results. Recursive patterns such as **/*.py are supported; noisy "
+            "directories and symlinks are skipped."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "pattern": {
+                    "type": "string",
+                    "description": "Glob pattern for workspace-relative files.",
+                },
+                "path": {
+                    "type": "string",
+                    "description": "Workspace-relative directory to search.",
+                    "default": ".",
+                },
+                "max_matches": {
+                    "type": "integer",
+                    "description": "Maximum number of paths to return.",
+                    "minimum": 1,
+                    "maximum": _MAX_FIND_MATCHES,
+                    "default": _DEFAULT_FIND_MATCHES,
+                },
+            },
+            "required": ["pattern"],
+        },
+        function=find_files,
+        category="filesystem",
+        risk_level=RiskLevel.READ,
+        side_effects=False,
+    )
 
 
 def create_read_file_tool(workspace: Path) -> Tool:
@@ -397,6 +554,94 @@ def create_read_file_tool(workspace: Path) -> Tool:
             "required": ["path"],
         },
         function=read_file,
+        category="filesystem",
+        risk_level=RiskLevel.READ,
+        side_effects=False,
+    )
+
+
+def create_read_file_range_tool(workspace: Path) -> Tool:
+    def read_file_range(
+        path: str,
+        start_line: int = 1,
+        max_lines: int = _DEFAULT_RANGE_LINES,
+    ) -> str:
+        _validate_bounded_integer(
+            "start_line",
+            start_line,
+            minimum=1,
+            maximum=2_147_483_647,
+        )
+        _validate_bounded_integer(
+            "max_lines",
+            max_lines,
+            minimum=1,
+            maximum=_MAX_RANGE_LINES,
+        )
+        workspace_root = workspace.resolve()
+        target = _resolve_workspace_path(workspace_root, path)
+        content = target.read_text(encoding="utf-8")
+        lines = content.splitlines()
+        total_lines = len(lines)
+        start_index = start_line - 1
+        selected = lines[start_index : start_index + max_lines]
+        canonical_path = _relative_path(workspace_root, target)
+        if not selected:
+            return (
+                f"{canonical_path} lines 0-0 of {total_lines}\n\n"
+                "(no lines in requested range)"
+            )
+
+        end_line = start_line + len(selected) - 1
+        output = [
+            f"{canonical_path} lines {start_line}-{end_line} "
+            f"of {total_lines}",
+            "",
+            *[
+                f"{line_number} | {line}"
+                for line_number, line in enumerate(
+                    selected,
+                    start=start_line,
+                )
+            ],
+        ]
+        if end_line < total_lines:
+            output.append(
+                f"... truncated; {total_lines - end_line} lines remain"
+            )
+        return "\n".join(output)
+
+    return Tool(
+        name="read_file_range",
+        description=(
+            "Inspect a bounded line range of one UTF-8 workspace file with "
+            "line numbers. This partial view does not satisfy read-before-edit; "
+            "use read_file before modifying an existing file."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Workspace-relative file to inspect.",
+                },
+                "start_line": {
+                    "type": "integer",
+                    "description": "One-based first line to return.",
+                    "minimum": 1,
+                    "default": 1,
+                },
+                "max_lines": {
+                    "type": "integer",
+                    "description": "Maximum number of lines to return.",
+                    "minimum": 1,
+                    "maximum": _MAX_RANGE_LINES,
+                    "default": _DEFAULT_RANGE_LINES,
+                },
+            },
+            "required": ["path"],
+        },
+        function=read_file_range,
         category="filesystem",
         risk_level=RiskLevel.READ,
         side_effects=False,
@@ -747,7 +992,9 @@ def create_coding_tools(
 
     return [
         create_list_files_tool(workspace),
+        create_find_files_tool(workspace),
         create_search_text_tool(workspace),
+        create_read_file_range_tool(workspace),
         create_read_file_tool(workspace),
         create_write_file_tool(workspace),
         create_apply_patch_tool(workspace),

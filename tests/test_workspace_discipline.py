@@ -115,6 +115,14 @@ def _read(path: str, call_id: str = "read") -> ToolCall:
     return _call("read_file", {"path": path}, call_id)
 
 
+def _read_range(path: str, call_id: str = "read-range") -> ToolCall:
+    return _call(
+        "read_file_range",
+        {"path": path, "start_line": 1, "max_lines": 20},
+        call_id,
+    )
+
+
 def _write(
     path: str,
     content: str,
@@ -258,6 +266,42 @@ def test_successful_read_authorizes_existing_mutation_in_same_batch(
         item for item in agent.messages if isinstance(item, ToolResult)
     ]
     assert [result.is_error for result in results] == [False, False]
+
+
+def test_partial_range_read_does_not_authorize_edit_but_full_read_does(
+    tmp_path,
+):
+    target = tmp_path / "a.py"
+    target.write_text("before\n", encoding="utf-8")
+    agent, discipline = _agent(
+        tmp_path,
+        [
+            [
+                _read_range("a.py"),
+                _patch("a.py", "before", "after", "blocked"),
+            ],
+            [
+                _read("a.py", "full-read"),
+                _patch("a.py", "before", "after", "allowed"),
+            ],
+            Message(role="assistant", content="done"),
+        ],
+    )
+
+    assert agent.run("inspect then edit") == "done"
+
+    assert target.read_text(encoding="utf-8") == "after\n"
+    assert discipline.observed_paths == ("a.py",)
+    results = [
+        item for item in agent.messages if isinstance(item, ToolResult)
+    ]
+    assert [result.is_error for result in results] == [
+        False,
+        True,
+        False,
+        False,
+    ]
+    assert "ReadBeforeEditError" in results[1].content
 
 
 def test_new_file_creation_becomes_known_for_later_mutations(tmp_path):

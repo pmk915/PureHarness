@@ -6,10 +6,12 @@ import pytest
 from pureharness.coding_tools import (
     create_apply_patch_tool,
     create_coding_tools,
+    create_find_files_tool,
     create_git_diff_tool,
     create_git_status_tool,
     create_list_files_tool,
     create_read_file_tool,
+    create_read_file_range_tool,
     create_run_command_tool,
     create_search_text_tool,
     create_write_file_tool,
@@ -45,7 +47,9 @@ def test_coding_tools_have_expected_metadata(tmp_path):
 
     assert [tool.name for tool in tools] == [
         "list_files",
+        "find_files",
         "search_text",
+        "read_file_range",
         "read_file",
         "write_file",
         "apply_patch",
@@ -65,7 +69,9 @@ def test_coding_tools_have_expected_metadata(tmp_path):
 
     assert metadata == {
         "list_files": ("filesystem", RiskLevel.READ, False),
+        "find_files": ("filesystem", RiskLevel.READ, False),
         "search_text": ("filesystem", RiskLevel.READ, False),
+        "read_file_range": ("filesystem", RiskLevel.READ, False),
         "read_file": ("filesystem", RiskLevel.READ, False),
         "write_file": ("filesystem", RiskLevel.WRITE, True),
         "apply_patch": ("filesystem", RiskLevel.WRITE, True),
@@ -259,6 +265,82 @@ def test_search_text_rejects_path_outside_workspace(tmp_path):
         )
 
 
+def test_search_text_supports_regex_and_case_insensitive_matching(tmp_path):
+    (tmp_path / "syscalls.c").write_text(
+        "SYS_read\nSYS_WRITE\nSYS_open\n",
+        encoding="utf-8",
+    )
+    tool = create_search_text_tool(tmp_path)
+
+    result = tool.execute(
+        {
+            "query": r"SYS_(read|write)",
+            "regex": True,
+            "case_sensitive": False,
+        }
+    )
+
+    assert result.splitlines() == [
+        "syscalls.c:1: SYS_read",
+        "syscalls.c:2: SYS_WRITE",
+    ]
+
+
+def test_search_text_supports_file_glob_filter(tmp_path):
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "match.c").write_text("needle\n", encoding="utf-8")
+    (tmp_path / "src" / "match.py").write_text("needle\n", encoding="utf-8")
+    tool = create_search_text_tool(tmp_path)
+
+    result = tool.execute(
+        {
+            "query": "NEEDLE",
+            "case_sensitive": False,
+            "file_glob": "*.c",
+        }
+    )
+
+    assert result == "src/match.c:1: needle"
+
+
+def test_search_text_rejects_invalid_regex(tmp_path):
+    tool = create_search_text_tool(tmp_path)
+
+    with pytest.raises(ValueError, match="Invalid search regex"):
+        tool.execute({"query": "(", "regex": True})
+
+
+def test_find_files_supports_recursive_globs_and_bounds_results(tmp_path):
+    (tmp_path / "src" / "nested").mkdir(parents=True)
+    (tmp_path / "src" / "direct.py").write_text("", encoding="utf-8")
+    (tmp_path / "src" / "nested" / "deep.py").write_text("", encoding="utf-8")
+    (tmp_path / "top.py").write_text("", encoding="utf-8")
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".git" / "ignored.py").write_text("", encoding="utf-8")
+    tool = create_find_files_tool(tmp_path)
+
+    all_python = tool.execute({"pattern": "**/*.py"})
+    bounded = tool.execute({"pattern": "**/*.py", "max_matches": 2})
+
+    assert all_python.splitlines() == [
+        "src/direct.py",
+        "src/nested/deep.py",
+        "top.py",
+    ]
+    assert bounded.splitlines() == [
+        "src/direct.py",
+        "src/nested/deep.py",
+        "... truncated after 2 matches",
+    ]
+
+
+def test_find_files_rejects_workspace_escape(tmp_path):
+    tool = create_find_files_tool(tmp_path)
+
+    with pytest.raises(ValueError, match="Path escapes workspace"):
+        tool.execute({"pattern": "*", "path": "../outside"})
+
+
 def test_read_file_tool_reads_workspace_file(tmp_path):
     target = tmp_path / "hello.txt"
     target.write_text(
@@ -275,6 +357,54 @@ def test_read_file_tool_reads_workspace_file(tmp_path):
     )
 
     assert result == "hello PureHarness"
+
+
+def test_read_file_range_returns_numbered_bounded_range(tmp_path):
+    target = tmp_path / "example.py"
+    target.write_text(
+        "one\ntwo\nthree\nfour\nfive\n",
+        encoding="utf-8",
+    )
+    tool = create_read_file_range_tool(tmp_path)
+
+    result = tool.execute(
+        {
+            "path": "example.py",
+            "start_line": 2,
+            "max_lines": 2,
+        }
+    )
+
+    assert result.splitlines() == [
+        "example.py lines 2-3 of 5",
+        "",
+        "2 | two",
+        "3 | three",
+        "... truncated; 2 lines remain",
+    ]
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"path": "example.py", "start_line": 0},
+        {"path": "example.py", "max_lines": 0},
+        {"path": "example.py", "max_lines": 501},
+    ],
+)
+def test_read_file_range_enforces_bounds(tmp_path, arguments):
+    (tmp_path / "example.py").write_text("one\n", encoding="utf-8")
+    tool = create_read_file_range_tool(tmp_path)
+
+    with pytest.raises(ValueError):
+        tool.execute(arguments)
+
+
+def test_read_file_range_rejects_path_outside_workspace(tmp_path):
+    tool = create_read_file_range_tool(tmp_path)
+
+    with pytest.raises(ValueError, match="Path escapes workspace"):
+        tool.execute({"path": "../outside.py"})
 
 
 def test_write_file_tool_writes_workspace_file(tmp_path):
