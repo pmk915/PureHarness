@@ -1,7 +1,10 @@
 import asyncio
+import json
+import os
 import shlex
+import subprocess
 
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 
 import pytest
@@ -42,6 +45,34 @@ class FakeEnvironment:
         if self.results:
             return self.results.pop(0)
         return FakeResult()
+
+
+class LocalShellEnvironment:
+    def __init__(self, workdir: Path) -> None:
+        self.task_env_config = SimpleNamespace(workdir=str(workdir))
+        self.default_user = None
+        self.calls: list[dict[str, object]] = []
+        self.results: list[FakeResult] = []
+
+    async def exec(self, **kwargs):
+        self.calls.append(kwargs)
+        command_env = os.environ.copy()
+        command_env.update(kwargs.get("env") or {})
+        completed = subprocess.run(
+            ["bash", "-c", str(kwargs["command"])],
+            cwd=kwargs.get("cwd"),
+            env=command_env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        result = FakeResult(
+            return_code=completed.returncode,
+            stdout=completed.stdout,
+            stderr=completed.stderr,
+        )
+        self.results.append(result)
+        return result
 
 
 @pytest.fixture(autouse=True)
@@ -280,10 +311,72 @@ def test_run_invokes_public_cli_with_safe_arguments_and_record(tmp_path):
     assert "--max-steps 300" in command
     assert "--record /logs/agent/pureharness-run-record.json" in command
     assert "--output jsonl" in command
+    assert "| tee /logs/agent/pureharness-events.jsonl" in command
+    assert command.startswith("set -o pipefail; ")
     assert shlex.quote(instruction) in command
     assert call["cwd"] == "/workspace"
     assert call["env"] == {"DEEPSEEK_API_KEY": "secret-key"}
     assert agent.extra_env == {}
+
+
+@pytest.mark.parametrize("exit_code", [0, 7], ids=["success", "failure"])
+def test_run_persists_clean_jsonl_and_preserves_exit_status(
+    tmp_path,
+    monkeypatch,
+    exit_code,
+):
+    event_values = [
+        {
+            "schema_version": 1,
+            "event": "model_retrying",
+            "run_id": "run-1",
+            "payload": {"attempt": 2},
+        },
+        {
+            "schema_version": 1,
+            "event": "agent_failed",
+            "run_id": "run-1",
+            "payload": {"end_reason": "model_error"},
+        },
+    ]
+    event_lines = [
+        json.dumps(value, separators=(",", ":"))
+        for value in event_values
+    ]
+    executable = tmp_path / "venv/bin/pureharness"
+    executable.parent.mkdir(parents=True)
+    script_lines = [
+        "#!/bin/sh",
+        *[
+            f"printf '%s\\n' {shlex.quote(line)}"
+            for line in event_lines
+        ],
+        f"exit {exit_code}",
+    ]
+    executable.write_text("\n".join(script_lines) + "\n", encoding="utf-8")
+    executable.chmod(0o755)
+    monkeypatch.setattr(
+        "pureharness.harbor_agent._VENV_DIR",
+        PurePosixPath(str(tmp_path / "venv")),
+    )
+
+    agent = make_agent(tmp_path)
+    log_directory = tmp_path / "logs/agent"
+    agent.environment_logs_dir = PurePosixPath(str(log_directory))
+    environment = LocalShellEnvironment(tmp_path)
+
+    if exit_code == 0:
+        asyncio.run(agent.run("test task", environment, AgentContext()))
+    else:
+        with pytest.raises(NonZeroAgentExitCodeError):
+            asyncio.run(agent.run("test task", environment, AgentContext()))
+
+    event_log = log_directory / "pureharness-events.jsonl"
+    persisted_lines = event_log.read_text(encoding="utf-8").splitlines()
+    assert [json.loads(line) for line in persisted_lines] == event_values
+    assert persisted_lines == event_lines
+    assert environment.results[-1].stdout.splitlines() == event_lines
+    assert environment.results[-1].return_code == exit_code
 
 
 def test_run_resolves_missing_workdir_from_container_pwd(tmp_path):

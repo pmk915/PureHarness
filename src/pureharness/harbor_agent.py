@@ -29,6 +29,7 @@ _REPOSITORY_URL = "https://github.com/pmk915/pureharness.git"
 _INSTALL_DIR = PurePosixPath("/installed-agent/pureharness")
 _VENV_DIR = _INSTALL_DIR / "venv"
 _RUN_RECORD_NAME = "pureharness-run-record.json"
+_EVENT_LOG_NAME = "pureharness-events.jsonl"
 _EVALUATION_MAX_STEPS = 300
 _INSTALL_ATTEMPTS = 3
 _INSTALL_RETRY_DELAY_SECONDS = 1
@@ -224,19 +225,23 @@ class PureHarnessHarborAgent(BaseInstalledAgent):
         del context
         workspace = await self._resolve_workspace(environment)
         record_path = self.environment_logs_dir / _RUN_RECORD_NAME
+        event_log_path = self.environment_logs_dir / _EVENT_LOG_NAME
         executable = _VENV_DIR / "bin/pureharness"
 
+        # BaseInstalledAgent prepends `set -o pipefail`; Harbor main-service
+        # commands use Bash, so tee does not replace PureHarness's exit status.
         await self.exec_as_agent(
             environment,
             command=(
                 f"mkdir -p {shlex.quote(str(record_path.parent))} && "
-                f"exec {shlex.quote(str(executable))} run "
+                f"{shlex.quote(str(executable))} run "
                 f"{shlex.quote(instruction)} "
                 f"--workspace {shlex.quote(workspace)} "
                 f"--model {shlex.quote(self._deepseek_model)} "
                 f"--max-steps {_EVALUATION_MAX_STEPS} "
                 f"--record {shlex.quote(str(record_path))} "
-                "--output jsonl"
+                "--output jsonl "
+                f"| tee {shlex.quote(str(event_log_path))}"
             ),
             env={_API_KEY_ENV: self._deepseek_api_key},
             cwd=workspace,
