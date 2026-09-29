@@ -2,7 +2,7 @@
 
 This document separates the implementation that exists today from the intended
 architecture. Sections marked **Current** describe repository behavior through
-the M20 coding-capability milestone. Sections marked **Target**
+the M21.1 coding-evidence milestone. Sections marked **Target**
 describe direction, not implemented APIs.
 
 ## 1. Project positioning
@@ -84,6 +84,29 @@ rejections. It resets for every `Agent.run()` even when the Session retains
 earlier history. Progress telemetry is observation only: it is not semantic
 task progress, a quality or productivity score, loop/stall detection, or a
 stop/replanning policy, and none of its counters feeds runtime decisions.
+
+`Agent.coding_evidence_snapshot` is a separate immutable per-Run view maintained
+by `CodingEvidenceTracker`. It records successful structured workspace
+mutations from the existing M19 `WorkspaceMutation` source, actual started
+`run_command` and process operations, their ToolResult errors, and the ordering
+of `run_command` / `start_process` after the latest mutation. It resets at every
+Run even when Session history persists. A long-horizon coding Run can complete
+at the protocol level without producing a workspace mutation or post-mutation
+execution; M21.1 exposes that fact without changing completion behavior.
+
+The tracker observes sequential calls in the existing execution path. A
+successful mutation resets its post-mutation execution count immediately, so a
+later command in the same tool-call batch counts as subsequent execution.
+Exposure, batch budget, schema, workspace-precondition, policy, and approval
+rejections do not reach `tool_started` and do not count as execution. Process
+start, poll, and stop have distinct counters; only start is an execution action
+for ordering purposes. No command text is classified by intent.
+
+Coding evidence does not equate ToolResult success, command exit status, or task
+correctness. It does not prove verification success, enter model context or
+TaskState, affect selection/policy/budget, reject completion, or add retries.
+Like ProgressSnapshot, it remains live API and JSONL evidence and is not added
+to RunRecord v2, BenchmarkResult v1, or durable Session v1.
 
 A dispatched tool action is identified internally by a stable hash of canonical
 JSON containing its tool name and arguments. Dictionary keys are sorted, list
@@ -814,6 +837,12 @@ recovery is counted after a smaller context is successfully rebuilt; provider
 overflow occurrences and proactive configured-limit pressure are separate
 counters.
 
+Each completed tool-call batch also emits `coding_evidence_snapshot` after the
+progress snapshot. Its terminal form follows terminal progress and precedes the
+agent completion/failure event; interruption emits terminal coding evidence
+before `agent_interrupted`. It contains only coding-specific mutation and
+started-execution facts and never controls the lifecycle.
+
 The lifecycle inside the loop repeats for each model step. A recoverable
 malformed-output failure emits `model_retrying`. A provider overflow that can
 be rebuilt emits `context_window_exceeded` and then `context_recovering`; it
@@ -855,6 +884,7 @@ Event payloads use the following current contract:
 | `context_build_failed` | `step`, `reason`, `error_type` |
 | `execution_budget_exhausted` | `step`, `resource`, `used`, `limit`, and optional batch `requested` / `remaining` |
 | `progress_snapshot` | `step`, completed logical steps, physical model attempts/tool calls, successful/failed tool results, unique/repeated/max-identical tool-action counts, model retries, context recoveries, proactive pressure count, provider overflow count, and `terminal` |
+| `coding_evidence_snapshot` | `step`, structured mutation count, command execution/error counts, process start/poll/stop and error counts, executions since latest mutation, last mutation/execution steps, and `terminal` |
 | `model_started` | `step`, selector strategy, registered/exposed counts, selected/all schema-token estimates, estimated savings |
 | `model_retrying` | `step`, next `attempt`, `max_attempts`, `error_type`, `failure_category` |
 | `model_completed` | `step`, `output_kind`, `tool_call_count` |
@@ -916,6 +946,10 @@ M19.1 adds `workspace_precondition_failed` under the same additive JSONL v1
 rule. It is a recoverable tool-call occurrence, not a Run failure or persisted
 schema change. M19.2 adds the optional factual stale `change`; M19.3 adds
 `workspace_mutated`. Both remain additive JSONL v1 changes.
+
+M21.1 adds `coding_evidence_snapshot` under the same additive JSONL v1 rule.
+The snapshot remains live telemetry and is not written to RunRecord v2,
+BenchmarkResult v1, or durable Session v1.
 
 The live wire schema is not the RunRecord persistence schema. Live events are
 transient execution observations; RunRecord remains finalized versioned

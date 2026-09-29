@@ -235,6 +235,49 @@ def test_wire_serializer_maps_context_window_exceeded_event():
     }
 
 
+def test_wire_serializer_maps_coding_evidence_snapshot_with_null_steps():
+    event = AgentEvent(
+        type="coding_evidence_snapshot",
+        data={
+            "step": 4,
+            "workspace_mutations": 1,
+            "command_executions": 2,
+            "command_tool_errors": 0,
+            "process_starts": 1,
+            "process_polls": 3,
+            "process_stops": 1,
+            "process_tool_errors": 1,
+            "executions_since_last_mutation": 2,
+            "last_mutation_step": None,
+            "last_execution_step": None,
+            "terminal": False,
+        },
+        timestamp=datetime(2026, 9, 20, 10, 0, tzinfo=timezone.utc),
+        run_id="run-coding-evidence",
+    )
+
+    assert event_to_wire(event) == {
+        "schema_version": 1,
+        "event": "coding_evidence_snapshot",
+        "timestamp": "2026-09-20T10:00:00Z",
+        "run_id": "run-coding-evidence",
+        "step": 4,
+        "payload": {
+            "workspace_mutations": 1,
+            "command_executions": 2,
+            "command_tool_errors": 0,
+            "process_starts": 1,
+            "process_polls": 3,
+            "process_stops": 1,
+            "process_tool_errors": 1,
+            "executions_since_last_mutation": 2,
+            "last_mutation_step": None,
+            "last_execution_step": None,
+            "terminal": False,
+        },
+    }
+
+
 def test_wire_mapping_explicitly_covers_every_public_event_type():
     assert observability_module.SUPPORTED_EVENT_TYPES == frozenset(
         get_args(AgentEventType)
@@ -466,6 +509,13 @@ def test_jsonl_interruption_is_structured_without_human_text(
 
     assert exit_code == 130
     assert events[-1]["event"] == "agent_interrupted"
+    assert events[-2]["event"] == "coding_evidence_snapshot"
+    assert events[-2]["payload"]["terminal"] is True
+    assert sum(
+        event["event"] == "coding_evidence_snapshot"
+        and event["payload"]["terminal"] is True
+        for event in events
+    ) == 1
     assert events[-1]["payload"]["end_reason"] == "interrupted"
     assert "Interrupted." not in captured.out
     assert "Traceback" not in captured.out + captured.err
@@ -497,12 +547,13 @@ def test_jsonl_model_failure_emits_events_and_writes_record(
 
     assert exit_code == 1
     assert captured.err == ""
-    assert [event["event"] for event in events[-3:]] == [
+    assert [event["event"] for event in events[-4:]] == [
         "model_failed",
         "progress_snapshot",
+        "coding_evidence_snapshot",
         "agent_failed",
     ]
-    assert events[-3]["payload"] == {
+    assert events[-4]["payload"] == {
         "reason": "model_error",
         "error_type": "ValueError",
     }
@@ -511,6 +562,11 @@ def test_jsonl_model_failure_emits_events_and_writes_record(
         "error_type": "ValueError",
         "step_count": 0,
     }
+    assert sum(
+        event["event"] == "coding_evidence_snapshot"
+        and event["payload"]["terminal"] is True
+        for event in events
+    ) == 1
     assert "must-not-enter-jsonl" not in captured.out + captured.err
     assert record_path.is_file()
     record = json.loads(record_path.read_text(encoding="utf-8"))

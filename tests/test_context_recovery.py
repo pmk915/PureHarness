@@ -238,12 +238,13 @@ def test_context_recovery_can_be_disabled():
     assert all(
         event.type != "context_recovering" for event in agent.events
     )
-    assert [event.type for event in agent.events[-3:]] == [
+    assert [event.type for event in agent.events[-4:]] == [
         "context_window_exceeded",
         "progress_snapshot",
+        "coding_evidence_snapshot",
         "agent_failed",
     ]
-    exceeded = agent.events[-3]
+    exceeded = agent.events[-4]
     assert exceeded.data["context_recovery_available"] is False
     assert "recovery_attempt" not in exceeded.data
     assert all(
@@ -291,9 +292,10 @@ def test_context_recovery_exhaustion_stops_after_second_provider_call():
     assert exceeded[0].data["context_recovery_available"] is True
     assert exceeded[1].data["context_recovery_available"] is False
     assert all(event.type != "model_failed" for event in agent.events)
-    assert [event.type for event in agent.events[-3:]] == [
+    assert [event.type for event in agent.events[-4:]] == [
         "context_window_exceeded",
         "progress_snapshot",
+        "coding_evidence_snapshot",
         "agent_failed",
     ]
     assert all(
@@ -388,11 +390,12 @@ def test_atomic_recovery_failure_does_not_call_provider_again():
     assert event.data["previous_history_tokens"] == 3
     assert event.data["recovery_history_budget"] == 1
     assert "recovered_history_tokens" not in event.data
-    assert [item.type for item in agent.events[-5:]] == [
+    assert [item.type for item in agent.events[-6:]] == [
         "context_window_exceeded",
         "context_recovering",
         "context_build_failed",
         "progress_snapshot",
+        "coding_evidence_snapshot",
         "agent_failed",
     ]
 

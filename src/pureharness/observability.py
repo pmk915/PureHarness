@@ -129,6 +129,22 @@ _EVENT_PAYLOAD_FIELDS: dict[str, tuple[tuple[str, str], ...]] = {
         ),
         ("terminal", "terminal"),
     ),
+    "coding_evidence_snapshot": (
+        ("workspace_mutations", "workspace_mutations"),
+        ("command_executions", "command_executions"),
+        ("command_tool_errors", "command_tool_errors"),
+        ("process_starts", "process_starts"),
+        ("process_polls", "process_polls"),
+        ("process_stops", "process_stops"),
+        ("process_tool_errors", "process_tool_errors"),
+        (
+            "executions_since_last_mutation",
+            "executions_since_last_mutation",
+        ),
+        ("last_mutation_step", "last_mutation_step"),
+        ("last_execution_step", "last_execution_step"),
+        ("terminal", "terminal"),
+    ),
     "model_started": (
         ("registered_tool_count", "registered_tool_count"),
         ("exposed_tool_count", "exposed_tool_count"),

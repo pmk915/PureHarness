@@ -375,6 +375,7 @@ def test_non_history_pressure_fails_before_model_call():
         "context_build_started",
         "context_build_failed",
         "progress_snapshot",
+        "coding_evidence_snapshot",
         "agent_failed",
     ]
     assert agent.last_run_record is not None

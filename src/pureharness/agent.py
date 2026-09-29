@@ -4,6 +4,10 @@ from time import perf_counter
 from uuid import uuid4
 
 from pureharness.approval import ApprovalDecision, ApprovalRequest
+from pureharness.coding_evidence import (
+    CodingEvidenceSnapshot,
+    CodingEvidenceTracker,
+)
 from pureharness.context import (
     CompiledContext,
     ContextBudgetExceeded,
@@ -155,6 +159,7 @@ class Agent:
         self.execution_budget = execution_budget or ExecutionBudget()
         self._execution_usage = ExecutionUsage()
         self._progress_tracker = ProgressTracker()
+        self._coding_evidence_tracker = CodingEvidenceTracker()
         self._run_id_factory = (
             run_id_factory
             if run_id_factory is not None
@@ -180,6 +185,10 @@ class Agent:
             self._execution_usage,
             logical_steps_completed=len(self.trace.steps),
         )
+
+    @property
+    def coding_evidence_snapshot(self) -> CodingEvidenceSnapshot:
+        return self._coding_evidence_tracker.snapshot
 
     @property
     def workspace_snapshot(self) -> WorkspaceSnapshot | None:
@@ -217,6 +226,14 @@ class Agent:
                     self._finalize_run_record(
                         self._active_record_builder
                     )
+                self._emit_coding_evidence_snapshot(
+                    step=(
+                        self.trace.steps[-1].index
+                        if self.trace.steps
+                        else None
+                    ),
+                    terminal=True,
+                )
                 self._emit(
                     AgentEvent(
                         type="agent_interrupted",
@@ -333,6 +350,10 @@ class Agent:
             step=(self.trace.steps[-1].index if self.trace.steps else None),
             terminal=True,
         )
+        self._emit_coding_evidence_snapshot(
+            step=(self.trace.steps[-1].index if self.trace.steps else None),
+            terminal=True,
+        )
         self._emit(
             AgentEvent(
                 type="agent_failed",
@@ -352,6 +373,7 @@ class Agent:
         self.last_run_record = None
         self._execution_usage = ExecutionUsage()
         self._progress_tracker = ProgressTracker()
+        self._coding_evidence_tracker = CodingEvidenceTracker()
         self.tool_executor.reset_run_state()
         self._active_session_size = len(self.session.items)
         builder = RunRecordBuilder(
@@ -915,6 +937,7 @@ class Agent:
         self.trace.end_reason = "completed"
         self._finalize_run_record(builder)
         self._emit_progress_snapshot(step=step, terminal=True)
+        self._emit_coding_evidence_snapshot(step=step, terminal=True)
         self._emit(
             AgentEvent(
                 type="agent_completed",
@@ -1034,6 +1057,10 @@ class Agent:
             step=failure.step,
             terminal=True,
         )
+        self._emit_coding_evidence_snapshot(
+            step=failure.step,
+            terminal=True,
+        )
         event_data = {
             "reason": reason,
             "step_count": len(self.trace.steps),
@@ -1076,6 +1103,34 @@ class Agent:
             data["step"] = step
         self._emit(AgentEvent(type="progress_snapshot", data=data))
 
+    def _emit_coding_evidence_snapshot(
+        self,
+        *,
+        step: int | None,
+        terminal: bool,
+    ) -> None:
+        snapshot = self.coding_evidence_snapshot
+        data: dict[str, object] = {
+            "workspace_mutations": snapshot.workspace_mutations,
+            "command_executions": snapshot.command_executions,
+            "command_tool_errors": snapshot.command_tool_errors,
+            "process_starts": snapshot.process_starts,
+            "process_polls": snapshot.process_polls,
+            "process_stops": snapshot.process_stops,
+            "process_tool_errors": snapshot.process_tool_errors,
+            "executions_since_last_mutation": (
+                snapshot.executions_since_last_mutation
+            ),
+            "last_mutation_step": snapshot.last_mutation_step,
+            "last_execution_step": snapshot.last_execution_step,
+            "terminal": terminal,
+        }
+        if step is not None:
+            data["step"] = step
+        self._emit(
+            AgentEvent(type="coding_evidence_snapshot", data=data)
+        )
+
     def _execute_tool_calls(
         self,
         step: int,
@@ -1103,6 +1158,7 @@ class Agent:
         for tool_call in tool_calls:
             self.session.append(tool_call)
             tool_started_at: float | None = None
+            started_tool: Tool | None = None
             workspace_mutation: WorkspaceMutation | None = None
 
             def on_policy_evaluated(
@@ -1123,8 +1179,13 @@ class Agent:
                 )
 
             def on_tool_started(tool: Tool) -> None:
-                nonlocal tool_started_at
+                nonlocal tool_started_at, started_tool
                 tool_started_at = perf_counter()
+                started_tool = tool
+                self._coding_evidence_tracker.record_tool_started(
+                    tool,
+                    step=step,
+                )
                 self._emit(
                     AgentEvent(
                         type="tool_started",
@@ -1257,6 +1318,11 @@ class Agent:
             self._progress_tracker.record_tool_result(
                 is_error=is_error
             )
+            if started_tool is not None:
+                self._coding_evidence_tracker.record_tool_result(
+                    started_tool,
+                    is_error=is_error,
+                )
 
             if tool_started_at is not None:
                 builder.record_tool_execution()
@@ -1281,6 +1347,10 @@ class Agent:
                     )
                 )
                 if workspace_mutation is not None:
+                    self._coding_evidence_tracker.record_workspace_mutation(
+                        workspace_mutation,
+                        step=step,
+                    )
                     self._emit(
                         AgentEvent(
                             type="workspace_mutated",
@@ -1302,3 +1372,4 @@ class Agent:
             )
         )
         self._emit_progress_snapshot(step=step, terminal=False)
+        self._emit_coding_evidence_snapshot(step=step, terminal=False)

@@ -106,15 +106,16 @@ def test_normal_completion_exposes_terminal_snapshot_and_jsonl_v1():
     )
     assert snapshot.model_attempts == agent.execution_usage.model_attempts
     assert snapshot.tool_calls == agent.execution_usage.tool_calls
-    assert [event.type for event in agent.events[-2:]] == [
+    assert [event.type for event in agent.events[-3:]] == [
         "progress_snapshot",
+        "coding_evidence_snapshot",
         "agent_completed",
     ]
-    event = agent.events[-2]
+    event = agent.events[-3]
     assert event.data["terminal"] is True
     assert event.data["step"] == 0
 
-    wire = json.loads(output[-2])
+    wire = json.loads(output[-3])
     assert wire["schema_version"] == 1
     assert wire["event"] == "progress_snapshot"
     assert wire["step"] == 0
@@ -280,11 +281,12 @@ def test_budget_rejected_batch_records_no_actions_or_results():
     assert snapshot.unique_tool_actions == 0
     assert snapshot.successful_tool_results == 0
     assert snapshot.failed_tool_results == 0
-    assert [event.type for event in agent.events[-2:]] == [
+    assert [event.type for event in agent.events[-3:]] == [
         "progress_snapshot",
+        "coding_evidence_snapshot",
         "agent_failed",
     ]
-    assert agent.events[-2].data["terminal"] is True
+    assert agent.events[-3].data["terminal"] is True
 
 
 def test_unserializable_arguments_skip_identity_without_breaking_tool():

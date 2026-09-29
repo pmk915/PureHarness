@@ -144,6 +144,41 @@ a progress percentage, usefulness judgment, loop/stall detector, verification
 guess, or stop policy. The event is additive within JSONL wire schema version
 1.
 
+`coding_evidence_snapshot` reports coding-specific factual evidence for the
+current `Agent.run()`. It is deliberately separate from `ProgressSnapshot`,
+which describes general runtime activity. Its payload is:
+
+| Field | Meaning |
+| --- | --- |
+| `workspace_mutations` | Successful structured `write_file` / `apply_patch` mutations reported by Workspace Discipline |
+| `command_executions` | `run_command` operations that reached `tool_started` |
+| `command_tool_errors` | Started `run_command` operations whose ToolResult has `is_error=true` |
+| `process_starts` / `process_polls` / `process_stops` | Corresponding process operations that reached `tool_started` |
+| `process_tool_errors` | Started process operations whose ToolResult has `is_error=true` |
+| `executions_since_last_mutation` | `run_command` and `start_process` operations observed after the latest structured mutation |
+| `last_mutation_step` | Latest successful structured-mutation step, or `null` |
+| `last_execution_step` | Latest started `run_command` / `start_process` step, or `null` |
+| `terminal` | Whether this is the Run's final coding-evidence snapshot |
+
+The tracker follows sequential tool-call order, including a mutation followed by
+execution in the same logical batch. A later mutation resets
+`executions_since_last_mutation`. Polling and stopping a process are recorded in
+their own counters but are not new post-mutation executions. Calls rejected by
+exposure, budget, argument validation, workspace preconditions, policy, or
+approval never reach `tool_started` and do not increment execution counters.
+
+A non-terminal snapshot is emitted after each completed tool-call batch, after
+the existing `progress_snapshot`. One terminal snapshot is emitted after the
+terminal progress snapshot and before `agent_completed` or `agent_failed`; an
+interrupted Run emits it immediately before `agent_interrupted`. The payload
+contains no command arguments, output, file content, hashes, absolute paths, or
+secrets. The event is additive within JSONL wire schema version 1.
+
+These counters do not classify commands as tests or verification. A command
+that returns a non-zero exit code can still have a successful ToolResult, and a
+ToolResult with `is_error=false` does not prove task correctness or verification
+success. M21.1 coding evidence never influences completion decisions.
+
 The three context-failure events have distinct meanings:
 
 ```text
@@ -259,9 +294,10 @@ RunRecord    = finalized persisted evidence for one Agent.run()
 Replay       = read-only ordered reconstruction from RunRecord
 ```
 
-`ExecutionUsage`, `ProgressSnapshot`, and the run-scoped workspace snapshot and
-mutation ledger are live diagnostic state rather than persisted evidence. No
-progress or workspace discipline state is added to RunRecord v2 or
+`ExecutionUsage`, `ProgressSnapshot`, `CodingEvidenceSnapshot`, and the
+run-scoped workspace snapshot and mutation ledger are live diagnostic state
+rather than persisted evidence. No progress, coding evidence, or workspace
+discipline state is added to RunRecord v2 or
 BenchmarkResult. RunRecord v1
 retains its original six-value closed end-reason contract.
 RunRecord v2 has the same persisted structure and adds only
