@@ -22,7 +22,7 @@ from pureharness.execution import (
     LocalExecutionBackend,
 )
 from pureharness.model import Model
-from pureharness.run_record import RunRecord
+from pureharness.run_record import RunRecord, run_record_end_reasons
 from pureharness.tool_result_projection import (
     DeterministicToolResultProjector,
     IdentityToolResultProjector,
@@ -33,7 +33,7 @@ from pureharness.tool_selection import (
     ToolSelector,
 )
 from pureharness.tools import ToolRegistry
-from pureharness.trace import RUN_END_REASONS, RunEndReason
+from pureharness.trace import RunEndReason
 from pureharness.trajectory_compaction import (
     DeterministicToolTrajectoryCompactor,
     IdentityTrajectoryCompactor,
@@ -363,7 +363,9 @@ class BenchmarkResult:
                 "agent_error_type",
                 self.agent_error_type,
             )
-        if self.agent_end_reason not in RUN_END_REASONS:
+        if self.agent_end_reason not in run_record_end_reasons(
+            self.run_record.schema_version
+        ):
             raise ValueError(
                 f"Unsupported agent end reason: {self.agent_end_reason!r}"
             )
@@ -438,8 +440,11 @@ class BenchmarkResult:
                 raise BenchmarkSerializationError(
                     "agent_error_type must be text or null"
                 )
+            run_record = RunRecord.from_dict(run_record_data)
             end_reason = _require_string(data, "agent_end_reason")
-            if end_reason not in RUN_END_REASONS:
+            if end_reason not in run_record_end_reasons(
+                run_record.schema_version
+            ):
                 raise BenchmarkSerializationError(
                     f"Unsupported agent end reason: {end_reason!r}"
                 )
@@ -471,7 +476,7 @@ class BenchmarkResult:
                     data,
                     "selector_strategy",
                 ),
-                run_record=RunRecord.from_dict(run_record_data),
+                run_record=run_record,
             )
         except (KeyError, TypeError, ValueError) as exc:
             if isinstance(exc, BenchmarkSerializationError):

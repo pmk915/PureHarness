@@ -66,6 +66,15 @@ payload includes the next `attempt`, `max_attempts`, `error_type`, and
 `model_failed` continues to mean that the logical model request finally failed
 and no recovery will continue.
 
+`execution_budget_exhausted` is a terminal Run event emitted when the runtime
+refuses to start a physical model attempt or an exposed tool-call batch because
+its cumulative Run limit would be exceeded. It is followed by `agent_failed`
+with end reason `execution_budget_exceeded`. Its payload contains `resource`,
+`used`, and `limit`; tool-batch refusal also includes `requested` and
+`remaining`. Because the refused action never starts, this path emits no
+`model_failed`, fabricated ToolResult, or `context_build_failed` for the budget
+refusal. The event is additive within JSONL wire schema version 1.
+
 The three context-failure events have distinct meanings:
 
 ```text
@@ -181,8 +190,17 @@ RunRecord    = finalized persisted evidence for one Agent.run()
 Replay       = read-only ordered reconstruction from RunRecord
 ```
 
-The live-event wire schema and RunRecord persistence schema both currently use
-version `1`, but they are not the same schema and do not share a lifecycle.
+`ExecutionUsage` is live per-run diagnostic state rather than persisted
+evidence. RunRecord v1 retains its original six-value closed end-reason contract.
+RunRecord v2 has the same persisted structure and adds only
+`execution_budget_exceeded`; current writers emit v2 and current readers accept
+and preserve v1 and v2. Older PureHarness versions are not expected to read v2.
+In both versions, `model_call_count == len(model_invocations)` still counts
+logical requests, while physical retry/context-recovery attempts and accepted
+dispatch usage stay in `Agent.execution_usage` and runtime events.
+
+The live-event wire schema remains version 1 independently of RunRecord
+persistence version 2; they do not share a version or lifecycle.
 Inspection and replay never call a model, policy, approval handler, tool, or
 execution backend.
 

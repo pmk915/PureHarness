@@ -101,6 +101,13 @@ _EVENT_PAYLOAD_FIELDS: dict[str, tuple[tuple[str, str], ...]] = {
         ("recovery_attempt", "recovery_attempt"),
         ("max_context_recoveries", "max_context_recoveries"),
     ),
+    "execution_budget_exhausted": (
+        ("resource", "resource"),
+        ("used", "used"),
+        ("limit", "limit"),
+        ("requested", "requested"),
+        ("remaining", "remaining"),
+    ),
     "model_started": (
         ("registered_tool_count", "registered_tool_count"),
         ("exposed_tool_count", "exposed_tool_count"),

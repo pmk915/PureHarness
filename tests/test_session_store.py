@@ -8,6 +8,7 @@ import pureharness.session_store as session_store_module
 from pureharness.agent import Agent
 from pureharness.messages import Message, ToolCall, ToolResult
 from pureharness.model import EchoModel
+from pureharness.run_record import RunRecord
 from pureharness.session import Session
 from pureharness.session_store import (
     DurableSession,
@@ -380,6 +381,33 @@ def test_durable_store_atomically_round_trips_session_and_run_evidence(
     ).read_text(encoding="utf-8").splitlines()
     assert json.loads(lines[0])["schema_version"] == 1
     assert json.loads(lines[-1])["type"] == "run_record"
+    assert loaded.run_records[0].schema_version == 2
+
+
+def test_durable_store_loads_mixed_v1_and_v2_run_records(tmp_path):
+    now = datetime(2026, 9, 20, 10, 0, tzinfo=timezone.utc)
+    historical_data = _run_record("mixed", "run-v1").to_dict()
+    historical_data["schema_version"] = 1
+    historical = RunRecord.from_dict(historical_data)
+    current = _run_record("mixed", "run-v2")
+    state = DurableSession(
+        session_id="mixed",
+        created_at=now,
+        updated_at=now,
+        workspace=tmp_path.resolve(),
+        model="test-model",
+        session=Session(),
+        run_records=[historical, current],
+    )
+    store = JsonlDurableSessionStore(tmp_path / "sessions")
+
+    store.save(state)
+    loaded = store.load("mixed")
+
+    assert [
+        record.schema_version for record in loaded.run_records
+    ] == [1, 2]
+    assert loaded == state
 
 
 def test_durable_store_lists_newest_first_with_derived_run_counts(

@@ -1,3 +1,4 @@
+import json
 import tomllib
 
 import pytest
@@ -9,6 +10,7 @@ from pureharness.context import ContextLimits
 from pureharness.experiment import load_experiment_results
 from pureharness.messages import Message, ToolCall
 from pureharness.model import ModelError
+from pureharness.runtime import ExecutionBudget
 from pureharness.tool_executor import ToolExecutor
 from pureharness.tool_policy import PolicyDecision
 from pureharness.tools import Tool, ToolRegistry
@@ -368,6 +370,9 @@ def test_one_shot_writes_record_and_inspect_reads_it(tmp_path):
 
     assert run_exit == 0
     assert record_path.is_file()
+    assert json.loads(record_path.read_text(encoding="utf-8"))[
+        "schema_version"
+    ] == 2
     inspect_output = []
     inspect_exit = main(
         ["inspect", str(record_path)],
@@ -382,6 +387,40 @@ def test_one_shot_writes_record_and_inspect_reads_it(tmp_path):
     assert "End reason: completed" in rendered
     assert "Model calls: 1" in rendered
     assert "Estimated history tokens:" in rendered
+
+
+def test_inspect_reads_historical_v1_record(tmp_path):
+    record_path = tmp_path / "current.json"
+    assert main(
+        [
+            "run",
+            "inspect history",
+            "--workspace",
+            str(tmp_path),
+            "--model",
+            "fake-model",
+            "--record",
+            str(record_path),
+        ],
+        model_factory=lambda name: MultiTurnModel(),
+        output_fn=lambda value: None,
+    ) == 0
+    data = json.loads(record_path.read_text(encoding="utf-8"))
+    data["schema_version"] = 1
+    historical_path = tmp_path / "historical.json"
+    historical_path.write_text(json.dumps(data), encoding="utf-8")
+    output = []
+
+    exit_code = main(
+        ["inspect", str(historical_path)],
+        model_factory=lambda name: pytest.fail(
+            "inspect must not construct a model"
+        ),
+        output_fn=output.append,
+    )
+
+    assert exit_code == 0
+    assert "End reason: completed" in output
 
 
 def test_one_shot_default_max_steps_remains_ten(tmp_path, monkeypatch):
@@ -463,6 +502,36 @@ def test_one_shot_context_limits_reach_agent(tmp_path, monkeypatch):
     assert created_agents[0].context_limits == ContextLimits(100000, 5000)
 
 
+def test_one_shot_execution_budget_reaches_agent(tmp_path, monkeypatch):
+    created_agents = []
+    create_agent = cli_module._create_agent
+
+    def capture_agent(*args, **kwargs):
+        agent = create_agent(*args, **kwargs)
+        created_agents.append(agent)
+        return agent
+
+    monkeypatch.setattr(cli_module, "_create_agent", capture_agent)
+
+    exit_code = main(
+        [
+            "run",
+            "hello",
+            "--workspace",
+            str(tmp_path),
+            "--max-model-attempts",
+            "7",
+            "--max-tool-calls",
+            "11",
+        ],
+        model_factory=lambda name: MultiTurnModel(),
+        output_fn=lambda value: None,
+    )
+
+    assert exit_code == 0
+    assert created_agents[0].execution_budget == ExecutionBudget(7, 11)
+
+
 def test_interactive_context_limits_reach_agent(tmp_path, monkeypatch):
     created_agents = []
     create_agent = cli_module._create_agent
@@ -490,6 +559,35 @@ def test_interactive_context_limits_reach_agent(tmp_path, monkeypatch):
 
     assert exit_code == 0
     assert created_agents[0].context_limits == ContextLimits(200, 50)
+
+
+def test_interactive_execution_budget_reaches_agent(tmp_path, monkeypatch):
+    created_agents = []
+    create_agent = cli_module._create_agent
+
+    def capture_agent(*args, **kwargs):
+        agent = create_agent(*args, **kwargs)
+        created_agents.append(agent)
+        return agent
+
+    monkeypatch.setattr(cli_module, "_create_agent", capture_agent)
+
+    exit_code = main(
+        [
+            "--workspace",
+            str(tmp_path),
+            "--max-model-attempts",
+            "5",
+            "--max-tool-calls",
+            "9",
+        ],
+        model_factory=lambda name: MultiTurnModel(),
+        input_fn=_input(["hello", "/exit"]),
+        output_fn=lambda value: None,
+    )
+
+    assert exit_code == 0
+    assert created_agents[0].execution_budget == ExecutionBudget(5, 9)
 
 
 @pytest.mark.parametrize(
@@ -527,6 +625,19 @@ def test_one_shot_rejects_non_positive_max_steps(value, capsys):
 
     assert exc_info.value.code == 2
     assert "--max-steps: must be a positive integer" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "flag",
+    ["--max-model-attempts", "--max-tool-calls"],
+)
+@pytest.mark.parametrize("value", ["0", "-1"])
+def test_cli_rejects_non_positive_execution_budget(flag, value, capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        main(["run", "hello", flag, value])
+
+    assert exc_info.value.code == 2
+    assert f"{flag}: must be a positive integer" in capsys.readouterr().err
 
 
 def test_one_shot_agent_has_no_interactive_approval_handler(tmp_path):

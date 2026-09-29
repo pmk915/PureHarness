@@ -3,10 +3,14 @@ from pathlib import Path
 
 import pytest
 
+import pureharness.cli as cli_module
+
 from pureharness.agent import Agent
 from pureharness.approval import ApprovalDecision
 from pureharness.cli import main
 from pureharness.messages import Message, ToolCall, ToolResult
+from pureharness.run_record import RunRecord
+from pureharness.runtime import ExecutionBudget
 from pureharness.session import Session
 from pureharness.session_store import (
     DurableSession,
@@ -149,6 +153,71 @@ def test_resume_keeps_session_id_and_creates_a_new_run(
         record.session_id == session_id
         for record in after.run_records
     )
+
+
+def test_resume_loads_v1_history_and_appends_v2_record(
+    durable_environment,
+):
+    home, workspace = durable_environment
+    session_id, _, _ = _create_session(home, workspace)
+    store = _store(home)
+    state = store.load(session_id)
+    historical_records = []
+    for record in state.run_records:
+        data = record.to_dict()
+        data["schema_version"] = 1
+        historical_records.append(RunRecord.from_dict(data))
+    state.run_records = historical_records
+    store.save(state)
+
+    exit_code = main(
+        ["resume", session_id],
+        model_factory=lambda name: RecordingModel(),
+        input_fn=_input(["new turn", "/exit"]),
+        output_fn=lambda value: None,
+    )
+    loaded = store.load(session_id)
+
+    assert exit_code == 0
+    assert [record.schema_version for record in loaded.run_records] == [
+        1,
+        1,
+        2,
+    ]
+
+
+def test_resume_execution_budget_reaches_new_agent(
+    durable_environment,
+    monkeypatch,
+):
+    home, workspace = durable_environment
+    session_id, _, _ = _create_session(home, workspace)
+    created_agents = []
+    create_agent = cli_module._create_agent
+
+    def capture_agent(*args, **kwargs):
+        agent = create_agent(*args, **kwargs)
+        created_agents.append(agent)
+        return agent
+
+    monkeypatch.setattr(cli_module, "_create_agent", capture_agent)
+
+    exit_code = main(
+        [
+            "--max-model-attempts",
+            "4",
+            "--max-tool-calls",
+            "6",
+            "resume",
+            session_id,
+        ],
+        model_factory=lambda name: RecordingModel(),
+        input_fn=_input(["resumed turn", "/exit"]),
+        output_fn=lambda value: None,
+    )
+
+    assert exit_code == 0
+    assert created_agents[0].execution_budget == ExecutionBudget(4, 6)
 
 
 def test_resumed_model_context_contains_prior_conversation(

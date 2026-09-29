@@ -121,6 +121,7 @@ def _completed_record():
 def test_completed_run_produces_one_record_without_changing_return_api():
     record = _completed_record()
 
+    assert record.schema_version == 2
     assert record.run_id == "run-completed"
     assert record.session_id == "session-1"
     assert record.end_reason == "completed"
@@ -385,12 +386,68 @@ def test_run_record_serialization_round_trip(record_factory):
     assert record.to_json() == record.to_json()
 
 
+def test_historical_v1_original_reason_loads_and_round_trips():
+    data = _completed_record().to_dict()
+    data["schema_version"] = 1
+
+    record = RunRecord.from_dict(data)
+
+    assert record.schema_version == 1
+    assert record.end_reason == "completed"
+    assert record.to_dict()["schema_version"] == 1
+    assert RunRecord.from_json(record.to_json()) == record
+
+
+def test_v1_rejects_execution_budget_end_reason():
+    data = _completed_record().to_dict()
+    data["schema_version"] = 1
+    data["end_reason"] = "execution_budget_exceeded"
+    data["trace"]["end_reason"] = "execution_budget_exceeded"
+
+    with pytest.raises(
+        RunRecordSerializationError,
+        match="Unsupported run end reason",
+    ):
+        RunRecord.from_dict(data)
+
+
+@pytest.mark.parametrize(
+    "end_reason",
+    ["completed", "execution_budget_exceeded"],
+)
+def test_v2_accepts_original_and_execution_budget_reasons(end_reason):
+    data = _completed_record().to_dict()
+    data["end_reason"] = end_reason
+    data["trace"]["end_reason"] = end_reason
+
+    record = RunRecord.from_dict(data)
+
+    assert record.schema_version == 2
+    assert record.end_reason == end_reason
+    assert RunRecord.from_json(record.to_json()) == record
+
+
+def test_v1_nested_trace_uses_v1_end_reason_contract():
+    data = _completed_record().to_dict()
+    data["schema_version"] = 1
+    data["trace"]["end_reason"] = "execution_budget_exceeded"
+
+    with pytest.raises(
+        RunRecordSerializationError,
+        match="Unsupported run end reason",
+    ):
+        RunRecord.from_dict(data)
+
+
 def test_run_record_loads_pre_approval_trace_without_approval_field():
     record = _completed_record()
     data = record.to_dict()
+    data["schema_version"] = 1
     del data["trace"]["approvals"]
 
-    assert RunRecord.from_dict(data) == record
+    restored = RunRecord.from_dict(data)
+    assert restored.schema_version == 1
+    assert restored.trace.approvals == []
 
 
 def _failed_record():
@@ -461,6 +518,18 @@ def test_serialized_record_replay_is_ordered_and_idempotent():
         1,
         None,
     ]
+
+
+@pytest.mark.parametrize("schema_version", [1, 2])
+def test_replay_accepts_both_run_record_versions(schema_version):
+    data = _completed_record().to_dict()
+    data["schema_version"] = schema_version
+    record = RunRecord.from_dict(data)
+
+    entries = replay_run(record)
+
+    assert entries[-1].kind == "run_ended"
+    assert ("end_reason", "completed") in entries[-1].metadata
 
 
 def test_replay_never_invokes_model_tool_or_backend():

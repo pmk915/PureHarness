@@ -1,12 +1,34 @@
 import json
 
 from dataclasses import dataclass
-from typing import ClassVar
 
-from pureharness.trace import RUN_END_REASONS, RunEndReason, RunTrace
+from pureharness.trace import (
+    RUN_END_REASONS_V1,
+    RUN_END_REASONS_V2,
+    RunEndReason,
+    RunTrace,
+)
 
 
-RUN_RECORD_SCHEMA_VERSION = 1
+RUN_RECORD_SCHEMA_VERSION = 2
+RUN_RECORD_SCHEMA_VERSIONS = frozenset({1, 2})
+_RUN_RECORD_END_REASONS = {
+    1: RUN_END_REASONS_V1,
+    2: RUN_END_REASONS_V2,
+}
+
+
+def run_record_end_reasons(schema_version: int) -> frozenset[str]:
+    """Return the closed end-reason contract for one schema version."""
+    if type(schema_version) is not int:
+        raise ValueError("RunRecord schema version must be an integer")
+    try:
+        return _RUN_RECORD_END_REASONS[schema_version]
+    except KeyError as exc:
+        raise ValueError(
+            "Unsupported RunRecord schema version: "
+            f"{schema_version}"
+        ) from exc
 
 
 class RunRecordSerializationError(ValueError):
@@ -140,8 +162,6 @@ class ModelInvocationRecord:
 
 @dataclass(frozen=True)
 class RunRecord:
-    schema_version: ClassVar[int] = RUN_RECORD_SCHEMA_VERSION
-
     run_id: str
     session_id: str | None
     end_reason: RunEndReason
@@ -158,6 +178,7 @@ class RunRecord:
     trajectory_compaction_count: int
     compacted_source_unit_count: int
     tool_result_compaction_count: int
+    schema_version: int = RUN_RECORD_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "trace", self.trace.snapshot())
@@ -165,7 +186,10 @@ class RunRecord:
         if self.session_id is not None:
             _validate_non_empty_text("session_id", self.session_id)
 
-        if self.end_reason not in RUN_END_REASONS:
+        allowed_end_reasons = run_record_end_reasons(
+            self.schema_version
+        )
+        if self.end_reason not in allowed_end_reasons:
             raise ValueError(
                 f"Unsupported run end reason: {self.end_reason!r}"
             )
@@ -314,11 +338,12 @@ class RunRecord:
                 raise RunRecordSerializationError(
                     "RunRecord schema version must be an integer"
                 )
-            if schema_version != RUN_RECORD_SCHEMA_VERSION:
-                raise RunRecordSerializationError(
-                    "Unsupported RunRecord schema version: "
-                    f"{schema_version}"
+            try:
+                allowed_end_reasons = run_record_end_reasons(
+                    schema_version
                 )
+            except ValueError as exc:
+                raise RunRecordSerializationError(str(exc)) from exc
 
             session_id = data["session_id"]
             if session_id is not None and not isinstance(session_id, str):
@@ -327,7 +352,7 @@ class RunRecord:
                 )
 
             end_reason = _require_string(data, "end_reason")
-            if end_reason not in RUN_END_REASONS:
+            if end_reason not in allowed_end_reasons:
                 raise RunRecordSerializationError(
                     f"Unsupported run end reason: {end_reason!r}"
                 )
@@ -350,7 +375,10 @@ class RunRecord:
                 run_id=_require_string(data, "run_id"),
                 session_id=session_id,
                 end_reason=end_reason,
-                trace=RunTrace.from_dict(trace_data),
+                trace=RunTrace.from_dict(
+                    trace_data,
+                    allowed_end_reasons=allowed_end_reasons,
+                ),
                 model_invocations=tuple(
                     ModelInvocationRecord.from_dict(item)
                     for item in invocations_data
@@ -411,6 +439,7 @@ class RunRecord:
                         "tool_result_compaction_count",
                     )
                 ),
+                schema_version=schema_version,
             )
         except (KeyError, TypeError, ValueError) as exc:
             if isinstance(exc, RunRecordSerializationError):

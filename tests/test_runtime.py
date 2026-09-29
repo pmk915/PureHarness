@@ -81,6 +81,7 @@ class FixedEstimator:
         (RuntimeStage.CONTEXT_PREPARATION, FailureCategory.CONTEXT),
         (RuntimeStage.TOOL_SELECTION, FailureCategory.TOOL),
         (RuntimeStage.MODEL_REQUEST, FailureCategory.MODEL),
+        (RuntimeStage.EXECUTION, FailureCategory.BUDGET),
         (RuntimeStage.TOOL_EXECUTION, FailureCategory.TOOL),
         (RuntimeStage.POLICY_EVALUATION, FailureCategory.POLICY),
     ],

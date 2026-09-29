@@ -15,6 +15,7 @@ class RuntimeStage(str, Enum):
     CONTEXT_PREPARATION = "context_preparation"
     TOOL_SELECTION = "tool_selection"
     MODEL_REQUEST = "model_request"
+    EXECUTION = "execution"
     TOOL_EXECUTION = "tool_execution"
     POLICY_EVALUATION = "policy_evaluation"
 
@@ -24,6 +25,7 @@ class FailureCategory(str, Enum):
 
     CONTEXT = "context"
     MODEL = "model"
+    BUDGET = "budget"
     TOOL = "tool"
     POLICY = "policy"
 
@@ -32,6 +34,72 @@ class RecoveryAction(str, Enum):
     RETRY = "retry"
     REBUILD_CONTEXT = "rebuild_context"
     FAIL = "fail"
+
+
+@dataclass(frozen=True)
+class ExecutionBudget:
+    """Optional cumulative expensive-action limits for one Agent run."""
+
+    max_model_attempts: int | None = None
+    max_tool_calls: int | None = None
+
+    def __post_init__(self) -> None:
+        for name, value in (
+            ("max_model_attempts", self.max_model_attempts),
+            ("max_tool_calls", self.max_tool_calls),
+        ):
+            if value is not None:
+                _validate_positive_integer(name, value)
+
+
+@dataclass(frozen=True)
+class ExecutionUsage:
+    """Immutable cumulative physical-action usage for the current run."""
+
+    model_attempts: int = 0
+    tool_calls: int = 0
+
+    def __post_init__(self) -> None:
+        _validate_non_negative_integer(
+            "model_attempts",
+            self.model_attempts,
+        )
+        _validate_non_negative_integer("tool_calls", self.tool_calls)
+
+
+class ExecutionBudgetExceeded(RuntimeError):
+    """The runtime refused work that exceeded a cumulative run limit."""
+
+    def __init__(
+        self,
+        *,
+        resource: str,
+        used: int,
+        limit: int,
+        requested: int | None = None,
+    ) -> None:
+        if resource not in {"model_attempts", "tool_calls"}:
+            raise ValueError("Unsupported execution-budget resource")
+        _validate_non_negative_integer("used", used)
+        _validate_positive_integer("limit", limit)
+        if requested is not None:
+            _validate_positive_integer("requested", requested)
+
+        self.resource = resource
+        self.used = used
+        self.limit = limit
+        self.requested = requested
+        self.remaining = max(limit - used, 0)
+
+        detail = ""
+        if requested is not None:
+            detail = (
+                f"; requested {requested}, remaining {self.remaining}"
+            )
+        super().__init__(
+            f"Execution budget exhausted for {resource}: "
+            f"used {used} of {limit}{detail}"
+        )
 
 
 @dataclass(frozen=True)
@@ -75,6 +143,7 @@ class RuntimeController:
         RuntimeStage.CONTEXT_PREPARATION: FailureCategory.CONTEXT,
         RuntimeStage.TOOL_SELECTION: FailureCategory.TOOL,
         RuntimeStage.MODEL_REQUEST: FailureCategory.MODEL,
+        RuntimeStage.EXECUTION: FailureCategory.BUDGET,
         RuntimeStage.TOOL_EXECUTION: FailureCategory.TOOL,
         RuntimeStage.POLICY_EVALUATION: FailureCategory.POLICY,
     }
@@ -83,6 +152,7 @@ class RuntimeController:
         RuntimeStage.CONTEXT_PREPARATION: "context_error",
         RuntimeStage.TOOL_SELECTION: "tool_selection_error",
         RuntimeStage.MODEL_REQUEST: "model_error",
+        RuntimeStage.EXECUTION: "execution_budget_exceeded",
     }
 
     def classify_failure(

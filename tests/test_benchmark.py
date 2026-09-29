@@ -595,6 +595,7 @@ def test_result_serialization_round_trip_and_schema_rejection(tmp_path):
     restored = BenchmarkResult.from_json(result.to_json())
 
     assert restored == result
+    assert restored.run_record.schema_version == 2
     assert restored.to_dict()["schema_version"] == (
         BENCHMARK_RESULT_SCHEMA_VERSION
     )
@@ -606,6 +607,42 @@ def test_result_serialization_round_trip_and_schema_rejection(tmp_path):
         match="Unsupported BenchmarkResult schema version",
     ):
         BenchmarkResult.from_dict(data)
+
+
+def test_benchmark_reads_v1_evidence_and_v2_budget_reason(tmp_path):
+    task = _fixture_task(tmp_path)
+    result = BenchmarkRunner(
+        lambda task, config: _passing_model(),
+        run_id_factory=lambda: "versioned-benchmark-run",
+    ).run_case(task, _config())
+
+    historical_data = result.to_dict()
+    historical_data["run_record"]["schema_version"] = 1
+    historical = BenchmarkResult.from_dict(historical_data)
+    assert historical.run_record.schema_version == 1
+    assert BenchmarkResult.from_json(historical.to_json()) == historical
+
+    budget_data = result.to_dict()
+    budget_data["agent_end_reason"] = "execution_budget_exceeded"
+    budget_data["agent_error_type"] = "ExecutionBudgetExceeded"
+    budget_data["run_record"][
+        "end_reason"
+    ] = "execution_budget_exceeded"
+    budget_data["run_record"]["trace"][
+        "end_reason"
+    ] = "execution_budget_exceeded"
+    budget = BenchmarkResult.from_dict(budget_data)
+    assert budget.run_record.schema_version == 2
+    assert budget.agent_end_reason == "execution_budget_exceeded"
+    assert BenchmarkResult.from_json(budget.to_json()) == budget
+
+    invalid_v1_data = budget.to_dict()
+    invalid_v1_data["run_record"]["schema_version"] = 1
+    with pytest.raises(
+        BenchmarkSerializationError,
+        match="Unsupported run end reason",
+    ):
+        BenchmarkResult.from_dict(invalid_v1_data)
 
 
 def test_jsonl_writer_overwrites_appends_and_loads(tmp_path):

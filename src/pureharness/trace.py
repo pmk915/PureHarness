@@ -12,10 +12,11 @@ RunEndReason = Literal[
     "model_error",
     "context_error",
     "tool_selection_error",
+    "execution_budget_exceeded",
     "interrupted",
 ]
 
-RUN_END_REASONS = frozenset(
+RUN_END_REASONS_V1 = frozenset(
     {
         "completed",
         "max_steps_exceeded",
@@ -25,6 +26,10 @@ RUN_END_REASONS = frozenset(
         "interrupted",
     }
 )
+RUN_END_REASONS_V2 = RUN_END_REASONS_V1 | frozenset(
+    {"execution_budget_exceeded"}
+)
+RUN_END_REASONS = RUN_END_REASONS_V2
 
 
 class RunTraceSerializationError(ValueError):
@@ -208,12 +213,17 @@ class RunTrace:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, object]) -> "RunTrace":
+    def from_dict(
+        cls,
+        data: dict[str, object],
+        *,
+        allowed_end_reasons: frozenset[str] = RUN_END_REASONS,
+    ) -> "RunTrace":
         try:
             end_reason = data.get("end_reason")
             if (
                 end_reason is not None
-                and end_reason not in RUN_END_REASONS
+                and end_reason not in allowed_end_reasons
             ):
                 raise RunTraceSerializationError(
                     f"Unsupported run end reason: {end_reason!r}."

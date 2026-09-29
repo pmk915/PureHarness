@@ -549,7 +549,7 @@ def test_inspect_json_is_one_run_record_document(tmp_path, capsys):
     value = json.loads(captured.out)
 
     assert captured.err == ""
-    assert value["schema_version"] == 1
+    assert value["schema_version"] == 2
     assert value["run_id"] == "inspect-run"
     assert value["session_id"] == "inspect-session"
     assert value["end_reason"] == "completed"

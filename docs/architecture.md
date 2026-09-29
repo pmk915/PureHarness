@@ -67,6 +67,14 @@ compilation error, an unrecovered model request error, or exhaustion of the step
 limit fails the run with a recorded end reason. The session remains across calls
 to `run`; an existing `Session` can be supplied to `Agent`.
 
+Run bounds remain separate: `max_steps` limits logical loop progress,
+`ExecutionBudget` optionally limits cumulative physical model attempts and
+accepted tool-dispatch calls, and `max_model_retries` /
+`max_context_recoveries` bound recovery for one logical model request. An
+omitted execution limit is unlimited. `Agent.execution_usage` exposes an
+immutable per-run snapshot of physical `model_attempts` and accepted
+`tool_calls`; it resets at the start of each `run()`.
+
 The loop is organized as explicit run, step, state-reduction, context-preparation,
 tool-selection, model-request, tool-execution, observation, and completion
 stages. `Agent` still owns and advances that synchronous loop. Focused private
@@ -76,7 +84,10 @@ tools, call the model, or execute effects.
 
 `RuntimeFailure` records the failing step and `RuntimeStage`, original exception
 type, broad `FailureCategory`, and whether recovery is supported. The categories
-are `CONTEXT`, `MODEL`, `TOOL`, and `POLICY`. `RuntimeController` distinguishes
+are `CONTEXT`, `MODEL`, `BUDGET`, `TOOL`, and `POLICY`. An
+`ExecutionBudgetExceeded` at the `EXECUTION` stage records the runtime's
+intentional refusal to start expensive work and ends with
+`execution_budget_exceeded`. `RuntimeController` distinguishes
 two bounded actions. An explicit `RecoverableModelError` at `MODEL_REQUEST`
 returns `RETRY` while the same-context attempt budget remains. A provider-
 normalized `ContextWindowExceededError` is classified as
@@ -99,6 +110,12 @@ the injected `ToolSelector` for a model-facing view of the complete registry.
 It validates and measures that view before emitting `model_started`. A model
 call to a tool absent from that inference's view becomes an error ToolResult
 before ToolExecutor is reached; this is protocol consistency, not authorization.
+Such an unexposed call does not consume tool-call budget. Before any exposed
+call in a model-produced batch enters ToolExecutor, the Agent checks and
+consumes budget for the entire exposed portion of that batch. If it cannot all
+fit, no call in the batch is appended to Session, evaluated by policy, sent for
+approval, or executed. Calls admitted to ToolExecutor consume usage even when
+policy or approval denies them or execution returns an error observation.
 
 Each known completion or failure path finalizes one `RunRecord`. The existing
 `run()` return value remains the assistant text for compatibility; callers read
@@ -478,13 +495,18 @@ The CLI writes a new session identity before the first Agent turn. After every
 finalized Run—including `interrupted`—it saves the safe Session state and its
 RunRecord. A hard process crash before that commit leaves the previous complete
 snapshot. Concurrent multi-process writers for one session are not supported.
+The durable-session schema remains version 1 because each nested RunRecord
+carries and validates its own persistence version. A session may therefore
+contain historical RunRecord v1 values followed by current v2 values; loading or
+resuming does not rewrite the historical records.
 
 ### Trace
 
 `RunTrace` is a per-run record of step outputs, associated tool results,
 structured resolved approval decisions, and an
 end reason (`completed`, `max_steps_exceeded`, `context_error`, `model_error`,
-`tool_selection_error`, or `interrupted`). It is reset for
+`tool_selection_error`, `execution_budget_exceeded`, or `interrupted`). It is
+reset for
 each `Agent.run` call, unlike the conversation session. Explicit `to_dict()` and
 `from_dict()` support make this existing trace the step-level portion of a
 RunRecord rather than introducing another trace system.
@@ -525,22 +547,33 @@ including its context and selector strategy, estimated history and TaskState
 tokens, registered/exposed tool counts, estimated selected-schema tokens, and
 existing ToolResult/trajectory compaction facts. Run-level sums are cumulative
 provider-neutral estimates derived once per logical invocation, not provider
-billing tokens. RunRecord schema version 1 preserves
+billing tokens. Both supported RunRecord schema versions preserve
 `model_call_count == len(model_invocations)`; physical retry attempts do not add
 invocation records. If overflow recovery changes the context, the current
 logical invocation's metrics are replaced with the last effective context
 actually attempted; attempt-level before/after metrics remain live runtime
 evidence. Abandoned physical attempts and their token/cost metrics are not
-persisted in RunRecord v1. Retry-attempt cost accounting is deferred.
-`tool_call_count` counts requests returned by the model, including calls rejected before execution;
+persisted in RunRecord v1 or v2. Retry-attempt cost accounting is deferred.
+Physical `ExecutionUsage` counters and execution-budget event payloads likewise
+remain runtime evidence and are not added to either persisted schema.
+`tool_call_count` counts requests returned by the model, including calls
+rejected before execution;
 `tool_execution_count` counts calls that actually passed exposure and policy
 checks and began execution. `tool_result_error_count` counts error observations
 and is intentionally not named an execution-error count.
 
-RunRecord JSON-compatible serialization has explicit schema version 1 and
-rejects unsupported versions. It contains the RunTrace and safe structured
+RunRecord JSON-compatible serialization supports two explicit versions with the
+same persisted structure. Version 1 retains the original closed end-reason set:
+`completed`, `max_steps_exceeded`, `model_error`, `context_error`,
+`tool_selection_error`, and `interrupted`. Version 2 adds only
+`execution_budget_exceeded`. Current writers always emit version 2; current
+readers preserve and validate both versions without rewriting historical data.
+Older PureHarness readers are not expected to read version 2. The outer record
+version supplies the allowed set when its nested RunTrace is deserialized, so a
+version 1 record cannot carry the version 2 reason. Unsupported versions are
+rejected explicitly. Records contain the RunTrace and safe structured
 statistics, not a Session copy, lifecycle-event dump, full prompts or schemas,
-or hidden chain-of-thought. Its duplicated `end_reason` is validated against
+or hidden chain-of-thought. Their duplicated `end_reason` is validated against
 the canonical RunTrace value.
 
 `replay_run(record)` returns a deterministic tuple of frozen `ReplayEntry`
@@ -614,10 +647,12 @@ task_success = external oracle outcome
 completed != task_success
 ```
 
-`BenchmarkResult` schema version 1 embeds the M11 RunRecord rather than
+`BenchmarkResult` schema version 1 embeds a versioned RunRecord rather than
 recomputing runtime metrics, retains bounded verifier output previews, and
 records minimal stable configuration identity. JSONL output uses one result per
-line. Frozen per-config summaries report raw success counts/rates, end reasons,
+line. Its end reason is validated against the embedded RunRecord's schema, so
+historical v1 and current v2 records coexist without changing the benchmark
+schema. Frozen per-config summaries report raw success counts/rates, end reasons,
 calls, steps, cumulative estimated model-facing token categories, and
 compaction counts. No composite score, provider-exact usage, model comparison,
 LLM judge, parallel runner, or generic RunRecordStore is present.
@@ -676,6 +711,12 @@ both preserves the unbounded default. Supplying only one, non-positive values,
 or an output reserve greater than or equal to the window fails during CLI
 configuration. The CLI does not assign a provider-specific default.
 
+They also accept independent optional `--max-model-attempts N` and
+`--max-tool-calls N` flags. Values must be positive integers and omission keeps
+that resource unlimited. These Run-level physical-action bounds do not alter
+`--max-steps` or the per-request retry/recovery limits. Harbor does not set
+either execution limit and therefore retains unlimited defaults.
+
 ### Events and listeners
 
 The Agent emits a structured lifecycle for agent, context, model, approval, and
@@ -691,6 +732,7 @@ agent_started
                             -> context_recovering (bounded, zero or one)
                             -> model_retrying (bounded, zero or more)
                             -> model_completed | model_failed
+                            -> execution_budget_exhausted (terminal)
   tool_policy_evaluated                (zero or more tools)
     ALLOW -> tool_started -> tool_completed
     DENY -> model-visible denial, no approval/tool execution event
@@ -719,7 +761,9 @@ execution while ToolResult describes the observation supplied to the model.
 `context_build_failed` is followed by `agent_failed`, and no model request is
 made with partial or malformed context. Invalid selector configuration/output
 emits `agent_failed(reason="tool_selection_error")` without `model_started` or a
-model request; M10 adds no retry behavior.
+model request; M10 adds no retry behavior. A cumulative budget refusal emits
+`execution_budget_exhausted` followed by `agent_failed`, without inventing a
+model, tool, or context failure for work that never started.
 
 Event payloads use the following current contract:
 
@@ -731,6 +775,7 @@ Event payloads use the following current contract:
 | `context_window_exceeded` | `step`, normalized error type, whether recovery remains available, optional next recovery attempt, and maximum context recoveries |
 | `context_recovering` | `step`, recovery attempt/limit, overflow error type, previous history/request estimates, emergency history budget, and optional recovered history/request estimates when recompilation succeeds |
 | `context_build_failed` | `step`, `reason`, `error_type` |
+| `execution_budget_exhausted` | `step`, `resource`, `used`, `limit`, and optional batch `requested` / `remaining` |
 | `model_started` | `step`, selector strategy, registered/exposed counts, selected/all schema-token estimates, estimated savings |
 | `model_retrying` | `step`, next `attempt`, `max_attempts`, `error_type`, `failure_category` |
 | `model_completed` | `step`, `output_kind`, `tool_call_count` |
@@ -778,6 +823,9 @@ under the same additive compatibility rule. M18.4B adds the non-terminal
 `context_window_exceeded` occurrence and `context_recovering` recovery event
 under that rule. JSONL rendering does not alter Agent control flow; the CLI
 detects listener failure after the run and reports an application/output error.
+
+M18.5 adds `execution_budget_exhausted` under the same additive rule without
+changing wire schema version 1.
 
 The live wire schema is not the RunRecord persistence schema. Live events are
 transient execution observations; RunRecord remains finalized versioned

@@ -38,6 +38,7 @@ from pureharness.run_record import (
     RunRecord,
     RunRecordSerializationError,
 )
+from pureharness.runtime import ExecutionBudget
 from pureharness.session import Session
 from pureharness.session_store import (
     DurableSession,
@@ -123,6 +124,46 @@ def _context_limits_from_arguments(
         raise CLIError(str(exc)) from exc
 
 
+def _add_execution_budget_arguments(
+    parser: argparse.ArgumentParser,
+    *,
+    suppress_defaults: bool = False,
+) -> None:
+    default = argparse.SUPPRESS if suppress_defaults else None
+    parser.add_argument(
+        "--max-model-attempts",
+        type=_positive_integer,
+        default=default,
+        help="Maximum physical model attempts per run.",
+    )
+    parser.add_argument(
+        "--max-tool-calls",
+        type=_positive_integer,
+        default=default,
+        help="Maximum dispatched tool calls per run.",
+    )
+
+
+def _execution_budget_from_arguments(
+    arguments: argparse.Namespace,
+) -> ExecutionBudget | None:
+    max_model_attempts = getattr(
+        arguments,
+        "max_model_attempts",
+        None,
+    )
+    max_tool_calls = getattr(arguments, "max_tool_calls", None)
+    if max_model_attempts is None and max_tool_calls is None:
+        return None
+    try:
+        return ExecutionBudget(
+            max_model_attempts=max_model_attempts,
+            max_tool_calls=max_tool_calls,
+        )
+    except ValueError as exc:
+        raise CLIError(str(exc)) from exc
+
+
 class PlainTerminalRenderer:
     """Render a compact event stream without controlling Agent execution."""
 
@@ -187,6 +228,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Write one RunRecord JSON file per interactive turn.",
     )
     _add_context_limit_arguments(parser)
+    _add_execution_budget_arguments(parser)
     subparsers = parser.add_subparsers(dest="command")
 
     run_parser = subparsers.add_parser(
@@ -207,6 +249,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Maximum Agent execution steps (default: 10).",
     )
     _add_context_limit_arguments(
+        run_parser,
+        suppress_defaults=True,
+    )
+    _add_execution_budget_arguments(
         run_parser,
         suppress_defaults=True,
     )
@@ -308,12 +354,14 @@ def main(
 
     try:
         context_limits = _context_limits_from_arguments(arguments)
+        execution_budget = _execution_budget_from_arguments(arguments)
         if arguments.command == "run":
             return _run_once(
                 arguments,
                 factory,
                 output_fn,
                 context_limits=context_limits,
+                execution_budget=execution_budget,
             )
         if arguments.command == "inspect":
             return _inspect_record(
@@ -345,6 +393,7 @@ def main(
                 durable_store=durable_store,
                 durable_state=state,
                 context_limits=context_limits,
+                execution_budget=execution_budget,
             )
         return _run_interactive(
             workspace=arguments.workspace,
@@ -355,6 +404,7 @@ def main(
             output_fn=output_fn,
             durable_store=durable_store,
             context_limits=context_limits,
+            execution_budget=execution_budget,
         )
     except KeyboardInterrupt:
         if not jsonl_mode:
@@ -379,6 +429,7 @@ def _run_interactive(
     durable_store: DurableSessionStore,
     durable_state: DurableSession | None = None,
     context_limits: ContextLimits | None = None,
+    execution_budget: ExecutionBudget | None = None,
 ) -> int:
     resumed = durable_state is not None
     if durable_state is None:
@@ -454,6 +505,11 @@ def _run_interactive(
                     if context_limits is not None
                     else {}
                 )
+                budget_arguments = (
+                    {"execution_budget": execution_budget}
+                    if execution_budget is not None
+                    else {}
+                )
                 agent = _create_agent(
                     resolved_workspace,
                     model_factory(model_name),
@@ -465,6 +521,7 @@ def _run_interactive(
                         output_fn=output_fn,
                     ),
                     **context_arguments,
+                    **budget_arguments,
                 )
             except CLIError as exc:
                 output_fn(f"Error: {exc}")
@@ -600,6 +657,7 @@ def _run_once(
     output_fn: OutputFunction,
     *,
     context_limits: ContextLimits | None = None,
+    execution_budget: ExecutionBudget | None = None,
 ) -> int:
     workspace = _resolve_workspace(arguments.workspace)
     jsonl_mode = arguments.output_mode == "jsonl"
@@ -613,6 +671,11 @@ def _run_once(
         if context_limits is not None
         else {}
     )
+    budget_arguments = (
+        {"execution_budget": execution_budget}
+        if execution_budget is not None
+        else {}
+    )
     agent = _create_agent(
         workspace,
         model_factory(arguments.model),
@@ -621,6 +684,7 @@ def _run_once(
         event_listener=renderer,
         max_steps=arguments.max_steps,
         **context_arguments,
+        **budget_arguments,
     )
     exit_code = 0
     try:
@@ -760,6 +824,7 @@ def _create_agent(
     event_listener: Callable[[AgentEvent], None] | None = None,
     max_steps: int = 10,
     context_limits: ContextLimits | None = None,
+    execution_budget: ExecutionBudget | None = None,
 ) -> Agent:
     registry = ToolRegistry()
     for tool in create_coding_tools(workspace):
@@ -781,6 +846,7 @@ def _create_agent(
         session=session,
         max_steps=max_steps,
         context_limits=context_limits,
+        execution_budget=execution_budget,
     )
 
 

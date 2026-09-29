@@ -24,6 +24,9 @@ from pureharness.run_record import (
     RunRecordBuilder,
 )
 from pureharness.runtime import (
+    ExecutionBudget,
+    ExecutionBudgetExceeded,
+    ExecutionUsage,
     FailureCategory,
     RecoveryAction,
     RuntimeController,
@@ -79,6 +82,7 @@ class Agent:
         max_model_retries: int = 1,
         max_context_recoveries: int = 1,
         context_limits: ContextLimits | None = None,
+        execution_budget: ExecutionBudget | None = None,
     ):
         if not isinstance(include_task_state, bool):
             raise ValueError("include_task_state must be bool")
@@ -101,6 +105,13 @@ class Agent:
             ContextLimits,
         ):
             raise ValueError("context_limits must be ContextLimits or None")
+        if execution_budget is not None and not isinstance(
+            execution_budget,
+            ExecutionBudget,
+        ):
+            raise ValueError(
+                "execution_budget must be ExecutionBudget or None"
+            )
 
         self.model = model
         if tool_executor is None:
@@ -136,6 +147,8 @@ class Agent:
         self.max_model_retries = max_model_retries
         self.max_context_recoveries = max_context_recoveries
         self.context_limits = context_limits
+        self.execution_budget = execution_budget or ExecutionBudget()
+        self._execution_usage = ExecutionUsage()
         self._run_id_factory = (
             run_id_factory
             if run_id_factory is not None
@@ -150,6 +163,10 @@ class Agent:
     @property
     def messages(self):
         return self.session.items
+
+    @property
+    def execution_usage(self) -> ExecutionUsage:
+        return self._execution_usage
 
     def _emit(self, event: AgentEvent) -> None:
         if event.run_id is None and self._active_record_builder is not None:
@@ -308,6 +325,7 @@ class Agent:
         self.listener_errors = []
         self.last_runtime_failure = None
         self.last_run_record = None
+        self._execution_usage = ExecutionUsage()
         self._active_session_size = len(self.session.items)
         builder = RunRecordBuilder(
             run_id=self._run_id_factory(),
@@ -597,6 +615,16 @@ class Agent:
 
         while True:
             try:
+                self._consume_model_attempt()
+            except ExecutionBudgetExceeded as exc:
+                self._record_runtime_failure(
+                    step=step,
+                    stage=RuntimeStage.EXECUTION,
+                    error=exc,
+                    builder=builder,
+                )
+                raise
+            try:
                 return self.model.generate(
                     list(current_prepared.model_items),
                     list(selection.tools),
@@ -876,7 +904,58 @@ class Agent:
             error=error,
         )
         self.last_runtime_failure = failure
+        if isinstance(error, ExecutionBudgetExceeded):
+            event_data: dict[str, object] = {
+                "step": step,
+                "resource": error.resource,
+                "used": error.used,
+                "limit": error.limit,
+            }
+            if error.requested is not None:
+                event_data.update(
+                    {
+                        "requested": error.requested,
+                        "remaining": error.remaining,
+                    }
+                )
+            self._emit(
+                AgentEvent(
+                    type="execution_budget_exhausted",
+                    data=event_data,
+                )
+            )
         self._finalize_runtime_failure(failure, builder)
+
+    def _consume_model_attempt(self) -> None:
+        used = self._execution_usage.model_attempts
+        limit = self.execution_budget.max_model_attempts
+        if limit is not None and used >= limit:
+            raise ExecutionBudgetExceeded(
+                resource="model_attempts",
+                used=used,
+                limit=limit,
+            )
+        self._execution_usage = ExecutionUsage(
+            model_attempts=used + 1,
+            tool_calls=self._execution_usage.tool_calls,
+        )
+
+    def _consume_tool_calls(self, requested: int) -> None:
+        if requested == 0:
+            return
+        used = self._execution_usage.tool_calls
+        limit = self.execution_budget.max_tool_calls
+        if limit is not None and requested > limit - used:
+            raise ExecutionBudgetExceeded(
+                resource="tool_calls",
+                used=used,
+                limit=limit,
+                requested=requested,
+            )
+        self._execution_usage = ExecutionUsage(
+            model_attempts=self._execution_usage.model_attempts,
+            tool_calls=used + requested,
+        )
 
     def _finalize_runtime_failure(
         self,
@@ -930,6 +1009,21 @@ class Agent:
         exposed_tool_names: frozenset[str],
         builder: RunRecordBuilder,
     ) -> None:
+        accepted_call_count = sum(
+            tool_call.name in exposed_tool_names
+            for tool_call in tool_calls
+        )
+        try:
+            self._consume_tool_calls(accepted_call_count)
+        except ExecutionBudgetExceeded as exc:
+            self._record_runtime_failure(
+                step=step,
+                stage=RuntimeStage.EXECUTION,
+                error=exc,
+                builder=builder,
+            )
+            raise
+
         tool_results: list[ToolResult] = []
 
         for tool_call in tool_calls:
