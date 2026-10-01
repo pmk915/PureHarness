@@ -156,8 +156,15 @@ which describes general runtime activity. Its payload is:
 | `process_starts` / `process_polls` / `process_stops` | Corresponding process operations that reached `tool_started` |
 | `process_tool_errors` | Started process operations whose ToolResult has `is_error=true` |
 | `executions_since_last_mutation` | `run_command` and `start_process` operations observed after the latest structured mutation |
+| `verification_attempts` | Native `run_command` operations explicitly declared `purpose="verification"` that reached `tool_started` |
+| `verification_exit_zero` / `verification_exit_nonzero` | Started verification commands that produced the corresponding factual process exit status |
+| `verification_tool_errors` | Started verification commands whose ToolResult has `is_error=true` and therefore produced no process exit status |
+| `verifications_since_last_mutation` | Verification attempts observed after the latest structured mutation |
 | `last_mutation_step` | Latest successful structured-mutation step, or `null` |
 | `last_execution_step` | Latest started `run_command` / `start_process` step, or `null` |
+| `last_verification_outcome` | Latest started verification's `exit_zero`, `exit_nonzero`, or `tool_error`; `null` while none exists or the latest attempt is pending |
+| `last_verification_exit_code` | Latest completed verification process exit code, including negative values, or `null` for none/pending/Tool error |
+| `last_verification_step` | Latest started verification step, or `null` |
 | `terminal` | Whether this is the Run's final coding-evidence snapshot |
 
 The tracker follows sequential tool-call order, including a mutation followed by
@@ -166,6 +173,9 @@ execution in the same logical batch. A later mutation resets
 their own counters but are not new post-mutation executions. Calls rejected by
 exposure, budget, argument validation, workspace preconditions, policy, or
 approval never reach `tool_started` and do not increment execution counters.
+The same actual ordering governs `verifications_since_last_mutation`, including
+mutation followed by verification in one model tool batch; a later mutation
+resets only the post-mutation count, not Run totals.
 
 A non-terminal snapshot is emitted after each completed tool-call batch, after
 the existing `progress_snapshot`. One terminal snapshot is emitted after the
@@ -174,41 +184,60 @@ interrupted Run emits it immediately before `agent_interrupted`. The payload
 contains no command arguments, output, file content, hashes, absolute paths, or
 secrets. The event is additive within JSONL wire schema version 1.
 
-These counters do not classify commands as tests or verification. A command
-that returns a non-zero exit code can still have a successful ToolResult, and a
-ToolResult with `is_error=false` does not prove task correctness or verification
-success. M21.1 coding evidence remains factual; only an explicitly configured
-M21.3 CompletionPolicy may assess the snapshot.
+M21.4A's verification fields are additive payload fields within that same wire
+version. They remain run-scoped Agent API and live JSONL evidence; they are not
+persisted in RunRecord v2, BenchmarkResult v1, or durable Session v1.
+
+Verification purpose is explicit model-declared metadata on native
+`run_command`, with exact values `general` and `verification`; it is never
+inferred from command names, argv, output, cwd, timeout, user text, or Skill
+text. A command that returns a non-zero exit code still has a successful
+ToolResult, while a Tool exception records `tool_error` without inventing an
+exit code. Neither zero nor non-zero exit status proves task correctness.
+Background processes have no verification-purpose semantics in M21.4A. The
+M21.3 CompletionPolicy originally did not inspect these fields; M21.4B adds the
+narrow policy described below without changing the tracker.
 
 ### Evidence-aware completion
 
 The coding profile enables one bounded completion recheck. This is a heuristic
 runtime control, not proof of task correctness. A final candidate is
-reconsidered when either:
+reconsidered when any of these rules applies:
 
+- the latest structured mutation was followed by an explicitly
+  verification-marked native command whose latest outcome is `exit_nonzero`
+  or `tool_error`, with no later mutation;
 - execution (`run_command` or `start_process`) was observed with no successful
   structured workspace mutation; or
 - a successful structured mutation was observed with no execution after the
   latest mutation.
 
-No activity is accepted directly, as is mutation followed by execution. Exit
-status, stdout, stderr, command arguments, file content, final-answer text,
-TaskState wording, and task intent are not inspected. There is no shell-mutation
-detection, test-command classifier, command-exit interpretation, or zero-work
-immediate-final guard. At most one recheck is requested per Run.
+The verification-failure rule has highest priority. A verification before the
+latest mutation is ignored; the later mutation is treated as a reaction even
+without another execution. No activity is accepted directly, as are mutation
+followed by general execution and mutation followed by exit-zero verification.
+Structured verification outcome is inspected, but stdout, stderr, command
+arguments, file content, final-answer text, TaskState wording, and task intent
+are not. There is no shell-mutation detection, command-name classifier,
+rendered-output parsing, or zero-work immediate-final guard. At most one
+recheck is requested per Run.
 
 `completion_recheck_requested` contains the stable `reason`, one-based
 `recheck_number`, `max_rechecks`, and bounded factual counters:
 `workspace_mutations`, `command_executions`, `process_starts`, and
 `executions_since_last_mutation`. The rejected final is already in RunTrace but
-is absent from Session. Non-terminal progress and coding-evidence snapshots
+is absent from Session. For `verification_failed_after_mutation` only, the
+event also contains `verification_outcome` and nullable
+`verification_exit_code`. Non-terminal progress and coding-evidence snapshots
 follow the event.
 
 `completion_recheck_skipped` contains `reason`, `skip_reason`,
 `rechecks_used`, `max_rechecks`, and the same bounded counters. Skip reasons are
 `context_capacity`, `step_budget`, `model_attempt_budget`, and
-`recheck_limit`. A skip accepts the original final and proceeds through the
-ordinary single terminal completion sequence.
+`recheck_limit`. Verification-failure skips carry the same optional factual
+outcome fields. A skip accepts the original final and proceeds through the
+ordinary single terminal completion sequence. Neither event includes commands,
+stdout, stderr, paths, or file content.
 
 The next logical request receives one ephemeral system message. Its
 `context_built` event reports `completion_recheck_present=true` and a separate

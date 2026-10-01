@@ -96,8 +96,8 @@ def test_complete_coding_capability_workflow_without_model(tmp_path):
                 "timeout_seconds": 5,
             },
         )
-        assert "exit_code: 0" in command_result
-        assert "stdout:\nnew\n" in command_result
+        assert "exit_code: 0" in str(command_result)
+        assert "stdout:\nnew\n" in str(command_result)
 
         started = executor.execute(
             "start_process",

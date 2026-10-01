@@ -14,6 +14,7 @@ from pureharness.processes import (
     UnavailableProcessManager,
 )
 from pureharness.tools import RiskLevel, Tool
+from pureharness.verification import CommandPurpose, CommandToolObservation
 from pureharness.workspace_discipline import (
     resolve_workspace_path as _resolve_workspace_path,
     workspace_relative_path as _relative_path,
@@ -804,11 +805,18 @@ def create_run_command_tool(
         argv: list[str],
         cwd: str = ".",
         timeout_seconds: float = default_timeout_seconds,
-    ) -> str:
+        purpose: str = CommandPurpose.GENERAL.value,
+    ) -> CommandToolObservation:
         if not argv:
             raise ValueError(
                 "Command argv must not be empty."
             )
+        try:
+            command_purpose = CommandPurpose(purpose)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "purpose must be 'general' or 'verification'."
+            ) from exc
         _validate_bounded_number(
             "timeout_seconds",
             timeout_seconds,
@@ -827,10 +835,15 @@ def create_run_command_tool(
             timeout=timeout_seconds,
         )
 
-        return (
+        content = (
             f"exit_code: {result.exit_code}\n"
             f"stdout:\n{_bound_command_stream(result.stdout, 'stdout')}\n"
             f"stderr:\n{_bound_command_stream(result.stderr, 'stderr')}"
+        )
+        return CommandToolObservation(
+            purpose=command_purpose,
+            exit_code=result.exit_code,
+            content=content,
         )
 
     return Tool(
@@ -838,8 +851,10 @@ def create_run_command_tool(
         description=(
             "Run an argv command through the configured execution backend "
             "with a workspace-relative current directory and bounded timeout, "
-            "returning exit code, stdout, and stderr. Use it for tests and "
-            "validation. The default local backend is not a secure sandbox."
+            "returning exit code, stdout, and stderr. Set purpose to "
+            "verification only when the command is intentionally a concrete "
+            "check of the current workspace/task state. The default local "
+            "backend is not a secure sandbox."
         ),
         parameters={
             "type": "object",
@@ -868,6 +883,16 @@ def create_run_command_tool(
                     "minimum": _MIN_COMMAND_TIMEOUT_SECONDS,
                     "maximum": _MAX_COMMAND_TIMEOUT_SECONDS,
                     "default": default_timeout_seconds,
+                },
+                "purpose": {
+                    "type": "string",
+                    "enum": ["general", "verification"],
+                    "description": (
+                        "Use verification only when this command is "
+                        "intentionally being used as a concrete check of "
+                        "the current workspace/task state."
+                    ),
+                    "default": "general",
                 },
             },
             "required": ["argv"],

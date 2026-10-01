@@ -19,6 +19,7 @@ from pureharness.coding_tools import (
 from pureharness.execution import CommandResult, ExecutionTimeoutError
 from pureharness.processes import ProcessCapabilityUnavailableError
 from pureharness.tools import RiskLevel
+from pureharness.verification import CommandPurpose, CommandToolObservation
 
 
 class FakeExecutionBackend:
@@ -41,6 +42,13 @@ class FakeExecutionBackend:
             }
         )
         return next(self.responses)
+
+
+def test_command_purpose_has_exact_stable_values():
+    assert [purpose.value for purpose in CommandPurpose] == [
+        "general",
+        "verification",
+    ]
 
 
 def test_coding_tools_have_expected_metadata(tmp_path):
@@ -570,8 +578,8 @@ def test_run_command_tool_executes_in_workspace(
         }
     )
 
-    assert "exit_code: 0" in result
-    assert "hello from command" in result
+    assert "exit_code: 0" in str(result)
+    assert "hello from command" in str(result)
 
 
 def test_run_command_supports_workspace_relative_cwd(tmp_path):
@@ -590,7 +598,73 @@ def test_run_command_supports_workspace_relative_cwd(tmp_path):
         }
     )
 
-    assert str(subdirectory.resolve()) in result
+    assert str(subdirectory.resolve()) in str(result)
+
+
+def test_run_command_exposes_explicit_purpose_schema(tmp_path):
+    tool = create_run_command_tool(tmp_path)
+
+    assert tool.parameters["additionalProperties"] is False
+    assert tool.parameters["properties"]["purpose"] == {
+        "type": "string",
+        "enum": ["general", "verification"],
+        "description": (
+            "Use verification only when this command is intentionally "
+            "being used as a concrete check of the current "
+            "workspace/task state."
+        ),
+        "default": "general",
+    }
+
+
+@pytest.mark.parametrize(
+    "arguments, expected_purpose",
+    [
+        ({"argv": ["check"]}, CommandPurpose.GENERAL),
+        (
+            {"argv": ["check"], "purpose": "general"},
+            CommandPurpose.GENERAL,
+        ),
+        (
+            {"argv": ["check"], "purpose": "verification"},
+            CommandPurpose.VERIFICATION,
+        ),
+    ],
+)
+def test_run_command_purpose_is_structured_without_reaching_backend(
+    tmp_path,
+    arguments,
+    expected_purpose,
+):
+    backend = FakeExecutionBackend(
+        [CommandResult(exit_code=7, stdout="out", stderr="err")]
+    )
+    tool = create_run_command_tool(tmp_path, execution_backend=backend)
+
+    result = tool.execute(arguments)
+
+    assert isinstance(result, CommandToolObservation)
+    assert result.purpose is expected_purpose
+    assert result.exit_code == 7
+    assert str(result) == "exit_code: 7\nstdout:\nout\nstderr:\nerr"
+    assert backend.calls == [
+        {
+            "argv": ["check"],
+            "cwd": tmp_path.resolve(),
+            "timeout": 10.0,
+        }
+    ]
+
+
+@pytest.mark.parametrize("purpose", ["test", "", True, 1])
+def test_run_command_rejects_invalid_purpose(tmp_path, purpose):
+    backend = FakeExecutionBackend([])
+    tool = create_run_command_tool(tmp_path, execution_backend=backend)
+
+    with pytest.raises(ValueError, match="purpose"):
+        tool.execute({"argv": ["check"], "purpose": purpose})
+
+    assert backend.calls == []
 
 
 def test_run_command_rejects_cwd_escape_and_missing_directory(tmp_path):
@@ -669,17 +743,18 @@ def test_run_command_bounds_large_streams_deterministically(tmp_path):
 
     result = tool.execute({"argv": ["large-output"]})
 
-    assert result.startswith("exit_code: 7\nstdout:\nHEAD")
-    assert "stdout truncated; original character count: 24008" in result
-    assert "stderr truncated; original character count: 24014" in result
-    assert "TAIL\nstderr:\nERRHEAD" in result
-    assert result.endswith("ERRTAIL")
-    assert result == create_run_command_tool(
+    rendered = str(result)
+    assert rendered.startswith("exit_code: 7\nstdout:\nHEAD")
+    assert "stdout truncated; original character count: 24008" in rendered
+    assert "stderr truncated; original character count: 24014" in rendered
+    assert "TAIL\nstderr:\nERRHEAD" in rendered
+    assert rendered.endswith("ERRTAIL")
+    assert rendered == str(create_run_command_tool(
         tmp_path,
         execution_backend=FakeExecutionBackend(
             [CommandResult(exit_code=7, stdout=stdout, stderr=stderr)]
         ),
-    ).execute({"argv": ["large-output"]})
+    ).execute({"argv": ["large-output"]}))
 
 
 def test_coding_command_tools_share_injected_backend(
@@ -734,7 +809,7 @@ def test_coding_command_tools_share_injected_backend(
     ):
         tools["start_process"].execute({"argv": ["fake"]})
 
-    assert command_output == (
+    assert str(command_output) == (
         "exit_code: 0\n"
         "stdout:\nfake command output\n"
         "stderr:\n"

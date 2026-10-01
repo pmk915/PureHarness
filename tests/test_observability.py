@@ -298,6 +298,31 @@ def test_wire_serializer_maps_completion_recheck_context_fields():
                 "executions_since_last_mutation": 0,
             },
         ),
+        (
+            "completion_recheck_requested",
+            {
+                "reason": "verification_failed_after_mutation",
+                "recheck_number": 1,
+                "max_rechecks": 1,
+                "workspace_mutations": 1,
+                "command_executions": 1,
+                "process_starts": 0,
+                "executions_since_last_mutation": 1,
+                "verification_outcome": "exit_nonzero",
+                "verification_exit_code": 7,
+            },
+            {
+                "reason": "verification_failed_after_mutation",
+                "recheck_number": 1,
+                "max_rechecks": 1,
+                "workspace_mutations": 1,
+                "command_executions": 1,
+                "process_starts": 0,
+                "executions_since_last_mutation": 1,
+                "verification_outcome": "exit_nonzero",
+                "verification_exit_code": 7,
+            },
+        ),
     ],
 )
 def test_wire_serializer_maps_completion_control_events(
@@ -364,8 +389,16 @@ def test_wire_serializer_maps_coding_evidence_snapshot_with_null_steps():
             "process_stops": 1,
             "process_tool_errors": 1,
             "executions_since_last_mutation": 2,
+            "verification_attempts": 2,
+            "verification_exit_zero": 1,
+            "verification_exit_nonzero": 0,
+            "verification_tool_errors": 1,
+            "verifications_since_last_mutation": 1,
             "last_mutation_step": None,
             "last_execution_step": None,
+            "last_verification_outcome": None,
+            "last_verification_exit_code": None,
+            "last_verification_step": None,
             "terminal": False,
         },
         timestamp=datetime(2026, 9, 20, 10, 0, tzinfo=timezone.utc),
@@ -387,8 +420,16 @@ def test_wire_serializer_maps_coding_evidence_snapshot_with_null_steps():
             "process_stops": 1,
             "process_tool_errors": 1,
             "executions_since_last_mutation": 2,
+            "verification_attempts": 2,
+            "verification_exit_zero": 1,
+            "verification_exit_nonzero": 0,
+            "verification_tool_errors": 1,
+            "verifications_since_last_mutation": 1,
             "last_mutation_step": None,
             "last_execution_step": None,
+            "last_verification_outcome": None,
+            "last_verification_exit_code": None,
+            "last_verification_step": None,
             "terminal": False,
         },
     }
@@ -398,6 +439,64 @@ def test_wire_mapping_explicitly_covers_every_public_event_type():
     assert observability_module.SUPPORTED_EVENT_TYPES == frozenset(
         get_args(AgentEventType)
     )
+
+
+def test_wire_serializer_maps_verification_outcome_values():
+    event = AgentEvent(
+        type="coding_evidence_snapshot",
+        data={
+            "step": 2,
+            "workspace_mutations": 1,
+            "command_executions": 1,
+            "command_tool_errors": 0,
+            "process_starts": 0,
+            "process_polls": 0,
+            "process_stops": 0,
+            "process_tool_errors": 0,
+            "executions_since_last_mutation": 1,
+            "verification_attempts": 1,
+            "verification_exit_zero": 0,
+            "verification_exit_nonzero": 1,
+            "verification_tool_errors": 0,
+            "verifications_since_last_mutation": 1,
+            "last_mutation_step": 2,
+            "last_execution_step": 2,
+            "last_verification_outcome": "exit_nonzero",
+            "last_verification_exit_code": -9,
+            "last_verification_step": 2,
+            "terminal": True,
+        },
+        timestamp=datetime(2026, 9, 20, 10, 0, tzinfo=timezone.utc),
+        run_id="run-verification-evidence",
+    )
+
+    wire = event_to_wire(event)
+
+    assert wire["schema_version"] == 1
+    assert wire["payload"]["last_verification_outcome"] == "exit_nonzero"
+    assert wire["payload"]["last_verification_exit_code"] == -9
+    assert wire["payload"]["verification_exit_nonzero"] == 1
+    assert set(wire["payload"]) == {
+        "workspace_mutations",
+        "command_executions",
+        "command_tool_errors",
+        "process_starts",
+        "process_polls",
+        "process_stops",
+        "process_tool_errors",
+        "executions_since_last_mutation",
+        "verification_attempts",
+        "verification_exit_zero",
+        "verification_exit_nonzero",
+        "verification_tool_errors",
+        "verifications_since_last_mutation",
+        "last_mutation_step",
+        "last_execution_step",
+        "last_verification_outcome",
+        "last_verification_exit_code",
+        "last_verification_step",
+        "terminal",
+    }
 
 
 def test_wire_serializer_rejects_unknown_event_and_missing_run_id():

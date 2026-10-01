@@ -2,7 +2,7 @@
 
 This document separates the implementation that exists today from the intended
 architecture. Sections marked **Current** describe repository behavior through
-the M21.3 evidence-aware-completion milestone. Sections marked **Target**
+the M21.4B verification-aware-completion milestone. Sections marked **Target**
 describe direction, not implemented APIs.
 
 ## 1. Project positioning
@@ -96,6 +96,17 @@ Run even when Session history persists. A long-horizon coding Run can complete
 at the protocol level without producing a workspace mutation or post-mutation
 execution; M21.1 exposes that fact without changing completion behavior.
 
+M21.4A additionally records outcome evidence only for native one-shot
+`run_command` calls explicitly marked with model-declared
+`purpose="verification"`. A frozen `CommandToolObservation` carries the
+declared purpose and process exit code beside the unchanged rendered content.
+The Agent keeps that raw value long enough for `CodingEvidenceTracker` to
+observe it, then stores only `str(result)` in the normal Session
+`ToolResult`. Exit zero, non-zero, and Tool-level failure are factual
+outcomes, not proof of task correctness. General commands and background
+process tools have no verification semantics, and no argv, command-name,
+output, or task-text heuristic is used.
+
 The tracker observes sequential calls in the existing execution path. A
 successful mutation resets its post-mutation execution count immediately, so a
 later command in the same tool-call batch counts as subsequent execution.
@@ -105,11 +116,13 @@ start, poll, and stop have distinct counters; only start is an execution action
 for ordering purposes. No command text is classified by intent.
 
 Coding evidence does not equate ToolResult success, command exit status, or task
-correctness. It does not prove verification success or enter TaskState. Like
+correctness. It does not prove task success or enter TaskState. Like
 ProgressSnapshot, it remains live API and JSONL evidence and is not added to
 RunRecord v2, BenchmarkResult v1, or durable Session v1. M21.3 allows a
 separately configured CompletionPolicy to assess this snapshot; the tracker
-itself remains factual and does not make lifecycle decisions.
+itself remains factual and does not make lifecycle decisions. M21.4A does not
+change that policy: it still assesses only execution existence and does not
+consume verification outcomes.
 
 M21.2 adds Skills-lite: a frozen, versioned procedural-guidance value and a
 strict package-resource loader for PureHarness's small built-in Skill document
@@ -134,8 +147,18 @@ internal benchmark enable `EvidenceAwareCodingCompletionPolicy`, which may
 request at most one new logical model step when it observes either execution
 without a successful structured mutation or a structured mutation without a
 later `run_command` / `start_process`. No activity, or mutation followed by
-execution, is accepted directly. Command arguments, output, exit status, final
-text, TaskState wording, and task intent are never inspected.
+execution, is accepted directly. Under the original M21.3 rules, command
+arguments, output, exit status, final text, TaskState wording, and task intent
+are never inspected.
+
+M21.4B lets that same immutable, stateless policy consume M21.4A's structured
+verification outcome. Its highest-priority rule requests reconsideration when
+the latest mutation is followed by an explicitly verification-marked native
+command whose factual outcome is `exit_nonzero` or `tool_error`. A successful
+verification is accepted, and a later mutation proves that the agent reacted to
+the earlier failure. Actual sequential
+`verifications_since_last_mutation` state disambiguates same-step tool order;
+no command, output, path, or task-correctness inference is introduced.
 
 The rejected final is retained as a completed `StepTrace` but is not appended to
 Session. The next logical request receives one ephemeral neutral completion
@@ -947,12 +970,12 @@ Event payloads use the following current contract:
 | `context_built` | `step`, history/final-context/trajectory counts, strategy, active Skill count/versioned IDs, completion-recheck presence, separate estimated Skill/history/TaskState/recheck tokens, safe TaskState aggregate counts, total/included/dropped units, projected/compacted result counts, raw/projected result character counts, aggregate trajectory-compaction statistics, optional history budget, and—when explicit limits are configured—window/reserve/usable-input values, final known-request estimate, available history, pressure detection, and whether bounded history was applied |
 | `context_window_exceeded` | `step`, normalized error type, whether recovery remains available, optional next recovery attempt, and maximum context recoveries |
 | `context_recovering` | `step`, recovery attempt/limit, overflow error type, previous history/request estimates, emergency history budget, and optional recovered history/request estimates when recompilation succeeds |
-| `completion_recheck_requested` | stable reason, one-based recheck number/limit, and bounded mutation/execution counters |
-| `completion_recheck_skipped` | stable reason, skip reason, used/maximum rechecks, and bounded mutation/execution counters |
+| `completion_recheck_requested` | stable reason, one-based recheck number/limit, bounded mutation/execution counters, and optional factual verification outcome/exit code for verification-failure reconsideration |
+| `completion_recheck_skipped` | stable reason, skip reason, used/maximum rechecks, bounded mutation/execution counters, and optional factual verification outcome/exit code for verification-failure reconsideration |
 | `context_build_failed` | `step`, `reason`, `error_type` |
 | `execution_budget_exhausted` | `step`, `resource`, `used`, `limit`, and optional batch `requested` / `remaining` |
 | `progress_snapshot` | `step`, completed logical steps, physical model attempts/tool calls, successful/failed tool results, unique/repeated/max-identical tool-action counts, model retries, context recoveries, proactive pressure count, provider overflow count, and `terminal` |
-| `coding_evidence_snapshot` | `step`, structured mutation count, command execution/error counts, process start/poll/stop and error counts, executions since latest mutation, last mutation/execution steps, and `terminal` |
+| `coding_evidence_snapshot` | `step`, structured mutation count, command execution/error counts, process start/poll/stop and error counts, executions and explicit verification attempts since latest mutation, verification zero/non-zero/Tool-error totals and latest factual outcome/exit code/step, last mutation/execution steps, and `terminal` |
 | `model_started` | `step`, selector strategy, registered/exposed counts, selected/all schema-token estimates, estimated savings |
 | `model_retrying` | `step`, next `attempt`, `max_attempts`, `error_type`, `failure_category` |
 | `model_completed` | `step`, `output_kind`, `tool_call_count` |
@@ -1028,6 +1051,16 @@ M21.3 adds `completion_recheck_requested` and
 `estimated_completion_recheck_tokens` on `context_built`, under the same
 additive JSONL v1 rule. None is persisted in RunRecord v2.
 
+M21.4A additively extends `coding_evidence_snapshot` with explicit verification
+attempt/outcome counters, post-mutation ordering, and nullable latest outcome,
+exit code, and step. It does not change live wire schema version 1 or persist
+these fields in RunRecord v2, BenchmarkResult v1, or durable Session v1.
+
+M21.4B adds the stable completion reason
+`verification_failed_after_mutation` and optional `verification_outcome` /
+`verification_exit_code` fields to the existing completion-recheck events
+under the same additive JSONL v1 rule. It adds no event type or persisted field.
+
 The live wire schema is not the RunRecord persistence schema. Live events are
 transient execution observations; RunRecord remains finalized versioned
 evidence, and replay remains a side-effect-free ordered reconstruction of that
@@ -1088,14 +1121,20 @@ filesystem locking, an atomic compare-and-swap, or transaction guarantees.
 
 `run_command`, `git_status`, and `git_diff` send argv, a resolved working
 directory, and a bounded timeout through the same injected `ExecutionBackend`.
-`run_command` accepts workspace-relative `cwd` and a per-call timeout from one
-to 120 seconds. Its model-facing stdout and stderr are independently bounded
+`run_command` accepts workspace-relative `cwd`, a per-call timeout from one
+to 120 seconds, and an optional `purpose` whose exact values are `general`
+(default) and `verification`. Purpose is model-declared metadata for a
+concrete check, not an independent quality judgment. Its model-facing stdout
+and stderr are independently bounded
 with deterministic head/tail retention; this does not claim an OS pipe-memory
 limit. Git tools retain
 fixed local read-only commands without arbitrary Git arguments or remote access;
-`git_diff` also disables external diff drivers and text conversion. The tool
-layer converts `CommandResult` back to the existing model-facing strings and
-preserves non-zero Git handling. Filesystem tools continue to use direct Python
+`git_diff` also disables external diff drivers and text conversion. For
+`run_command`, the tool layer wraps `CommandResult` in a frozen internal
+`CommandToolObservation` containing structured purpose and exit code; its
+string form is byte-for-byte the existing model-facing format. Purpose is not
+passed to `ExecutionBackend`. Git tools preserve their existing string results
+and non-zero handling. Filesystem tools continue to use direct Python
 filesystem APIs; M5A still does not introduce a filesystem backend.
 
 Every built-in object tool schema is explicitly closed with
@@ -1116,7 +1155,8 @@ command tool -> ExecutionBackend -----|
 `CommandResult` contains only `exit_code`, `stdout`, and `stderr`. A normal
 non-zero exit remains a result. Failure to start a process, invalid local setup,
 or timeout raises `ExecutionError`; the backend does not create Agent-domain
-`ToolResult` objects or know how the Agent observes tool failures.
+`ToolResult` objects or know command purpose or how the Agent observes tool
+failures.
 
 `LocalExecutionBackend` uses argv execution without a shell, captures text
 stdout/stderr, enforces the supplied timeout, uses the supplied cwd, and inherits

@@ -101,8 +101,18 @@ class AgentEventData(TypedDict, total=False):
     process_stops: int
     process_tool_errors: int
     executions_since_last_mutation: int
+    verification_attempts: int
+    verification_exit_zero: int
+    verification_exit_nonzero: int
+    verification_tool_errors: int
+    verifications_since_last_mutation: int
+    verification_outcome: str | None
+    verification_exit_code: int | None
     last_mutation_step: int | None
     last_execution_step: int | None
+    last_verification_outcome: str | None
+    last_verification_exit_code: int | None
+    last_verification_step: int | None
     terminal: bool
     current_request_present: bool
     completed_actions_count: int

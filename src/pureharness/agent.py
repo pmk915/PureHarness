@@ -1113,7 +1113,7 @@ class Agent:
                     "reason": reason.value,
                     "recheck_number": self._completion_rechecks_used,
                     "max_rechecks": policy.max_rechecks,
-                    **self._completion_evidence_event_data(),
+                    **self._completion_evidence_event_data(reason),
                 },
             )
         )
@@ -1184,14 +1184,17 @@ class Agent:
                     "skip_reason": skip_reason.value,
                     "rechecks_used": self._completion_rechecks_used,
                     "max_rechecks": policy.max_rechecks,
-                    **self._completion_evidence_event_data(),
+                    **self._completion_evidence_event_data(reason),
                 },
             )
         )
 
-    def _completion_evidence_event_data(self) -> dict[str, int]:
+    def _completion_evidence_event_data(
+        self,
+        reason: CompletionReason,
+    ) -> dict[str, object]:
         evidence = self.coding_evidence_snapshot
-        return {
+        data: dict[str, object] = {
             "workspace_mutations": evidence.workspace_mutations,
             "command_executions": evidence.command_executions,
             "process_starts": evidence.process_starts,
@@ -1199,6 +1202,18 @@ class Agent:
                 evidence.executions_since_last_mutation
             ),
         }
+        if (
+            reason
+            is CompletionReason.VERIFICATION_FAILED_AFTER_MUTATION
+        ):
+            outcome = evidence.last_verification_outcome
+            data["verification_outcome"] = (
+                None if outcome is None else outcome.value
+            )
+            data["verification_exit_code"] = (
+                evidence.last_verification_exit_code
+            )
+        return data
 
     def _complete_run(
         self,
@@ -1397,8 +1412,28 @@ class Agent:
             "executions_since_last_mutation": (
                 snapshot.executions_since_last_mutation
             ),
+            "verification_attempts": snapshot.verification_attempts,
+            "verification_exit_zero": snapshot.verification_exit_zero,
+            "verification_exit_nonzero": (
+                snapshot.verification_exit_nonzero
+            ),
+            "verification_tool_errors": (
+                snapshot.verification_tool_errors
+            ),
+            "verifications_since_last_mutation": (
+                snapshot.verifications_since_last_mutation
+            ),
             "last_mutation_step": snapshot.last_mutation_step,
             "last_execution_step": snapshot.last_execution_step,
+            "last_verification_outcome": (
+                None
+                if snapshot.last_verification_outcome is None
+                else snapshot.last_verification_outcome.value
+            ),
+            "last_verification_exit_code": (
+                snapshot.last_verification_exit_code
+            ),
+            "last_verification_step": snapshot.last_verification_step,
             "terminal": terminal,
         }
         if step is not None:
@@ -1436,6 +1471,7 @@ class Agent:
             tool_started_at: float | None = None
             started_tool: Tool | None = None
             workspace_mutation: WorkspaceMutation | None = None
+            raw_result: object | None = None
 
             def on_policy_evaluated(
                 tool: Tool,
@@ -1460,6 +1496,7 @@ class Agent:
                 started_tool = tool
                 self._coding_evidence_tracker.record_tool_started(
                     tool,
+                    tool_call.arguments,
                     step=step,
                 )
                 self._emit(
@@ -1563,7 +1600,7 @@ class Agent:
                     tool_call.name,
                     tool_call.arguments,
                 )
-                result = self.tool_executor.execute(
+                raw_result = self.tool_executor.execute(
                     tool_call.name,
                     tool_call.arguments,
                     on_policy_evaluated=on_policy_evaluated,
@@ -1577,7 +1614,7 @@ class Agent:
                         on_precondition_recorded
                     ),
                 )
-                content = str(result)
+                content = str(raw_result)
                 is_error = False
             except Exception as exc:
                 content = f"Tool error: {type(exc).__name__}: {exc}"
@@ -1597,7 +1634,10 @@ class Agent:
             if started_tool is not None:
                 self._coding_evidence_tracker.record_tool_result(
                     started_tool,
+                    tool_call.arguments,
+                    result=raw_result,
                     is_error=is_error,
+                    step=step,
                 )
 
             if tool_started_at is not None:

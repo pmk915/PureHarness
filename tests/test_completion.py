@@ -34,6 +34,7 @@ from pureharness.skills import default_coding_skills, render_skill
 from pureharness.tool_executor import ToolExecutor
 from pureharness.tool_selection import estimate_tool_schema_tokens
 from pureharness.tools import RiskLevel, Tool, ToolRegistry
+from pureharness.verification import VerificationOutcome
 from pureharness.workspace_discipline import WorkspaceMutation
 
 
@@ -214,6 +215,117 @@ def test_command_error_counters_do_not_change_policy_decision():
     ).decision is CompletionDecision.ACCEPT
 
 
+@pytest.mark.parametrize(
+    "outcome, exit_code",
+    [
+        (VerificationOutcome.EXIT_NONZERO, 1),
+        (VerificationOutcome.TOOL_ERROR, None),
+    ],
+)
+def test_failed_verification_after_mutation_has_highest_priority(
+    outcome,
+    exit_code,
+):
+    assessment = EvidenceAwareCodingCompletionPolicy().assess(
+        CodingEvidenceSnapshot(
+            workspace_mutations=1,
+            command_executions=1,
+            command_tool_errors=(
+                1 if outcome is VerificationOutcome.TOOL_ERROR else 0
+            ),
+            executions_since_last_mutation=1,
+            verification_attempts=1,
+            verification_exit_nonzero=(
+                1 if outcome is VerificationOutcome.EXIT_NONZERO else 0
+            ),
+            verification_tool_errors=(
+                1 if outcome is VerificationOutcome.TOOL_ERROR else 0
+            ),
+            verifications_since_last_mutation=1,
+            last_mutation_step=1,
+            last_execution_step=2,
+            last_verification_outcome=outcome,
+            last_verification_exit_code=exit_code,
+            last_verification_step=2,
+        )
+    )
+
+    assert assessment == CompletionAssessment(
+        CompletionDecision.RECONSIDER,
+        CompletionReason.VERIFICATION_FAILED_AFTER_MUTATION,
+    )
+
+
+def test_successful_verification_after_mutation_is_accepted():
+    assessment = EvidenceAwareCodingCompletionPolicy().assess(
+        CodingEvidenceSnapshot(
+            workspace_mutations=1,
+            command_executions=1,
+            executions_since_last_mutation=1,
+            verification_attempts=1,
+            verification_exit_zero=1,
+            verifications_since_last_mutation=1,
+            last_mutation_step=1,
+            last_execution_step=2,
+            last_verification_outcome=VerificationOutcome.EXIT_ZERO,
+            last_verification_exit_code=0,
+            last_verification_step=2,
+        )
+    )
+
+    assert assessment == CompletionAssessment(CompletionDecision.ACCEPT)
+
+
+def test_failed_verification_before_mutation_is_ignored():
+    assessment = EvidenceAwareCodingCompletionPolicy().assess(
+        CodingEvidenceSnapshot(
+            workspace_mutations=1,
+            command_executions=1,
+            verification_attempts=1,
+            verification_exit_nonzero=1,
+            last_mutation_step=2,
+            last_execution_step=1,
+            last_verification_outcome=VerificationOutcome.EXIT_NONZERO,
+            last_verification_exit_code=1,
+            last_verification_step=1,
+        )
+    )
+
+    assert assessment == CompletionAssessment(CompletionDecision.ACCEPT)
+
+
+def test_general_command_nonzero_after_mutation_is_accepted():
+    assessment = EvidenceAwareCodingCompletionPolicy().assess(
+        CodingEvidenceSnapshot(
+            workspace_mutations=1,
+            command_executions=1,
+            executions_since_last_mutation=1,
+            last_mutation_step=1,
+            last_execution_step=2,
+        )
+    )
+
+    assert assessment == CompletionAssessment(CompletionDecision.ACCEPT)
+
+
+def test_mutation_after_failed_verification_is_a_reaction():
+    assessment = EvidenceAwareCodingCompletionPolicy().assess(
+        CodingEvidenceSnapshot(
+            workspace_mutations=2,
+            command_executions=1,
+            verification_attempts=1,
+            verification_exit_nonzero=1,
+            last_mutation_step=2,
+            last_execution_step=2,
+            last_verification_outcome=VerificationOutcome.EXIT_NONZERO,
+            last_verification_exit_code=1,
+            last_verification_step=2,
+        )
+    )
+
+    assert assessment == CompletionAssessment(CompletionDecision.ACCEPT)
+
+
 def test_completion_values_are_immutable_and_rendering_is_neutral():
     policy = EvidenceAwareCodingCompletionPolicy()
     assessment = CompletionAssessment(CompletionDecision.ACCEPT)
@@ -238,6 +350,21 @@ def test_completion_values_are_immutable_and_rendering_is_neutral():
         mutation_message.content
     )
     assert "no execution was observed after" in mutation_message.content
+    verification_message = render_completion_recheck(
+        CompletionReason.VERIFICATION_FAILED_AFTER_MUTATION
+    )
+    assert verification_message == Message(
+        role="system",
+        content=(
+            "[PureHarness Completion Recheck]\n\n"
+            "A verification-marked command executed after your latest "
+            "workspace mutation did not complete successfully.\n\n"
+            "Review the current workspace state and verification evidence "
+            "before deciding whether the task is complete."
+        ),
+    )
+    assert "wrong" not in verification_message.content.lower()
+    assert "fix the issue" not in verification_message.content.lower()
 
 
 def test_generic_agent_and_zero_activity_coding_agent_complete_directly():

@@ -120,6 +120,8 @@ _EVENT_PAYLOAD_FIELDS: dict[str, tuple[tuple[str, str], ...]] = {
             "executions_since_last_mutation",
             "executions_since_last_mutation",
         ),
+        ("verification_outcome", "verification_outcome"),
+        ("verification_exit_code", "verification_exit_code"),
     ),
     "completion_recheck_skipped": (
         ("reason", "reason"),
@@ -133,6 +135,8 @@ _EVENT_PAYLOAD_FIELDS: dict[str, tuple[tuple[str, str], ...]] = {
             "executions_since_last_mutation",
             "executions_since_last_mutation",
         ),
+        ("verification_outcome", "verification_outcome"),
+        ("verification_exit_code", "verification_exit_code"),
     ),
     "execution_budget_exhausted": (
         ("resource", "resource"),
@@ -174,8 +178,19 @@ _EVENT_PAYLOAD_FIELDS: dict[str, tuple[tuple[str, str], ...]] = {
             "executions_since_last_mutation",
             "executions_since_last_mutation",
         ),
+        ("verification_attempts", "verification_attempts"),
+        ("verification_exit_zero", "verification_exit_zero"),
+        ("verification_exit_nonzero", "verification_exit_nonzero"),
+        ("verification_tool_errors", "verification_tool_errors"),
+        (
+            "verifications_since_last_mutation",
+            "verifications_since_last_mutation",
+        ),
         ("last_mutation_step", "last_mutation_step"),
         ("last_execution_step", "last_execution_step"),
+        ("last_verification_outcome", "last_verification_outcome"),
+        ("last_verification_exit_code", "last_verification_exit_code"),
+        ("last_verification_step", "last_verification_step"),
         ("terminal", "terminal"),
     ),
     "model_started": (

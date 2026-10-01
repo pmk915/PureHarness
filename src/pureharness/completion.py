@@ -4,6 +4,7 @@ from typing import Protocol
 
 from pureharness.coding_evidence import CodingEvidenceSnapshot
 from pureharness.messages import Message
+from pureharness.verification import VerificationOutcome
 
 
 class CompletionDecision(str, Enum):
@@ -12,6 +13,9 @@ class CompletionDecision(str, Enum):
 
 
 class CompletionReason(str, Enum):
+    VERIFICATION_FAILED_AFTER_MUTATION = (
+        "verification_failed_after_mutation"
+    )
     EXECUTION_WITHOUT_STRUCTURED_MUTATION = (
         "execution_without_structured_mutation"
     )
@@ -68,9 +72,47 @@ class EvidenceAwareCodingCompletionPolicy:
     ) -> CompletionAssessment:
         if not isinstance(evidence, CodingEvidenceSnapshot):
             raise TypeError("evidence must be CodingEvidenceSnapshot")
+        verification_failed = evidence.last_verification_outcome in {
+            VerificationOutcome.EXIT_NONZERO,
+            VerificationOutcome.TOOL_ERROR,
+        }
+        verification_failed_after_mutation = (
+            verification_failed
+            and evidence.last_mutation_step is not None
+            and evidence.last_verification_step is not None
+            and (
+                evidence.last_verification_step
+                > evidence.last_mutation_step
+                or (
+                    evidence.last_verification_step
+                    == evidence.last_mutation_step
+                    and evidence.verifications_since_last_mutation > 0
+                )
+            )
+        )
+        if verification_failed_after_mutation:
+            return CompletionAssessment(
+                CompletionDecision.RECONSIDER,
+                CompletionReason.VERIFICATION_FAILED_AFTER_MUTATION,
+            )
+        mutation_after_failed_verification = (
+            verification_failed
+            and evidence.last_mutation_step is not None
+            and evidence.last_verification_step is not None
+            and evidence.verifications_since_last_mutation == 0
+            and (
+                evidence.last_mutation_step
+                > evidence.last_verification_step
+                or (
+                    evidence.last_mutation_step
+                    == evidence.last_verification_step
+                )
+            )
+        )
         if (
             evidence.workspace_mutations > 0
             and evidence.executions_since_last_mutation == 0
+            and not mutation_after_failed_verification
         ):
             return CompletionAssessment(
                 CompletionDecision.RECONSIDER,
@@ -95,6 +137,17 @@ def default_coding_completion_policy() -> CompletionPolicy:
 
 
 def render_completion_recheck(reason: CompletionReason) -> Message:
+    if reason is CompletionReason.VERIFICATION_FAILED_AFTER_MUTATION:
+        return Message(
+            role="system",
+            content=(
+                "[PureHarness Completion Recheck]\n\n"
+                "A verification-marked command executed after your latest "
+                "workspace mutation did not complete successfully.\n\n"
+                "Review the current workspace state and verification "
+                "evidence before deciding whether the task is complete."
+            ),
+        )
     if reason is CompletionReason.MUTATION_WITHOUT_POST_MUTATION_EXECUTION:
         evidence = (
             "A successful structured workspace mutation was observed, but "
