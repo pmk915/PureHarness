@@ -168,8 +168,8 @@ M22.2 adds ordered, rule-based failure diagnosis beside those metrics:
 
 ```text
 Trajectory
-├── Metrics
-└── Diagnosis
+├── Metrics ────┐
+└── Diagnosis ──┴──> Evaluation Report
 ```
 
 Completed trajectories map to no failure; incomplete trajectories with a tool
@@ -179,6 +179,12 @@ stable placeholders, not implemented inference. Recovery scoring remains an
 interface only. Future repair or deeper diagnosis can consume these evaluation
 facts, while the runtime kernel, RunRecord, benchmark execution, and
 task-success oracle remain independent.
+
+M22.3's frozen `EvaluationReport` is only a deterministic artifact composer:
+its builder invokes the existing evaluator and diagnoser, then exposes their
+results as JSON-compatible data or simple Markdown. It does not recalculate
+metrics, reinterpret diagnosis signals, persist reports, or add runtime, CLI,
+dashboard, database, or model behavior.
 
 The rejected final is retained as a completed `StepTrace` but is not appended to
 Session. The next logical request receives one ephemeral neutral completion

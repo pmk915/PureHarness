@@ -20,6 +20,10 @@ from pureharness.evaluation.metrics import (
     task_success_score,
     tool_reliability_score,
 )
+from pureharness.evaluation.report import (
+    EvaluationReport,
+    EvaluationReportBuilder,
+)
 from pureharness.evaluation.trajectory import (
     Trajectory,
     TrajectoryEvent,
@@ -31,6 +35,8 @@ from pureharness.evaluation.taxonomy import FailureType
 __all__ = [
     "DiagnosisResult",
     "EvaluationResult",
+    "EvaluationReport",
+    "EvaluationReportBuilder",
     "FailureDiagnoser",
     "FailureType",
     "RecoveryScoreCalculator",
