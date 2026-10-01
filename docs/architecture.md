@@ -160,6 +160,26 @@ the earlier failure. Actual sequential
 `verifications_since_last_mutation` state disambiguates same-step tool order;
 no command, output, path, or task-correctness inference is introduced.
 
+M22.1 adds a separate, side-effect-free trajectory evaluation layer. Its frozen
+`Trajectory` input is adapted from completed runtime evidence rather than
+embedded in `Agent.run()`, and its deterministic evaluator reports task
+completion, step efficiency, and tool reliability without changing execution.
+M22.2 adds ordered, rule-based failure diagnosis beside those metrics:
+
+```text
+Trajectory
+├── Metrics
+└── Diagnosis
+```
+
+Completed trajectories map to no failure; incomplete trajectories with a tool
+failure ratio of at least one half map to tool failure, and unmatched
+incomplete trajectories remain unknown. The remaining taxonomy values are
+stable placeholders, not implemented inference. Recovery scoring remains an
+interface only. Future repair or deeper diagnosis can consume these evaluation
+facts, while the runtime kernel, RunRecord, benchmark execution, and
+task-success oracle remain independent.
+
 The rejected final is retained as a completed `StepTrace` but is not appended to
 Session. The next logical request receives one ephemeral neutral completion
 recheck system message. The message disappears after that request produces a
