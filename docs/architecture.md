@@ -168,8 +168,14 @@ M22.2 adds ordered, rule-based failure diagnosis beside those metrics:
 
 ```text
 Trajectory
-├── Metrics ────┐
-└── Diagnosis ──┴──> Evaluation Report
+    |
+Metrics
+    |
+Diagnosis
+    |
+Report
+    |
+Recovery Signal
 ```
 
 Completed trajectories map to no failure; incomplete trajectories with a tool
@@ -185,6 +191,11 @@ its builder invokes the existing evaluator and diagnoser, then exposes their
 results as JSON-compatible data or simple Markdown. It does not recalculate
 metrics, reinterpret diagnosis signals, persist reports, or add runtime, CLI,
 dashboard, database, or model behavior.
+
+M22.4's frozen `RecoverySignal` is deterministic guidance derived from a
+`DiagnosisResult`. `RecoveryAdvisor` maps failure categories to advisory
+actions and does not execute a tool, retry work, modify prompts, or otherwise
+change runtime behavior.
 
 The rejected final is retained as a completed `StepTrace` but is not appended to
 Session. The next logical request receives one ephemeral neutral completion

@@ -24,6 +24,11 @@ from pureharness.evaluation.report import (
     EvaluationReport,
     EvaluationReportBuilder,
 )
+from pureharness.evaluation.recovery import (
+    RecoveryAction,
+    RecoveryAdvisor,
+    RecoverySignal,
+)
 from pureharness.evaluation.trajectory import (
     Trajectory,
     TrajectoryEvent,
@@ -40,6 +45,9 @@ __all__ = [
     "FailureDiagnoser",
     "FailureType",
     "RecoveryScoreCalculator",
+    "RecoveryAction",
+    "RecoveryAdvisor",
+    "RecoverySignal",
     "Trajectory",
     "TrajectoryEvaluator",
     "TrajectoryEvent",
