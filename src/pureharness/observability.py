@@ -37,6 +37,11 @@ _EVENT_PAYLOAD_FIELDS: dict[str, tuple[tuple[str, str], ...]] = {
         ("active_skill_ids", "active_skill_ids"),
         ("estimated_skill_tokens", "estimated_skill_tokens"),
         ("estimated_task_state_tokens", "estimated_task_state_tokens"),
+        ("completion_recheck_present", "completion_recheck_present"),
+        (
+            "estimated_completion_recheck_tokens",
+            "estimated_completion_recheck_tokens",
+        ),
         ("context_window_tokens", "context_window_tokens"),
         ("reserved_output_tokens", "reserved_output_tokens"),
         ("usable_input_tokens", "usable_input_tokens"),
@@ -103,6 +108,31 @@ _EVENT_PAYLOAD_FIELDS: dict[str, tuple[tuple[str, str], ...]] = {
         ),
         ("recovery_attempt", "recovery_attempt"),
         ("max_context_recoveries", "max_context_recoveries"),
+    ),
+    "completion_recheck_requested": (
+        ("reason", "reason"),
+        ("recheck_number", "recheck_number"),
+        ("max_rechecks", "max_rechecks"),
+        ("workspace_mutations", "workspace_mutations"),
+        ("command_executions", "command_executions"),
+        ("process_starts", "process_starts"),
+        (
+            "executions_since_last_mutation",
+            "executions_since_last_mutation",
+        ),
+    ),
+    "completion_recheck_skipped": (
+        ("reason", "reason"),
+        ("skip_reason", "skip_reason"),
+        ("rechecks_used", "rechecks_used"),
+        ("max_rechecks", "max_rechecks"),
+        ("workspace_mutations", "workspace_mutations"),
+        ("command_executions", "command_executions"),
+        ("process_starts", "process_starts"),
+        (
+            "executions_since_last_mutation",
+            "executions_since_last_mutation",
+        ),
     ),
     "execution_budget_exhausted": (
         ("resource", "resource"),

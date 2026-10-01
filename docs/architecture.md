@@ -2,7 +2,7 @@
 
 This document separates the implementation that exists today from the intended
 architecture. Sections marked **Current** describe repository behavior through
-the M21.2 Skills-lite milestone. Sections marked **Target**
+the M21.3 evidence-aware-completion milestone. Sections marked **Target**
 describe direction, not implemented APIs.
 
 ## 1. Project positioning
@@ -105,26 +105,47 @@ start, poll, and stop have distinct counters; only start is an execution action
 for ordering purposes. No command text is classified by intent.
 
 Coding evidence does not equate ToolResult success, command exit status, or task
-correctness. It does not prove verification success, enter model context or
-TaskState, affect selection/policy/budget, reject completion, or add retries.
-Like ProgressSnapshot, it remains live API and JSONL evidence and is not added
-to RunRecord v2, BenchmarkResult v1, or durable Session v1.
+correctness. It does not prove verification success or enter TaskState. Like
+ProgressSnapshot, it remains live API and JSONL evidence and is not added to
+RunRecord v2, BenchmarkResult v1, or durable Session v1. M21.3 allows a
+separately configured CompletionPolicy to assess this snapshot; the tracker
+itself remains factual and does not make lifecycle decisions.
 
 M21.2 adds Skills-lite: a frozen, versioned procedural-guidance value and a
 strict package-resource loader for PureHarness's small built-in Skill document
 format. The generic `Agent` has no active Skills by default. The coding CLI and
 normal internal coding benchmark statically activate `coding-task@1`; benchmark
-callers can pass an explicit empty Skill sequence for a lower-level no-guidance
-baseline. There is no directory discovery, dynamic selection, installation,
-dependency system, executable helper, or plugin mechanism.
+callers can pass an explicit empty Skill sequence, independently of completion
+policy configuration. A full lower-level baseline uses `skills=()` together
+with `completion_policy=None`. There is no directory discovery, dynamic
+selection, installation, dependency system, executable helper, or plugin
+mechanism.
 
 Active Skills are deterministically rendered as pinned system messages before
 TaskState and the compiled trajectory on every inference. They are Agent
 configuration, never Session items, so repeated runs re-inject one copy without
 persisting or accumulating guidance. M21.1 CodingEvidence is factual
-observation; an M21.2 Skill is procedural guidance. Neither one controls
-completion yet, and a final model Message retains the existing immediate
-completion behavior.
+observation; an M21.2 Skill is procedural guidance. They remain separate
+configuration and observation layers.
+
+M21.3 adds an optional stateless `CompletionPolicy` seam. Generic Agents still
+have no policy and accept a final Message immediately. The coding CLI and normal
+internal benchmark enable `EvidenceAwareCodingCompletionPolicy`, which may
+request at most one new logical model step when it observes either execution
+without a successful structured mutation or a structured mutation without a
+later `run_command` / `start_process`. No activity, or mutation followed by
+execution, is accepted directly. Command arguments, output, exit status, final
+text, TaskState wording, and task intent are never inspected.
+
+The rejected final is retained as a completed `StepTrace` but is not appended to
+Session. The next logical request receives one ephemeral neutral completion
+recheck system message. The message disappears after that request produces a
+valid model decision; it survives same-request malformed-output retry and
+provider-overflow recovery. A second suspicious final is accepted after an
+observable `recheck_limit` skip. Step, first-attempt, and context-capacity
+preflights likewise skip the optional recheck and accept the original final
+rather than introducing a new terminal failure. This is a heuristic runtime
+control, not proof of task correctness.
 
 A dispatched tool action is identified internally by a stable hash of canonical
 JSON containing its tool name and arguments. Dictionary keys are sorted, list
@@ -465,22 +486,24 @@ estimates. Selection also reports registered/exposed counts, the all-tools
 schema estimate, and estimated savings. None of these fields is an exact
 provider input-token count.
 
-`CompiledContext.items` remains the trajectory view and does not mix in Skills
-or TaskState. Immediately before a model call the Agent prepends each active
-Skill as a deterministic `Message(role="system")`, followed by the derived
-TaskState system message when enabled. Both are estimated separately through
-the same `TokenEstimator`; Skill estimates are reported as
+`CompiledContext.items` remains the trajectory view and does not mix in Skills,
+TaskState, or completion guidance. Immediately before a model call the Agent
+prepends each active Skill as a deterministic `Message(role="system")`, followed
+by the derived TaskState system message when enabled and then any pending
+completion-recheck system message. All are estimated separately through the
+same `TokenEstimator`; Skill estimates are reported as
 `estimated_skill_tokens`, while TaskState uses
-`estimated_task_state_tokens`; `estimated_history_tokens` and an optional
-history budget retain their trajectory-only meanings. The M12-introduced
+`estimated_task_state_tokens` and completion guidance uses
+`estimated_completion_recheck_tokens`; `estimated_history_tokens` and an
+optional history budget retain their trajectory-only meanings. The M12-introduced
 TaskState-disabled mode omits only that state message and records zero for its
 estimate without changing active Skills, Session, trajectory compilation,
 TaskState derivation, or selector input.
 
 Tool selection does not belong to `CompiledContext`. Model request preparation
-keeps four independently measurable components: pinned Skill messages, the
-derived TaskState message, the compiled trajectory, and selected complete Tool
-schemas. Their sum is the known request estimate, not an exact provider
+keeps independently measurable pinned Skill, derived TaskState, optional
+completion-recheck, compiled trajectory, and selected complete Tool-schema
+components. Their sum is the known request estimate, not an exact provider
 input-token count, because provider wrappers, instructions, and tokenization
 remain outside these estimates.
 
@@ -497,8 +520,8 @@ calculations:
 
 ```text
 usable_input_tokens = context_window_tokens - reserved_output_tokens
-known_request_tokens = history + Skills + TaskState + exposed tool schemas
-available_history_tokens = usable_input_tokens - Skills - TaskState - exposed tool schemas
+known_request_tokens = history + Skills + TaskState + completion recheck + exposed tool schemas
+available_history_tokens = usable_input_tokens - Skills - TaskState - completion recheck - exposed tool schemas
 ```
 
 If the normally compiled candidate fits, it is used unchanged. If its known
@@ -515,8 +538,12 @@ the accepted bounded view, not the discarded candidate. Raw Session items and
 TaskState derivation remain untouched. If non-history costs leave no positive
 history budget, or if the newest indivisible unit cannot fit, a
 `ContextBudgetExceeded` failure occurs at context preparation before any model
-call. Skills are pinned non-history context and are never dropped to make room
-for history.
+call. Skills and pending completion guidance are pinned non-history context and
+are never dropped to make room for history. Before scheduling the optional
+M21.3 recheck, the Agent repeats this calculation without emitting events or
+mutating Session and uses the same `compile_bounded()` semantics. If the new
+request cannot be built, it emits a `context_capacity` skip and accepts the
+original final.
 
 M18.4B adds the distinct reactive path for the approximation gap that remains
 after proactive accounting. If the provider rejects an attempted request with
@@ -528,9 +555,9 @@ recovery_history_budget = floor(previous_estimated_history_tokens / 2)
 
 The Agent calls the same configured `ContextBuilder.compile_bounded()` against
 the raw step Session snapshot. The result must have strictly fewer estimated
-history tokens. Active Skills, TaskState, and exposed tools remain unchanged,
-and the smaller context is retried in the same logical step. This works whether
-or not explicit
+history tokens. Active Skills, TaskState, pending completion guidance, and
+exposed tools remain unchanged, and the smaller context is retried in the same
+logical step. This works whether or not explicit
 `ContextLimits` were configured because it derives the emergency budget from
 the history actually attempted rather than guessing a provider capacity.
 
@@ -666,6 +693,11 @@ Skill token accounting is observable in live `context_built` telemetry in
 M21.2 but is not persisted in RunRecord v2. It is not folded into history or
 TaskState estimates, whose meanings remain unchanged. A future RunRecord schema
 may add a dedicated Skill metric if persistence is justified.
+Completion-recheck token cost is likewise live `context_built` telemetry only
+in M21.3. A rejected final and the subsequent recheck are separate logical
+steps and model invocations, so existing RunTrace and `model_call_count`
+naturally preserve both without a new persisted field or end reason. The final
+accepted outcome remains `completed`.
 `tool_call_count` counts requests returned by the model, including calls
 rejected before execution;
 `tool_execution_count` counts calls that actually passed exposure and policy
@@ -843,6 +875,8 @@ agent_started
                             -> model_retrying (bounded, zero or more)
                             -> model_completed | model_failed
                             -> execution_budget_exhausted (terminal)
+  final candidate -> completion_recheck_requested -> next logical step
+                  |-> completion_recheck_skipped -> accepted completion
   workspace_precondition_failed | tool_policy_evaluated (zero or more tools)
     ALLOW -> workspace revalidation -> tool_started -> tool_completed
       successful structured mutation -> workspace_mutated
@@ -862,6 +896,12 @@ global model-attempt budget gate admits the physical retry. Reactive context
 recovery is counted after a smaller context is successfully rebuilt; provider
 overflow occurrences and proactive configured-limit pressure are separate
 counters.
+
+For a requested completion recheck, the rejected final is appended to RunTrace
+before `completion_recheck_requested`, followed by non-terminal progress and
+coding-evidence snapshots. No `agent_completed` is emitted until a later final
+is accepted. If the recheck is skipped, `completion_recheck_skipped` precedes
+the ordinary terminal snapshots and single `agent_completed` event.
 
 Each completed tool-call batch also emits `coding_evidence_snapshot` after the
 progress snapshot. Its terminal form follows terminal progress and precedes the
@@ -904,9 +944,11 @@ Event payloads use the following current contract:
 | --- | --- |
 | `agent_started` | `history_item_count` before the new user message |
 | `context_build_started` | `step`, `history_item_count` |
-| `context_built` | `step`, history/final-context/trajectory counts, strategy, active Skill count/versioned IDs and separate estimated Skill/history/TaskState tokens, safe TaskState aggregate counts, total/included/dropped units, projected/compacted result counts, raw/projected result character counts, aggregate trajectory-compaction statistics, optional history budget, and—when explicit limits are configured—window/reserve/usable-input values, final known-request estimate, available history, pressure detection, and whether bounded history was applied |
+| `context_built` | `step`, history/final-context/trajectory counts, strategy, active Skill count/versioned IDs, completion-recheck presence, separate estimated Skill/history/TaskState/recheck tokens, safe TaskState aggregate counts, total/included/dropped units, projected/compacted result counts, raw/projected result character counts, aggregate trajectory-compaction statistics, optional history budget, and—when explicit limits are configured—window/reserve/usable-input values, final known-request estimate, available history, pressure detection, and whether bounded history was applied |
 | `context_window_exceeded` | `step`, normalized error type, whether recovery remains available, optional next recovery attempt, and maximum context recoveries |
 | `context_recovering` | `step`, recovery attempt/limit, overflow error type, previous history/request estimates, emergency history budget, and optional recovered history/request estimates when recompilation succeeds |
+| `completion_recheck_requested` | stable reason, one-based recheck number/limit, and bounded mutation/execution counters |
+| `completion_recheck_skipped` | stable reason, skip reason, used/maximum rechecks, and bounded mutation/execution counters |
 | `context_build_failed` | `step`, `reason`, `error_type` |
 | `execution_budget_exhausted` | `step`, `resource`, `used`, `limit`, and optional batch `requested` / `remaining` |
 | `progress_snapshot` | `step`, completed logical steps, physical model attempts/tool calls, successful/failed tool results, unique/repeated/max-identical tool-action counts, model retries, context recoveries, proactive pressure count, provider overflow count, and `terminal` |
@@ -980,6 +1022,11 @@ BenchmarkResult v1, or durable Session v1.
 M21.2 adds `active_skill_count`, `active_skill_ids`, and
 `estimated_skill_tokens` to `context_built` under that same additive JSONL v1
 rule. It does not change the event wire version.
+
+M21.3 adds `completion_recheck_requested` and
+`completion_recheck_skipped`, plus `completion_recheck_present` and
+`estimated_completion_recheck_tokens` on `context_built`, under the same
+additive JSONL v1 rule. None is persisted in RunRecord v2.
 
 The live wire schema is not the RunRecord persistence schema. Live events are
 transient execution observations; RunRecord remains finalized versioned

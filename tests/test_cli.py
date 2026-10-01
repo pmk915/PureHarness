@@ -6,6 +6,7 @@ import pytest
 import pureharness.cli as cli_module
 from pureharness.agent import Agent
 from pureharness.cli import main
+from pureharness.completion import EvidenceAwareCodingCompletionPolicy
 from pureharness.context import ContextLimits
 from pureharness.experiment import load_experiment_results
 from pureharness.messages import Message, ToolCall
@@ -660,6 +661,10 @@ def test_one_shot_agent_has_no_interactive_approval_handler(tmp_path):
         WorkspaceDiscipline,
     )
     assert agent.active_skill_ids == ("coding-task@1",)
+    assert isinstance(
+        agent.completion_policy,
+        EvidenceAwareCodingCompletionPolicy,
+    )
 
 
 def test_one_shot_failure_has_nonzero_exit_without_traceback(tmp_path):

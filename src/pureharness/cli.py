@@ -19,6 +19,7 @@ from pureharness.benchmark import (
     load_benchmark_tasks,
 )
 from pureharness.coding_tools import create_coding_tools
+from pureharness.completion import default_coding_completion_policy
 from pureharness.context import ContextLimits
 from pureharness.deepseek_model import DeepSeekModel
 from pureharness.events import AgentEvent
@@ -851,6 +852,7 @@ def _create_agent(
         context_limits=context_limits,
         execution_budget=execution_budget,
         skills=default_coding_skills(),
+        completion_policy=default_coding_completion_policy(),
     )
 
 

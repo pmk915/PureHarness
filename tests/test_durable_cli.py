@@ -279,7 +279,7 @@ def test_resume_is_passive_and_does_not_replay_historical_tools(
     )
 
     assert resume_exit == 0
-    assert model.call_count == calls_before_resume == 2
+    assert model.call_count == calls_before_resume == 3
     assert marker.read_text(encoding="utf-8") == before
     assert "Runs in session: 1" in resumed_output
 

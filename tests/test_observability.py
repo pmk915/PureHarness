@@ -233,6 +233,95 @@ def test_wire_serializer_maps_additive_skill_context_fields():
     }
 
 
+def test_wire_serializer_maps_completion_recheck_context_fields():
+    event = AgentEvent(
+        type="context_built",
+        data={
+            "step": 2,
+            "completion_recheck_present": True,
+            "estimated_completion_recheck_tokens": 17,
+        },
+        timestamp=datetime(2026, 9, 20, 10, 0, tzinfo=timezone.utc),
+        run_id="run-recheck-context",
+    )
+
+    assert event_to_wire(event)["payload"] == {
+        "completion_recheck_present": True,
+        "estimated_completion_recheck_tokens": 17,
+    }
+
+
+@pytest.mark.parametrize(
+    "event_type, data, expected",
+    [
+        (
+            "completion_recheck_requested",
+            {
+                "reason": "execution_without_structured_mutation",
+                "recheck_number": 1,
+                "max_rechecks": 1,
+                "workspace_mutations": 0,
+                "command_executions": 3,
+                "process_starts": 0,
+                "executions_since_last_mutation": 0,
+            },
+            {
+                "reason": "execution_without_structured_mutation",
+                "recheck_number": 1,
+                "max_rechecks": 1,
+                "workspace_mutations": 0,
+                "command_executions": 3,
+                "process_starts": 0,
+                "executions_since_last_mutation": 0,
+            },
+        ),
+        (
+            "completion_recheck_skipped",
+            {
+                "reason": "mutation_without_post_mutation_execution",
+                "skip_reason": "step_budget",
+                "rechecks_used": 0,
+                "max_rechecks": 1,
+                "workspace_mutations": 1,
+                "command_executions": 0,
+                "process_starts": 0,
+                "executions_since_last_mutation": 0,
+            },
+            {
+                "reason": "mutation_without_post_mutation_execution",
+                "skip_reason": "step_budget",
+                "rechecks_used": 0,
+                "max_rechecks": 1,
+                "workspace_mutations": 1,
+                "command_executions": 0,
+                "process_starts": 0,
+                "executions_since_last_mutation": 0,
+            },
+        ),
+    ],
+)
+def test_wire_serializer_maps_completion_control_events(
+    event_type,
+    data,
+    expected,
+):
+    event = AgentEvent(
+        type=event_type,
+        data={"step": 2, **data},
+        timestamp=datetime(2026, 9, 20, 10, 0, tzinfo=timezone.utc),
+        run_id="run-recheck",
+    )
+
+    rendered = event_to_wire(event)
+
+    assert rendered["schema_version"] == 1
+    assert rendered["event"] == event_type
+    assert rendered["step"] == 2
+    assert rendered["payload"] == expected
+    assert "final" not in json.dumps(rendered)
+    assert "command_argv" not in rendered["payload"]
+
+
 def test_wire_serializer_maps_context_window_exceeded_event():
     event = AgentEvent(
         type="context_window_exceeded",

@@ -8,6 +8,13 @@ from pureharness.coding_evidence import (
     CodingEvidenceSnapshot,
     CodingEvidenceTracker,
 )
+from pureharness.completion import (
+    CompletionDecision,
+    CompletionPolicy,
+    CompletionReason,
+    CompletionRecheckSkipReason,
+    render_completion_recheck,
+)
 from pureharness.context import (
     CompiledContext,
     ContextBudgetExceeded,
@@ -74,6 +81,8 @@ class _PreparedContext:
     estimated_skill_tokens: int
     estimated_task_state_tokens: int
     task_state_item: Message | None
+    completion_recheck_item: Message | None
+    estimated_completion_recheck_tokens: int
 
 
 class Agent:
@@ -96,6 +105,7 @@ class Agent:
         context_limits: ContextLimits | None = None,
         execution_budget: ExecutionBudget | None = None,
         skills: Sequence[Skill] = (),
+        completion_policy: CompletionPolicy | None = None,
     ):
         if not isinstance(include_task_state, bool):
             raise ValueError("include_task_state must be bool")
@@ -125,6 +135,21 @@ class Agent:
             raise ValueError(
                 "execution_budget must be ExecutionBudget or None"
             )
+        if completion_policy is not None:
+            max_rechecks = getattr(
+                completion_policy,
+                "max_rechecks",
+                None,
+            )
+            if (
+                not isinstance(max_rechecks, int)
+                or isinstance(max_rechecks, bool)
+                or max_rechecks < 0
+            ):
+                raise ValueError(
+                    "completion_policy.max_rechecks must be a "
+                    "non-negative integer"
+                )
 
         self.model = model
         if tool_executor is None:
@@ -162,6 +187,7 @@ class Agent:
         self.context_limits = context_limits
         self.execution_budget = execution_budget or ExecutionBudget()
         self._skills = normalize_skills(skills)
+        self.completion_policy = completion_policy
         self._execution_usage = ExecutionUsage()
         self._progress_tracker = ProgressTracker()
         self._coding_evidence_tracker = CodingEvidenceTracker()
@@ -175,6 +201,8 @@ class Agent:
         self.last_run_record: RunRecord | None = None
         self._active_record_builder: RunRecordBuilder | None = None
         self._active_session_size: int | None = None
+        self._completion_rechecks_used = 0
+        self._pending_completion_recheck: Message | None = None
 
     @property
     def messages(self):
@@ -198,6 +226,10 @@ class Agent:
     @property
     def active_skill_ids(self) -> tuple[str, ...]:
         return tuple(skill.identifier for skill in self._skills)
+
+    @property
+    def completion_rechecks_used(self) -> int:
+        return self._completion_rechecks_used
 
     @property
     def workspace_snapshot(self) -> WorkspaceSnapshot | None:
@@ -259,11 +291,15 @@ class Agent:
             finally:
                 self._active_record_builder = None
                 self._active_session_size = None
+                self._pending_completion_recheck = None
 
     def _run(self, user_input: str) -> str:
         record_builder = self._start_run(user_input)
 
         for step in range(self.max_steps):
+            completion_recheck_for_step = (
+                self._pending_completion_recheck is not None
+            )
             history = self._start_step(step)
 
             try:
@@ -335,8 +371,18 @@ class Agent:
                 record_builder,
             )
             self._complete_model_request(step, output, record_builder)
+            if completion_recheck_for_step:
+                self._pending_completion_recheck = None
 
             if isinstance(output, Message):
+                if self._request_completion_recheck(
+                    step=step,
+                    output=output,
+                    history=history,
+                    prepared=prepared,
+                    selection=tool_selection,
+                ):
+                    continue
                 return self._complete_run(
                     step,
                     output,
@@ -383,6 +429,8 @@ class Agent:
         self._execution_usage = ExecutionUsage()
         self._progress_tracker = ProgressTracker()
         self._coding_evidence_tracker = CodingEvidenceTracker()
+        self._completion_rechecks_used = 0
+        self._pending_completion_recheck = None
         self.tool_executor.reset_run_state()
         self._active_session_size = len(self.session.items)
         builder = RunRecordBuilder(
@@ -434,10 +482,21 @@ class Agent:
             task_state_item = None
             estimated_task_state_tokens = 0
 
+        completion_recheck_item = self._pending_completion_recheck
+        estimated_completion_recheck_tokens = (
+            self.context_builder.estimate_tokens(
+                [completion_recheck_item]
+            )
+            if completion_recheck_item is not None
+            else 0
+        )
+
         compiled = self.context_builder.compile(history)
         model_items: list[AgentItem] = list(skill_items)
         if task_state_item is not None:
             model_items.append(task_state_item)
+        if completion_recheck_item is not None:
+            model_items.append(completion_recheck_item)
         model_items.extend(compiled.items)
 
         prepared = _PreparedContext(
@@ -448,6 +507,10 @@ class Agent:
             estimated_skill_tokens=estimated_skill_tokens,
             estimated_task_state_tokens=estimated_task_state_tokens,
             task_state_item=task_state_item,
+            completion_recheck_item=completion_recheck_item,
+            estimated_completion_recheck_tokens=(
+                estimated_completion_recheck_tokens
+            ),
         )
         if self.context_limits is None:
             self._emit_context_built(step, history, prepared)
@@ -466,6 +529,7 @@ class Agent:
         non_history_tokens = (
             prepared.estimated_skill_tokens
             + prepared.estimated_task_state_tokens
+            + prepared.estimated_completion_recheck_tokens
             + selection.estimated_tool_schema_tokens
         )
         available_history_tokens = (
@@ -474,8 +538,9 @@ class Agent:
 
         if available_history_tokens <= 0:
             raise ContextBudgetExceeded(
-                "Pinned non-history context (active Skills, TaskState, and "
-                "exposed tool schemas) requires "
+                "Pinned non-history context (active Skills, TaskState, "
+                "completion recheck guidance, and exposed tool schemas) "
+                "requires "
                 f"{non_history_tokens} estimated input tokens, leaving "
                 "no positive history budget within the usable input "
                 f"capacity of {usable_input_tokens}."
@@ -496,6 +561,8 @@ class Agent:
             model_items: list[AgentItem] = list(prepared.skill_items)
             if prepared.task_state_item is not None:
                 model_items.append(prepared.task_state_item)
+            if prepared.completion_recheck_item is not None:
+                model_items.append(prepared.completion_recheck_item)
             model_items.extend(compiled.items)
             final_prepared = _PreparedContext(
                 task_state=prepared.task_state,
@@ -507,6 +574,12 @@ class Agent:
                     prepared.estimated_task_state_tokens
                 ),
                 task_state_item=prepared.task_state_item,
+                completion_recheck_item=(
+                    prepared.completion_recheck_item
+                ),
+                estimated_completion_recheck_tokens=(
+                    prepared.estimated_completion_recheck_tokens
+                ),
             )
 
         estimated_request_tokens = (
@@ -545,6 +618,7 @@ class Agent:
             len(prepared.model_items),
             prepared.estimated_skill_tokens,
             prepared.estimated_task_state_tokens,
+            prepared.estimated_completion_recheck_tokens,
         )
         if pressure_data is not None:
             data.update(pressure_data)
@@ -559,6 +633,7 @@ class Agent:
         context_item_count: int,
         estimated_skill_tokens: int,
         estimated_task_state_tokens: int,
+        estimated_completion_recheck_tokens: int,
     ) -> dict[str, object]:
         data = {
             "step": step,
@@ -571,6 +646,12 @@ class Agent:
             "active_skill_ids": list(self.active_skill_ids),
             "estimated_skill_tokens": estimated_skill_tokens,
             "estimated_task_state_tokens": estimated_task_state_tokens,
+            "completion_recheck_present": (
+                estimated_completion_recheck_tokens > 0
+            ),
+            "estimated_completion_recheck_tokens": (
+                estimated_completion_recheck_tokens
+            ),
             "current_request_present": (
                 task_state.current_request is not None
             ),
@@ -877,6 +958,8 @@ class Agent:
         model_items: list[AgentItem] = list(previous.skill_items)
         if previous.task_state_item is not None:
             model_items.append(previous.task_state_item)
+        if previous.completion_recheck_item is not None:
+            model_items.append(previous.completion_recheck_item)
         model_items.extend(compiled.items)
         return _PreparedContext(
             task_state=previous.task_state,
@@ -888,6 +971,10 @@ class Agent:
                 previous.estimated_task_state_tokens
             ),
             task_state_item=previous.task_state_item,
+            completion_recheck_item=previous.completion_recheck_item,
+            estimated_completion_recheck_tokens=(
+                previous.estimated_completion_recheck_tokens
+            ),
         )
 
     def _emit_context_recovering(
@@ -904,6 +991,7 @@ class Agent:
         non_history_tokens = (
             previous.estimated_skill_tokens
             + previous.estimated_task_state_tokens
+            + previous.estimated_completion_recheck_tokens
             + selection.estimated_tool_schema_tokens
         )
         data: dict[str, object] = {
@@ -955,6 +1043,162 @@ class Agent:
                 },
             )
         )
+
+    def _request_completion_recheck(
+        self,
+        *,
+        step: int,
+        output: Message,
+        history: list[AgentItem],
+        prepared: _PreparedContext,
+        selection: ToolSelection,
+    ) -> bool:
+        policy = self.completion_policy
+        if policy is None:
+            return False
+
+        assessment = policy.assess(self.coding_evidence_snapshot)
+        if assessment.decision is CompletionDecision.ACCEPT:
+            return False
+        if (
+            assessment.decision is not CompletionDecision.RECONSIDER
+            or not isinstance(assessment.reason, CompletionReason)
+        ):
+            raise ValueError(
+                "CompletionPolicy returned an invalid reconsideration"
+            )
+
+        reason = assessment.reason
+        skip_reason: CompletionRecheckSkipReason | None = None
+        completion_item: Message | None = None
+        if self._completion_rechecks_used >= policy.max_rechecks:
+            skip_reason = CompletionRecheckSkipReason.RECHECK_LIMIT
+        elif step + 1 >= self.max_steps:
+            skip_reason = CompletionRecheckSkipReason.STEP_BUDGET
+        elif self._model_attempt_budget_exhausted():
+            skip_reason = (
+                CompletionRecheckSkipReason.MODEL_ATTEMPT_BUDGET
+            )
+        else:
+            completion_item = render_completion_recheck(reason)
+            if not self._completion_recheck_fits(
+                history,
+                prepared,
+                selection,
+                completion_item,
+            ):
+                skip_reason = (
+                    CompletionRecheckSkipReason.CONTEXT_CAPACITY
+                )
+
+        if skip_reason is not None:
+            self._emit_completion_recheck_skipped(
+                step,
+                reason,
+                skip_reason,
+            )
+            return False
+
+        assert completion_item is not None
+        self.trace.steps.append(
+            StepTrace(index=step, output=output, tool_result=None)
+        )
+        self._completion_rechecks_used += 1
+        self._pending_completion_recheck = completion_item
+        self._emit(
+            AgentEvent(
+                type="completion_recheck_requested",
+                data={
+                    "step": step,
+                    "reason": reason.value,
+                    "recheck_number": self._completion_rechecks_used,
+                    "max_rechecks": policy.max_rechecks,
+                    **self._completion_evidence_event_data(),
+                },
+            )
+        )
+        self._emit_progress_snapshot(step=step, terminal=False)
+        self._emit_coding_evidence_snapshot(step=step, terminal=False)
+        return True
+
+    def _model_attempt_budget_exhausted(self) -> bool:
+        limit = self.execution_budget.max_model_attempts
+        return (
+            limit is not None
+            and self._execution_usage.model_attempts >= limit
+        )
+
+    def _completion_recheck_fits(
+        self,
+        history: list[AgentItem],
+        prepared: _PreparedContext,
+        selection: ToolSelection,
+        completion_item: Message,
+    ) -> bool:
+        limits = self.context_limits
+        if limits is None:
+            return True
+        try:
+            completion_tokens = self.context_builder.estimate_tokens(
+                [completion_item]
+            )
+            non_history_tokens = (
+                prepared.estimated_skill_tokens
+                + prepared.estimated_task_state_tokens
+                + completion_tokens
+                + selection.estimated_tool_schema_tokens
+            )
+            available_history_tokens = (
+                limits.usable_input_tokens - non_history_tokens
+            )
+            if available_history_tokens <= 0:
+                return False
+            if (
+                prepared.compiled.estimated_tokens
+                + non_history_tokens
+                <= limits.usable_input_tokens
+            ):
+                return True
+            self.context_builder.compile_bounded(
+                history,
+                available_history_tokens,
+            )
+            return True
+        except ContextCompileError:
+            return False
+
+    def _emit_completion_recheck_skipped(
+        self,
+        step: int,
+        reason: CompletionReason,
+        skip_reason: CompletionRecheckSkipReason,
+    ) -> None:
+        policy = self.completion_policy
+        assert policy is not None
+        self._emit(
+            AgentEvent(
+                type="completion_recheck_skipped",
+                data={
+                    "step": step,
+                    "reason": reason.value,
+                    "skip_reason": skip_reason.value,
+                    "rechecks_used": self._completion_rechecks_used,
+                    "max_rechecks": policy.max_rechecks,
+                    **self._completion_evidence_event_data(),
+                },
+            )
+        )
+
+    def _completion_evidence_event_data(self) -> dict[str, int]:
+        evidence = self.coding_evidence_snapshot
+        return {
+            "workspace_mutations": evidence.workspace_mutations,
+            "command_executions": evidence.command_executions,
+            "process_starts": evidence.process_starts,
+            "executions_since_last_mutation": (
+                evidence.executions_since_last_mutation
+            ),
+        }
 
     def _complete_run(
         self,

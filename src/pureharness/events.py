@@ -13,6 +13,8 @@ AgentEventType = Literal[
     "context_built",
     "context_window_exceeded",
     "context_recovering",
+    "completion_recheck_requested",
+    "completion_recheck_skipped",
     "execution_budget_exhausted",
     "progress_snapshot",
     "coding_evidence_snapshot",
@@ -52,6 +54,8 @@ class AgentEventData(TypedDict, total=False):
     active_skill_ids: list[str]
     estimated_skill_tokens: int
     estimated_task_state_tokens: int
+    completion_recheck_present: bool
+    estimated_completion_recheck_tokens: int
     context_window_tokens: int
     reserved_output_tokens: int
     usable_input_tokens: int
@@ -68,6 +72,10 @@ class AgentEventData(TypedDict, total=False):
     recovered_estimated_request_tokens: int
     context_recovery_available: bool
     max_context_recoveries: int
+    recheck_number: int
+    max_rechecks: int
+    rechecks_used: int
+    skip_reason: str
     resource: str
     used: int
     limit: int

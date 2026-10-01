@@ -29,6 +29,7 @@ from pureharness.context import (
     ContextBuilder,
     TokenBudgetContextBuilder,
 )
+from pureharness.completion import EvidenceAwareCodingCompletionPolicy
 from pureharness.execution import (
     CommandResult,
     ExecutionTimeoutError,
@@ -399,6 +400,7 @@ def test_task_state_disabled_baseline_sends_only_trajectory(tmp_path):
         lambda task, config: model,
         run_id_factory=lambda: "raw-baseline-run",
         skills=(),
+        completion_policy=None,
     )
 
     result = runner.run_case(
@@ -433,6 +435,19 @@ def test_benchmark_coding_profile_activates_builtin_skill_by_default(
     assert tuple(skill.identifier for skill in runner.skills) == (
         "coding-task@1",
     )
+    assert isinstance(
+        runner.completion_policy,
+        EvidenceAwareCodingCompletionPolicy,
+    )
+
+
+def test_benchmark_completion_policy_can_be_explicitly_disabled():
+    runner = BenchmarkRunner(
+        lambda task, config: ScriptedModel([]),
+        completion_policy=None,
+    )
+
+    assert runner.completion_policy is None
 
 
 def test_large_output_fixture_records_tool_result_projection():
@@ -451,7 +466,10 @@ def test_large_output_fixture_records_tool_result_projection():
             Message(role="assistant", content="done"),
         ]
     )
-    runner = BenchmarkRunner(lambda task, config: model)
+    runner = BenchmarkRunner(
+        lambda task, config: model,
+        completion_policy=None,
+    )
 
     result = runner.run_case(
         task,

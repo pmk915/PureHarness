@@ -857,6 +857,8 @@ def test_agent_sends_compiled_context_items_and_emits_statistics():
         "active_skill_ids": [],
         "estimated_skill_tokens": 0,
         "estimated_task_state_tokens": 1,
+        "completion_recheck_present": False,
+        "estimated_completion_recheck_tokens": 0,
         "current_request_present": True,
         "completed_actions_count": 0,
         "failed_actions_count": 0,

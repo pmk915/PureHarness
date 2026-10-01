@@ -10,6 +10,10 @@ from typing import ClassVar
 
 from pureharness.agent import Agent
 from pureharness.coding_tools import create_coding_tools
+from pureharness.completion import (
+    CompletionPolicy,
+    default_coding_completion_policy,
+)
 from pureharness.context import (
     ContextBudget,
     ContextBuilder,
@@ -522,6 +526,9 @@ class BenchmarkRunner:
         workspace_parent: str | Path | None = None,
         run_id_factory: Callable[[], str] | None = None,
         skills: Sequence[Skill] | None = None,
+        completion_policy: CompletionPolicy | None = (
+            default_coding_completion_policy()
+        ),
     ) -> None:
         if not callable(model_factory):
             raise ValueError("model_factory must be callable")
@@ -555,6 +562,7 @@ class BenchmarkRunner:
             if skills is None
             else normalize_skills(skills)
         )
+        self.completion_policy = completion_policy
 
     def run_case(
         self,
@@ -647,6 +655,7 @@ class BenchmarkRunner:
                 include_task_state=config.include_task_state,
                 run_id_factory=self.run_id_factory,
                 skills=self.skills,
+                completion_policy=self.completion_policy,
             )
             agent_error_type: str | None = None
 

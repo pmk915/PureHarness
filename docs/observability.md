@@ -177,7 +177,47 @@ secrets. The event is additive within JSONL wire schema version 1.
 These counters do not classify commands as tests or verification. A command
 that returns a non-zero exit code can still have a successful ToolResult, and a
 ToolResult with `is_error=false` does not prove task correctness or verification
-success. M21.1 coding evidence never influences completion decisions.
+success. M21.1 coding evidence remains factual; only an explicitly configured
+M21.3 CompletionPolicy may assess the snapshot.
+
+### Evidence-aware completion
+
+The coding profile enables one bounded completion recheck. This is a heuristic
+runtime control, not proof of task correctness. A final candidate is
+reconsidered when either:
+
+- execution (`run_command` or `start_process`) was observed with no successful
+  structured workspace mutation; or
+- a successful structured mutation was observed with no execution after the
+  latest mutation.
+
+No activity is accepted directly, as is mutation followed by execution. Exit
+status, stdout, stderr, command arguments, file content, final-answer text,
+TaskState wording, and task intent are not inspected. There is no shell-mutation
+detection, test-command classifier, command-exit interpretation, or zero-work
+immediate-final guard. At most one recheck is requested per Run.
+
+`completion_recheck_requested` contains the stable `reason`, one-based
+`recheck_number`, `max_rechecks`, and bounded factual counters:
+`workspace_mutations`, `command_executions`, `process_starts`, and
+`executions_since_last_mutation`. The rejected final is already in RunTrace but
+is absent from Session. Non-terminal progress and coding-evidence snapshots
+follow the event.
+
+`completion_recheck_skipped` contains `reason`, `skip_reason`,
+`rechecks_used`, `max_rechecks`, and the same bounded counters. Skip reasons are
+`context_capacity`, `step_budget`, `model_attempt_budget`, and
+`recheck_limit`. A skip accepts the original final and proceeds through the
+ordinary single terminal completion sequence.
+
+The next logical request receives one ephemeral system message. Its
+`context_built` event reports `completion_recheck_present=true` and a separate
+positive `estimated_completion_recheck_tokens`; ordinary requests report
+`false` and `0`. The guidance is pinned non-history context and survives
+same-request retry and provider-overflow recovery. Its token cost is live
+context telemetry only and is not persisted in RunRecord v2. Neither completion
+event exposes final response content, commands, output, paths, or file content.
+Both events and fields are additive within live-event JSONL schema version 1.
 
 The three context-failure events have distinct meanings:
 
@@ -208,8 +248,8 @@ payload contains:
 | `previous_history_tokens` | History estimate sent on the rejected attempt |
 | `recovery_history_budget` | Emergency bounded-compilation budget |
 | `recovered_history_tokens` | Successful rebuilt history estimate, when available |
-| `previous_estimated_request_tokens` | Previous history + TaskState + schemas |
-| `recovered_estimated_request_tokens` | Rebuilt history + unchanged TaskState + schemas, when available |
+| `previous_estimated_request_tokens` | Previous history + unchanged pinned non-history context + schemas |
+| `recovered_estimated_request_tokens` | Rebuilt history + unchanged pinned non-history context + schemas, when available |
 
 Successful recovery emits no terminal `model_failed` or
 `context_build_failed`. If rebuilding is impossible, `context_recovering`
