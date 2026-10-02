@@ -288,6 +288,32 @@ its pinned install, model restriction, 300 steps, and 8000 history-token budget.
 This is advisory-only intervention, not automatic stopping, verification,
 mutation, or recovery. A signal clearing is not proof of task progress.
 
+M24.3C adds offline-only `ProgressGapEvaluator` and frozen
+`ProgressGapEvidence`, independently of strict stagnation and its advisory
+policy. It reuses `StagnationStep`/the existing RunRecord adapter and exact
+prefix action/result identities. A narrow observed anchor is a successful
+structured workspace mutation or an explicitly marked verification attempt,
+including a failed attempt. Neither is proof of useful task progress or health.
+There is no new boolean detector, threshold, diagnosis rule, or runtime hook.
+
+The evaluator exposes activity, novelty, exact/unchanged repetition, changed
+observations, errors, and logical distance from anchors at every completed
+step. New actions, changed results, and inactive steps do not reset anchor age.
+Before the first anchor, age counts the supplied prefix's observed steps;
+distances to never-observed individual anchors remain `None`. Missing progress
+evidence marks the open span incomplete, rather than silently becoming zero.
+Anchor batches are excluded in full from the next span: aggregate post-step
+counters cannot safely identify intra-batch ordering. Prefix fingerprint state
+survives anchors, so old actions do not become novel after a reset.
+
+`iter_evidence()` is a single-pass offline iterator retaining scalar aggregates
+and one last-result hash per distinct action (O(unique actions), not constant
+memory). `evaluate_steps()` optionally materializes the O(steps) output timeline.
+It changes no Agent/Harbor behavior, persistence or JSONL schema, M22 report or
+diagnosis rules. The [progress-gap audit](progress_gap_audit.md) compares existing
+successful controls with failed trajectories; long exploration is not itself
+failure, and structured counters do not audit indirect shell writes.
+
 The rejected final is retained as a completed `StepTrace` but is not appended to
 Session. The next logical request receives one ephemeral neutral completion
 recheck system message. The message disappears after that request produces a

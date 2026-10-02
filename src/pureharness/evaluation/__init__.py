@@ -35,6 +35,10 @@ from pureharness.evaluation.trajectory import (
     trajectory_from_run_record,
 )
 from pureharness.evaluation.taxonomy import FailureType
+from pureharness.evaluation.progress_gap import (
+    ProgressGapEvidence,
+    ProgressGapEvaluator,
+)
 from pureharness.evaluation.stagnation import (
     StagnationEvidence,
     StagnationEvaluator,
@@ -53,6 +57,8 @@ __all__ = [
     "EvaluationReportBuilder",
     "FailureDiagnoser",
     "FailureType",
+    "ProgressGapEvidence",
+    "ProgressGapEvaluator",
     "RecoveryScoreCalculator",
     "RecoveryAction",
     "RecoveryAdvisor",
