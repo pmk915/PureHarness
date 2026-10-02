@@ -269,6 +269,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run_parser.add_argument("prompt")
     run_parser.add_argument(
+        "--stagnation-advisory",
+        action="store_true",
+        help="Enable bounded ephemeral guidance for observed stagnation.",
+    )
+    run_parser.add_argument(
         "--workspace",
         type=Path,
         default=Path.cwd(),
@@ -796,6 +801,7 @@ def _run_once(
         output_fn=output_fn,
         event_listener=renderer,
         max_steps=arguments.max_steps,
+        **({"stagnation_advisory": True} if arguments.stagnation_advisory else {}),
         **context_arguments,
         **budget_arguments,
     )
@@ -939,6 +945,7 @@ def _create_agent(
     context_builder: ContextBuilder | None = None,
     context_limits: ContextLimits | None = None,
     execution_budget: ExecutionBudget | None = None,
+    stagnation_advisory: bool = False,
 ) -> Agent:
     registry = ToolRegistry()
     for tool in create_coding_tools(workspace):
@@ -965,6 +972,7 @@ def _create_agent(
         execution_budget=execution_budget,
         skills=default_coding_skills(),
         completion_policy=default_coding_completion_policy(),
+        stagnation_advisory=stagnation_advisory,
     )
 
 

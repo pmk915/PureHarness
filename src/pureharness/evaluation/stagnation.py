@@ -182,31 +182,9 @@ class StagnationEvaluator:
     def _iter_signals(
         self, steps: Iterable[StagnationStep],
     ) -> Iterator[StagnationSignal]:
-        previous: dict[str, str] = {}
-        window: deque[_StepEvidence] = deque(maxlen=self.window_size)
-        last_step: int | None = None
+        tracker = StagnationTracker(self)
         for step in steps:
-            if not isinstance(step, StagnationStep):
-                raise TypeError("steps must contain StagnationStep")
-            if last_step is not None and step.step != last_step + 1:
-                raise ValueError("steps must be consecutive and ordered")
-            last_step = step.step
-            repeated = unchanged = changed = new = 0
-            for item in step.observations:
-                key = item.action_identity
-                if key is None:
-                    continue
-                if key not in previous:
-                    new += 1
-                else:
-                    repeated += 1
-                    if previous[key] == item.result_identity:
-                        unchanged += 1
-                    else:
-                        changed += 1
-                previous[key] = item.result_identity
-            window.append(_StepEvidence(step, repeated, unchanged, changed, new))
-            yield self._signal(tuple(window))
+            yield tracker.record_step(step)
 
     def _signal(self, window: tuple[_StepEvidence, ...]) -> StagnationSignal:
         observations = [
@@ -261,6 +239,45 @@ class StagnationEvaluator:
             reason=reason,
             evidence=evidence,
         )
+
+
+class StagnationTracker:
+    """Incremental factual observation, sharing the offline evaluator's rules.
+
+    Retain only a rolling window and prefix action/result hashes, not raw
+    outputs or a second history. This tracker has no execution authority.
+    """
+
+    def __init__(self, evaluator: StagnationEvaluator | None = None) -> None:
+        self.evaluator = evaluator or StagnationEvaluator()
+        self._previous: dict[str, str] = {}
+        self._window: deque[_StepEvidence] = deque(
+            maxlen=self.evaluator.window_size,
+        )
+        self.last_step: int | None = None
+
+    def record_step(self, step: StagnationStep) -> StagnationSignal:
+        if not isinstance(step, StagnationStep):
+            raise TypeError("steps must contain StagnationStep")
+        if self.last_step is not None and step.step != self.last_step + 1:
+            raise ValueError("steps must be consecutive and ordered")
+        self.last_step = step.step
+        repeated = unchanged = changed = new = 0
+        for item in step.observations:
+            key = item.action_identity
+            if key is None:
+                continue
+            if key not in self._previous:
+                new += 1
+            else:
+                repeated += 1
+                if self._previous[key] == item.result_identity:
+                    unchanged += 1
+                else:
+                    changed += 1
+            self._previous[key] = item.result_identity
+        self._window.append(_StepEvidence(step, repeated, unchanged, changed, new))
+        return self.evaluator._signal(tuple(self._window))
 
 
 def stagnation_steps_from_run_record(

@@ -1,5 +1,5 @@
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from time import perf_counter
 from uuid import uuid4
 
@@ -23,6 +23,11 @@ from pureharness.context import (
     ContextLimits,
 )
 from pureharness.events import AgentEvent, safe_arguments_preview
+from pureharness.evaluation.stagnation import (
+    StagnationObservation,
+    StagnationStep,
+    StagnationTracker,
+)
 from pureharness.messages import AgentItem, Message, ToolCall, ToolResult
 from pureharness.model import (
     ContextWindowExceededError,
@@ -46,6 +51,11 @@ from pureharness.runtime import (
     RuntimeStage,
 )
 from pureharness.session import Session
+from pureharness.stagnation_advisory import (
+    StagnationAdvisoryPolicy,
+    StagnationAdvisoryState,
+    render_stagnation_advisory,
+)
 from pureharness.skills import Skill, normalize_skills, render_skill
 from pureharness.task_state import (
     TaskState,
@@ -54,6 +64,7 @@ from pureharness.task_state import (
     render_task_state,
 )
 from pureharness.tool_executor import ToolExecutor, ToolPreconditionError
+from pureharness.tool_history import ToolInteraction
 from pureharness.tool_policy import PolicyDecision
 from pureharness.tool_selection import (
     AllToolsSelector,
@@ -83,6 +94,8 @@ class _PreparedContext:
     task_state_item: Message | None
     completion_recheck_item: Message | None
     estimated_completion_recheck_tokens: int
+    stagnation_advisory_item: Message | None = None
+    estimated_stagnation_advisory_tokens: int = 0
 
 
 class Agent:
@@ -106,7 +119,10 @@ class Agent:
         execution_budget: ExecutionBudget | None = None,
         skills: Sequence[Skill] = (),
         completion_policy: CompletionPolicy | None = None,
+        stagnation_advisory: bool = False,
     ):
+        if not isinstance(stagnation_advisory, bool):
+            raise ValueError("stagnation_advisory must be bool")
         if not isinstance(include_task_state, bool):
             raise ValueError("include_task_state must be bool")
         if (
@@ -203,6 +219,13 @@ class Agent:
         self._active_session_size: int | None = None
         self._completion_rechecks_used = 0
         self._pending_completion_recheck: Message | None = None
+        self.stagnation_advisory = stagnation_advisory
+        self._stagnation_policy = (
+            StagnationAdvisoryPolicy() if stagnation_advisory else None
+        )
+        self._stagnation_state = StagnationAdvisoryState()
+        self._stagnation_tracker: StagnationTracker | None = None
+        self._stagnation_previous_evidence = CodingEvidenceSnapshot()
 
     @property
     def messages(self):
@@ -230,6 +253,10 @@ class Agent:
     @property
     def completion_rechecks_used(self) -> int:
         return self._completion_rechecks_used
+
+    @property
+    def stagnation_advisories_emitted(self) -> int:
+        return self._stagnation_state.advisory_count
 
     @property
     def workspace_snapshot(self) -> WorkspaceSnapshot | None:
@@ -292,6 +319,11 @@ class Agent:
                 self._active_record_builder = None
                 self._active_session_size = None
                 self._pending_completion_recheck = None
+                self._stagnation_tracker = None
+                if self._stagnation_policy is not None:
+                    self._stagnation_state = self._stagnation_policy.clear_pending(
+                        self._stagnation_state,
+                    )
 
     def _run(self, user_input: str) -> str:
         record_builder = self._start_run(user_input)
@@ -341,6 +373,9 @@ class Agent:
 
             if self.context_limits is not None:
                 try:
+                    prepared = self._fit_stagnation_advisory(
+                        history, prepared, tool_selection,
+                    )
                     prepared = self._apply_context_limits(
                         step,
                         history,
@@ -371,6 +406,11 @@ class Agent:
                 record_builder,
             )
             self._complete_model_request(step, output, record_builder)
+            if self._stagnation_state.delivered_at_step == step:
+                assert self._stagnation_policy is not None
+                self._stagnation_state = self._stagnation_policy.clear_pending(
+                    self._stagnation_state,
+                )
             if completion_recheck_for_step:
                 self._pending_completion_recheck = None
 
@@ -398,6 +438,7 @@ class Agent:
                     ),
                     record_builder,
                 )
+                self._consider_stagnation_advisory(step, output)
 
         self.trace.end_reason = "max_steps_exceeded"
         self._finalize_run_record(record_builder)
@@ -431,6 +472,11 @@ class Agent:
         self._coding_evidence_tracker = CodingEvidenceTracker()
         self._completion_rechecks_used = 0
         self._pending_completion_recheck = None
+        self._stagnation_state = StagnationAdvisoryState()
+        self._stagnation_tracker = (
+            StagnationTracker() if self.stagnation_advisory else None
+        )
+        self._stagnation_previous_evidence = CodingEvidenceSnapshot()
         self.tool_executor.reset_run_state()
         self._active_session_size = len(self.session.items)
         builder = RunRecordBuilder(
@@ -491,12 +537,25 @@ class Agent:
             else 0
         )
 
+        stagnation_advisory_item = (
+            render_stagnation_advisory()
+            if self._stagnation_state.pending_signal is not None
+            else None
+        )
+        estimated_stagnation_advisory_tokens = (
+            self.context_builder.estimate_tokens([stagnation_advisory_item])
+            if stagnation_advisory_item is not None
+            else 0
+        )
+
         compiled = self.context_builder.compile(history)
         model_items: list[AgentItem] = list(skill_items)
         if task_state_item is not None:
             model_items.append(task_state_item)
         if completion_recheck_item is not None:
             model_items.append(completion_recheck_item)
+        if stagnation_advisory_item is not None:
+            model_items.append(stagnation_advisory_item)
         model_items.extend(compiled.items)
 
         prepared = _PreparedContext(
@@ -510,6 +569,10 @@ class Agent:
             completion_recheck_item=completion_recheck_item,
             estimated_completion_recheck_tokens=(
                 estimated_completion_recheck_tokens
+            ),
+            stagnation_advisory_item=stagnation_advisory_item,
+            estimated_stagnation_advisory_tokens=(
+                estimated_stagnation_advisory_tokens
             ),
         )
         if self.context_limits is None:
@@ -530,6 +593,7 @@ class Agent:
             prepared.estimated_skill_tokens
             + prepared.estimated_task_state_tokens
             + prepared.estimated_completion_recheck_tokens
+            + prepared.estimated_stagnation_advisory_tokens
             + selection.estimated_tool_schema_tokens
         )
         available_history_tokens = (
@@ -563,6 +627,8 @@ class Agent:
                 model_items.append(prepared.task_state_item)
             if prepared.completion_recheck_item is not None:
                 model_items.append(prepared.completion_recheck_item)
+            if prepared.stagnation_advisory_item is not None:
+                model_items.append(prepared.stagnation_advisory_item)
             model_items.extend(compiled.items)
             final_prepared = _PreparedContext(
                 task_state=prepared.task_state,
@@ -579,6 +645,10 @@ class Agent:
                 ),
                 estimated_completion_recheck_tokens=(
                     prepared.estimated_completion_recheck_tokens
+                ),
+                stagnation_advisory_item=prepared.stagnation_advisory_item,
+                estimated_stagnation_advisory_tokens=(
+                    prepared.estimated_stagnation_advisory_tokens
                 ),
             )
 
@@ -622,6 +692,15 @@ class Agent:
         )
         if pressure_data is not None:
             data.update(pressure_data)
+        if self.stagnation_advisory:
+            data.update({
+                "stagnation_advisory_present": (
+                    prepared.stagnation_advisory_item is not None
+                ),
+                "estimated_stagnation_advisory_tokens": (
+                    prepared.estimated_stagnation_advisory_tokens
+                ),
+            })
         self._emit(AgentEvent(type="context_built", data=data))
 
     def _context_event_data(
@@ -788,6 +867,7 @@ class Agent:
                 self._progress_tracker.record_model_retry()
                 retry_pending = False
             try:
+                self._deliver_stagnation_advisory(step, current_prepared)
                 return self.model.generate(
                     list(current_prepared.model_items),
                     list(selection.tools),
@@ -960,6 +1040,8 @@ class Agent:
             model_items.append(previous.task_state_item)
         if previous.completion_recheck_item is not None:
             model_items.append(previous.completion_recheck_item)
+        if previous.stagnation_advisory_item is not None:
+            model_items.append(previous.stagnation_advisory_item)
         model_items.extend(compiled.items)
         return _PreparedContext(
             task_state=previous.task_state,
@@ -974,6 +1056,10 @@ class Agent:
             completion_recheck_item=previous.completion_recheck_item,
             estimated_completion_recheck_tokens=(
                 previous.estimated_completion_recheck_tokens
+            ),
+            stagnation_advisory_item=previous.stagnation_advisory_item,
+            estimated_stagnation_advisory_tokens=(
+                previous.estimated_stagnation_advisory_tokens
             ),
         )
 
@@ -992,6 +1078,7 @@ class Agent:
             previous.estimated_skill_tokens
             + previous.estimated_task_state_tokens
             + previous.estimated_completion_recheck_tokens
+            + previous.estimated_stagnation_advisory_tokens
             + selection.estimated_tool_schema_tokens
         )
         data: dict[str, object] = {
@@ -1166,6 +1253,116 @@ class Agent:
             return True
         except ContextCompileError:
             return False
+
+    def _consider_stagnation_advisory(
+        self, step: int, tool_calls: list[ToolCall],
+    ) -> None:
+        tracker = self._stagnation_tracker
+        policy = self._stagnation_policy
+        if tracker is None or policy is None:
+            return
+        # Completion-recheck message steps are inactive factual steps. They
+        # must not be mistaken for consecutive tool-using steps.
+        next_step = 0 if tracker.last_step is None else tracker.last_step + 1
+        for inactive_step in range(next_step, step):
+            tracker.record_step(StagnationStep(inactive_step, (), 0, 0))
+        evidence = self.coding_evidence_snapshot
+        previous = self._stagnation_previous_evidence
+        results = self.trace.steps[-1].tool_result or []
+        signal = tracker.record_step(StagnationStep(
+            step=step,
+            observations=tuple(
+                StagnationObservation.from_interaction(
+                    ToolInteraction(call, result),
+                )
+                for call, result in zip(tool_calls, results, strict=True)
+            ),
+            workspace_mutation_delta=(
+                evidence.workspace_mutations - previous.workspace_mutations
+            ),
+            verification_delta=(
+                evidence.verification_attempts - previous.verification_attempts
+            ),
+        ))
+        self._stagnation_previous_evidence = evidence
+        self._stagnation_state = policy.after_tool_step(
+            self._stagnation_state, signal, evidence,
+        )
+        if step + 1 >= self.max_steps or self._model_attempt_budget_exhausted():
+            self._stagnation_state = policy.clear_pending(self._stagnation_state)
+
+    def _fit_stagnation_advisory(
+        self,
+        history: list[AgentItem],
+        prepared: _PreparedContext,
+        selection: ToolSelection,
+    ) -> _PreparedContext:
+        """Optional guidance must not cause an otherwise avoidable failure."""
+        item = prepared.stagnation_advisory_item
+        limits = self.context_limits
+        if item is None or limits is None:
+            return prepared
+        non_history_tokens = (
+            prepared.estimated_skill_tokens
+            + prepared.estimated_task_state_tokens
+            + prepared.estimated_completion_recheck_tokens
+            + prepared.estimated_stagnation_advisory_tokens
+            + selection.estimated_tool_schema_tokens
+        )
+        available = limits.usable_input_tokens - non_history_tokens
+        fits = available > 0
+        if fits and prepared.compiled.estimated_tokens > available:
+            try:
+                self.context_builder.compile_bounded(history, available)
+            except ContextCompileError:
+                fits = False
+        if fits:
+            return prepared
+        assert self._stagnation_policy is not None
+        self._stagnation_state = self._stagnation_policy.clear_pending(
+            self._stagnation_state,
+        )
+        return replace(
+            prepared,
+            model_items=tuple(x for x in prepared.model_items if x is not item),
+            stagnation_advisory_item=None,
+            estimated_stagnation_advisory_tokens=0,
+        )
+
+    def _deliver_stagnation_advisory(
+        self, step: int, prepared: _PreparedContext,
+    ) -> None:
+        policy = self._stagnation_policy
+        state = self._stagnation_state
+        pending = state.pending_signal
+        if (
+            policy is None or pending is None
+            or prepared.stagnation_advisory_item is None
+            or state.delivered_at_step is not None
+        ):
+            return
+        self._stagnation_state = policy.delivered(
+            state, self.coding_evidence_snapshot, step,
+        )
+        facts = pending.evidence
+        self._emit(AgentEvent(
+            type="runtime_advisory_emitted",
+            data={
+                "step": step,
+                "kind": "stagnation",
+                "advisory_index": self._stagnation_state.advisory_count,
+                "detected_at_step": facts.end_step,
+                "delivered_at_step": step,
+                "window_size": facts.window_size,
+                "repeated_action_count": facts.repeated_action_count,
+                "unchanged_result_repeat_count": (
+                    facts.unchanged_result_repeat_count
+                ),
+                "new_action_count": facts.new_action_count,
+                "workspace_mutation_delta": facts.workspace_mutation_delta,
+                "verification_delta": facts.verification_delta,
+            },
+        ))
 
     def _emit_completion_recheck_skipped(
         self,

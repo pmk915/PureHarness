@@ -15,6 +15,7 @@ AgentEventType = Literal[
     "context_recovering",
     "completion_recheck_requested",
     "completion_recheck_skipped",
+    "runtime_advisory_emitted",
     "execution_budget_exhausted",
     "progress_snapshot",
     "coding_evidence_snapshot",
@@ -37,6 +38,18 @@ AgentEventType = Literal[
 
 
 class AgentEventData(TypedDict, total=False):
+    kind: str
+    advisory_index: int
+    detected_at_step: int | None
+    delivered_at_step: int
+    window_size: int
+    repeated_action_count: int
+    unchanged_result_repeat_count: int
+    new_action_count: int
+    workspace_mutation_delta: int | None
+    verification_delta: int | None
+    stagnation_advisory_present: bool
+    estimated_stagnation_advisory_tokens: int
     step: int
     attempt: int
     max_attempts: int

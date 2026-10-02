@@ -310,6 +310,7 @@ def test_run_invokes_public_cli_with_safe_arguments_and_record(tmp_path):
     assert "--model deepseek-chat" in command
     assert "--max-steps 300" in command
     assert "--history-token-budget 8000" in command
+    assert "--stagnation-advisory" in command
     assert "--record /logs/agent/pureharness-run-record.json" in command
     assert "--output jsonl" in command
     assert "| tee /logs/agent/pureharness-events.jsonl" in command
@@ -335,6 +336,7 @@ def test_evaluation_command_is_task_agnostic(tmp_path, instruction):
         executable, "run", instruction,
         "--workspace", "/workspace", "--model", "deepseek-chat",
         "--max-steps", "300", "--history-token-budget", "8000",
+        "--stagnation-advisory",
         "--record", "/logs/agent/pureharness-run-record.json", "--output", "jsonl",
     ]
     for hint in ("regex-log", "terminal-bench", "findall", "capturing group"):

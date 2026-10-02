@@ -248,6 +248,36 @@ context telemetry only and is not persisted in RunRecord v2. Neither completion
 event exposes final response content, commands, output, paths, or file content.
 Both events and fields are additive within live-event JSONL schema version 1.
 
+### Bounded stagnation advisory (opt-in)
+
+`pureharness run ... --stagnation-advisory` enables the M24.3B runtime policy.
+`runtime_advisory_emitted` is an additive, non-terminal JSONL v1 event at the
+first budget-admitted model dispatch that actually includes guidance. It means
+guidance was passed to the model interface, not that the provider accepted the
+request or the task recovered. The envelope's `step` is the delivery step.
+Its payload contains only `kind="stagnation"`, one-based `advisory_index`,
+`detected_at_step`, `delivered_at_step`, `window_size`, `repeated_action_count`,
+`unchanged_result_repeat_count`, `new_action_count`, `workspace_mutation_delta`,
+and `verification_delta`. No arguments, results, paths, hashes, or advisory
+text are emitted. Physical retry and context recovery do not emit it again.
+
+Enabled runs also expose optional `context_built` fields
+`stagnation_advisory_present` and `estimated_stagnation_advisory_tokens`.
+Guidance is non-history context like completion recheck; its separate token
+cost participates in ContextLimits and context-recovery request estimates but
+is not persisted in RunRecord. Disabled runs emit neither field. Guidance that
+cannot fit explicit context capacity is omitted without a delivery event or
+intervention count. The existing history budget and atomic-unit rules remain
+unchanged.
+
+After delivery the policy remains latched even if the signal clears or new
+actions/results appear. Only an increase in structured-mutation or marked
+verification-attempt counters after delivery re-arms it, subject to an absolute
+two-advisory cap. These counters do not prove correctness or audit shell writes.
+Pending guidance, latch state, and intervention count are per-run live state;
+they are not restored by observational replay or durable resume. Completion
+events and policy remain distinct and unchanged.
+
 The three context-failure events have distinct meanings:
 
 ```text

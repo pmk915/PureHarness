@@ -258,6 +258,36 @@ legitimate unchanged polling or repeated reads can still produce a warning.
 Future diagnosis may combine this evidence with other facts when considering
 `PLANNING_FAILURE` or `RECOVERY_FAILURE`; M22's current rules remain unchanged.
 
+M24.3B adds a separate `StagnationAdvisoryPolicy`, enabled only by
+`Agent(stagnation_advisory=True)` or the one-shot CLI's `--stagnation-advisory`.
+The incremental factual tracker shares the offline evaluator's exact rules;
+the policy, not the evaluator or event listeners, controls guidance. After a
+completed tool step N updates progress/coding facts, an ARMED policy may queue
+one generic system advisory for logical request N+1. At actual budget-admitted
+model dispatch it increments the intervention count and becomes LATCHED.
+Continuous detections, a false signal, a new action, or a changed observation
+cannot re-arm it. Only a structured mutation or marked verification-attempt
+count increase after delivery can re-arm; at most two advisories are delivered
+per run. Every new run resets state, regardless of the Session's old history.
+
+Guidance is pinned ephemeral context, ordered after completion-recheck guidance
+and before compiled history. It survives physical retries and context recovery
+of that same logical request and is consumed after a valid model response;
+failure/interrupt cleanup discards pending guidance. It is never appended to
+Session or persisted, and changes neither tool selection nor completion
+policy. Its estimated tokens are accounted separately from the unchanged
+history budget and included in explicit ContextLimits/recovery request totals.
+If it cannot fit alongside valid atomic history, optional guidance is omitted
+without counting delivery or introducing a new failure. Step/model budget
+exhaustion similarly cannot produce a false delivery event.
+
+Disabled runs instantiate no stagnation tracker and preserve existing context
+and event payloads. Interactive CLI remains disabled. The Harbor adapter passes
+the explicit one-shot opt-in as its only experiment intervention, retaining
+its pinned install, model restriction, 300 steps, and 8000 history-token budget.
+This is advisory-only intervention, not automatic stopping, verification,
+mutation, or recovery. A signal clearing is not proof of task progress.
+
 The rejected final is retained as a completed `StepTrace` but is not appended to
 Session. The next logical request receives one ephemeral neutral completion
 recheck system message. The message disappears after that request produces a

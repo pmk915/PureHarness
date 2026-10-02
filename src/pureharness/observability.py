@@ -28,6 +28,11 @@ _EVENT_PAYLOAD_FIELDS: dict[str, tuple[tuple[str, str], ...]] = {
         ("error_type", "error_type"),
     ),
     "context_built": (
+        ("stagnation_advisory_present", "stagnation_advisory_present"),
+        (
+            "estimated_stagnation_advisory_tokens",
+            "estimated_stagnation_advisory_tokens",
+        ),
         ("history_item_count", "history_item_count"),
         ("context_item_count", "context_item_count"),
         ("trajectory_item_count", "trajectory_item_count"),
@@ -137,6 +142,18 @@ _EVENT_PAYLOAD_FIELDS: dict[str, tuple[tuple[str, str], ...]] = {
         ),
         ("verification_outcome", "verification_outcome"),
         ("verification_exit_code", "verification_exit_code"),
+    ),
+    "runtime_advisory_emitted": (
+        ("kind", "kind"),
+        ("advisory_index", "advisory_index"),
+        ("detected_at_step", "detected_at_step"),
+        ("delivered_at_step", "delivered_at_step"),
+        ("window_size", "window_size"),
+        ("repeated_action_count", "repeated_action_count"),
+        ("unchanged_result_repeat_count", "unchanged_result_repeat_count"),
+        ("new_action_count", "new_action_count"),
+        ("workspace_mutation_delta", "workspace_mutation_delta"),
+        ("verification_delta", "verification_delta"),
     ),
     "execution_budget_exhausted": (
         ("resource", "resource"),

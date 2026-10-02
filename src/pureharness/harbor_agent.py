@@ -241,6 +241,7 @@ class PureHarnessHarborAgent(BaseInstalledAgent):
                 f"--model {shlex.quote(self._deepseek_model)} "
                 f"--max-steps {_EVALUATION_MAX_STEPS} "
                 f"--history-token-budget {_EVALUATION_HISTORY_TOKEN_BUDGET} "
+                "--stagnation-advisory "
                 f"--record {shlex.quote(str(record_path))} "
                 "--output jsonl "
                 f"| tee {shlex.quote(str(event_log_path))}"

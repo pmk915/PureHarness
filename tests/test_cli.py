@@ -466,6 +466,7 @@ def test_one_shot_default_max_steps_remains_ten(tmp_path, monkeypatch):
 
     assert exit_code == 0
     assert created_agents[0].max_steps == 10
+    assert created_agents[0].stagnation_advisory is False
     assert type(created_agents[0].context_builder) is ContextBuilder
     assert isinstance(
         created_agents[0].context_builder.tool_result_projector,
@@ -476,6 +477,63 @@ def test_one_shot_default_max_steps_remains_ten(tmp_path, monkeypatch):
         DeterministicToolTrajectoryCompactor,
     )
     assert cli_module.build_parser().parse_args(["run", "hello"]).history_token_budget is None
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_one_shot_stagnation_flag_is_opt_in_with_valid_jsonl(tmp_path, enabled):
+    class RepeatingListModel:
+        def __init__(self):
+            self.contexts = []
+
+        def generate(self, messages, tools):
+            self.contexts.append(list(messages))
+            if len(self.contexts) <= 18:
+                return [ToolCall("list_files", {"path": "."}, str(len(self.contexts)))]
+            return Message("assistant", "done")
+
+    model = RepeatingListModel()
+    output = []
+    arguments = [
+        "run", "task", "--workspace", str(tmp_path), "--max-steps", "25",
+        "--history-token-budget", "8000", "--output", "jsonl",
+    ]
+    if enabled:
+        arguments.append("--stagnation-advisory")
+    assert main(
+        arguments, model_factory=lambda name: model, output_fn=output.append,
+    ) == 0
+    events = [json.loads(line) for line in output]
+    advisories = [e for e in events if e["event"] == "runtime_advisory_emitted"]
+    assert len(advisories) == int(enabled)
+    assert all(e["schema_version"] == 1 for e in events)
+    assert sum(any(
+        isinstance(item, Message) and "Stagnation Advisory" in item.content
+        for item in context
+    ) for context in model.contexts) == int(enabled)
+    contexts = [e["payload"] for e in events if e["event"] == "context_built"]
+    assert all(c["history_token_budget"] == 8000 for c in contexts)
+    if not enabled:
+        assert all("stagnation_advisory_present" not in c for c in contexts)
+
+
+def test_interactive_cli_does_not_enable_one_shot_advisory(tmp_path, monkeypatch):
+    agents = []
+    original = cli_module._create_agent
+    def capture(*args, **kwargs):
+        agent = original(*args, **kwargs)
+        agents.append(agent)
+        return agent
+    monkeypatch.setattr(cli_module, "_create_agent", capture)
+    assert main(
+        ["--workspace", str(tmp_path), "--plain"],
+        model_factory=lambda name: MultiTurnModel(),
+        input_fn=_input(["hello", "/exit"]), output_fn=lambda text: None,
+    ) == 0
+    assert len(agents) == 1
+    assert agents[0].stagnation_advisory is False
+    assert agents[0].stagnation_advisories_emitted == 0
+    with pytest.raises(SystemExit):
+        cli_module.build_parser().parse_args(["--stagnation-advisory"])
 
 
 def test_one_shot_history_budget_uses_existing_context_engineering_defaults(tmp_path, monkeypatch):

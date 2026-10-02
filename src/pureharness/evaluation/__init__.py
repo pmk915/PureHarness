@@ -1,8 +1,8 @@
 """Deterministic, side-effect-free evaluation of completed trajectories.
 
-Evaluation is separate from runtime execution so metrics cannot influence an
-Agent run. Future diagnosis layers may consume these stable results without
-coupling diagnostic policy back into the runtime kernel.
+M22 metrics and diagnosis do not control execution. Stagnation observations
+may be consumed by an explicitly enabled runtime advisory policy; the factual
+evaluator itself has no execution authority.
 """
 
 from pureharness.evaluation.evaluator import (
@@ -41,6 +41,7 @@ from pureharness.evaluation.stagnation import (
     StagnationObservation,
     StagnationSignal,
     StagnationStep,
+    StagnationTracker,
     stagnation_steps_from_run_record,
 )
 
@@ -61,6 +62,7 @@ __all__ = [
     "StagnationObservation",
     "StagnationSignal",
     "StagnationStep",
+    "StagnationTracker",
     "Trajectory",
     "TrajectoryEvaluator",
     "TrajectoryEvent",
