@@ -35,6 +35,14 @@ from pureharness.evaluation.trajectory import (
     trajectory_from_run_record,
 )
 from pureharness.evaluation.taxonomy import FailureType
+from pureharness.evaluation.stagnation import (
+    StagnationEvidence,
+    StagnationEvaluator,
+    StagnationObservation,
+    StagnationSignal,
+    StagnationStep,
+    stagnation_steps_from_run_record,
+)
 
 
 __all__ = [
@@ -48,6 +56,11 @@ __all__ = [
     "RecoveryAction",
     "RecoveryAdvisor",
     "RecoverySignal",
+    "StagnationEvidence",
+    "StagnationEvaluator",
+    "StagnationObservation",
+    "StagnationSignal",
+    "StagnationStep",
     "Trajectory",
     "TrajectoryEvaluator",
     "TrajectoryEvent",
@@ -56,4 +69,5 @@ __all__ = [
     "task_success_score",
     "tool_reliability_score",
     "trajectory_from_run_record",
+    "stagnation_steps_from_run_record",
 ]

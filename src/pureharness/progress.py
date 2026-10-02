@@ -110,6 +110,18 @@ def _tool_action_fingerprint(
     name: str,
     arguments: dict[str, object],
 ) -> str | None:
+    return tool_action_fingerprint(name, arguments)
+
+
+def tool_action_fingerprint(
+    name: str,
+    arguments: dict[str, object],
+) -> str | None:
+    """Shared exact identity for progress and offline evaluation.
+
+    Ignore call IDs, sort dictionary keys, preserve list order, and return
+    None for uncanonicalizable arguments rather than inventing an identity.
+    """
     try:
         canonical = json.dumps(
             {"arguments": arguments, "name": name},

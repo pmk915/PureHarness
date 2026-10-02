@@ -225,6 +225,39 @@ M22.4's frozen `RecoverySignal` is deterministic guidance derived from a
 actions and does not execute a tool, retry work, modify prompts, or otherwise
 change runtime behavior.
 
+M24.3A adds an offline-only `StagnationEvaluator` beside M22 evaluation, without
+changing `Trajectory`, reports, diagnosis rules, progress events, or persistence.
+Activity is not progress: exact repetition alone is insufficient. The default
+warning requires a full trailing window of 16 consecutive active logical steps,
+no new exact action identities, unchanged observations for every repeated
+action, and explicit zero structured-mutation and verification-attempt deltas.
+A changed observation, new identity, mutation, or verification attempt vetoes
+the warning. Short or inactive windows and unavailable evidence do not warn.
+This is observational evidence, not proof of failed planning, recovery, or task
+correctness, and it never stops execution or injects prompts.
+
+`StagnationObservation.from_interaction()` reuses the ProgressTracker action
+fingerprint: sorted canonical JSON, meaningful list order, no call IDs. Result
+identity hashes exact UTF-8 content and the error flag; outputs and arguments
+are not stored in evidence. Repeats and new identities are relative to the
+entire supplied prefix, while counts/progress deltas describe the trailing
+window. Changed results compare against the immediately preceding observation
+of that same action, including an observation before the window. Semantic
+equivalence, shell intent, whitespace normalization, and embeddings are out of
+scope. The evaluator retains bounded window aggregates plus one last-result
+hash per distinct prefix action; it is not constant-memory over novel actions.
+
+`stagnation_steps_from_run_record()` adapts completed call/result pairs using
+the existing tool-history matcher. RunRecord lacks coding counters, so callers
+may supply same-run post-step `CodingEvidenceSnapshot` values for every step
+(for example, from JSONL); missing evidence is unknown, never inferred from
+tool names or shell text. Structured-mutation counts are not a filesystem
+audit, and marked verification attempts are not necessarily successful checks.
+The window size is a conservative observation horizon, not a stop threshold;
+legitimate unchanged polling or repeated reads can still produce a warning.
+Future diagnosis may combine this evidence with other facts when considering
+`PLANNING_FAILURE` or `RECOVERY_FAILURE`; M22's current rules remain unchanged.
+
 The rejected final is retained as a completed `StepTrace` but is not appended to
 Session. The next logical request receives one ephemeral neutral completion
 recheck system message. The message disappears after that request produces a
