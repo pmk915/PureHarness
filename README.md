@@ -65,8 +65,37 @@ cd /path/to/workspace
 ```
 
 One interactive conversation keeps one Session across multiple `Agent.run()`
-calls and process restarts. Use `/help`, `/status`, or `/exit`; Ctrl+D exits
-cleanly. Sessions are stored under `~/.pureharness/sessions` by default. Set
+calls and process restarts. With the `cli` extra installed, real terminal output
+uses the existing Rich event renderer, a compact workspace/model/session header,
+and a separated assistant response. Redirected output and injected output
+callables use deterministic plain text. Choose presentation explicitly with:
+
+```bash
+pureharness --plain
+pureharness --locale en
+pureharness --locale zh-CN
+```
+
+The default locale is `en`; plain output remains English. The optional
+prompt-toolkit input adapter provides the `You ›` prompt, in-process history
+(Up/Down), Tab completion for slash commands, and basic terminal editing. Enter
+submits; Alt+Enter (or Escape then Enter) inserts a newline. History is kept only
+in memory, and approval responses are excluded from it. Without the optional
+dependency or terminal input/output, the CLI falls back to ordinary input.
+Custom `input_fn` / `output_fn` callables remain authoritative for embedding and
+tests. Ctrl+C cancels current input or interrupts an active Run and returns to
+the prompt; Ctrl+D exits cleanly.
+
+| Command | Purpose |
+| --- | --- |
+| `/help` | Show interactive commands |
+| `/status` | Show session, workspace, model, latest Run, and context usage |
+| `/session` | Show durable identity, UTC timestamps, and history/Run counts |
+| `/runs` | Show the latest 10 RunRecords in this session |
+| `/eval` | Show execution metrics, diagnosis, and advisory recovery for the latest finalized Run |
+| `/exit` | Save and leave the session |
+
+Sessions are stored under `~/.pureharness/sessions` by default. Set
 `PUREHARNESS_HOME` to isolate or relocate that state. To export an additional
 RunRecord per turn, pass `--record-dir PATH` before entering the session.
 
@@ -84,11 +113,36 @@ Discover and resume durable interactive sessions:
 ```bash
 pureharness sessions
 pureharness resume <session-id>
+pureharness --continue
+pureharness --workspace /path/to/workspace --continue
 ```
 
 Resume loads prior conversation state passively. It does not call the model or
 re-execute historical tools; the next ordinary user message starts a new Run.
-`/status`, `/help`, and `/exit` remain available without an API key.
+`--continue` selects the most recently updated durable session whose persisted
+workspace equals the resolved selected workspace. It reports an error when no
+matching session exists, rather than starting a new one. Explicit resume uses
+the saved workspace and model. Rich presentation flags can also follow resume:
+`pureharness resume <session-id> --locale zh-CN --plain`.
+All slash commands remain available without an API key, including `/eval` on
+the latest persisted Run immediately after resume.
+
+After each finalized interactive Run, the CLI displays a compact M22 evaluation:
+
+```text
+Run evaluation
+  Completion: 1.000
+  Step efficiency: 0.167
+  Tool reliability: 1.000
+  Diagnosis: none
+```
+
+`/eval` adds Run ID, end reason, steps, tool counts, diagnosis confidence/reason,
+and a RecoverySignal. Recovery actions are suggestions only; they never retry a
+tool or alter a prompt. Completion means protocol execution completed, not
+verified task correctness. The deterministic M22 metrics observe RunRecord;
+trusted benchmark verification remains a separate external oracle. A completed
+Run may still contain tool errors or fail the benchmark verifier.
 
 Use the versioned local machine interfaces when output will be consumed by a
 program:
@@ -167,6 +221,15 @@ running the full matrix.
 
 The configured suite is offline and deterministic. Docker-specific tests skip
 when Docker is unavailable.
+
+For an interactive demo, start in a disposable workspace, submit a small task,
+and inspect the streamed context/model/tool events, final response, and compact
+evaluation. Then try `/status`, `/session`, `/runs`, `/eval`, `/help`, and `/exit`.
+Run `pureharness sessions`, followed by `pureharness --continue` from that same
+workspace; it should restore the session and wait for input. Repeat with
+`--plain` to check the fallback. Ordinary task turns use the configured provider
+and may incur API costs; the M23 tests cover these flows with scripted models,
+including actual prompt-toolkit input via pipes, without paid API calls.
 
 ## Security and limitations
 

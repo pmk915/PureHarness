@@ -29,6 +29,8 @@ from pureharness.experiment import (
     write_experiment_results,
 )
 from pureharness.model import Model, ModelError
+from pureharness.interactive import CommandResult, InteractiveCommands
+from pureharness.interactive_input import create_interactive_input
 from pureharness.observability import (
     JsonlEventRenderer,
     dumps_wire,
@@ -230,6 +232,23 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="Write one RunRecord JSON file per interactive turn.",
     )
+    parser.add_argument(
+        "--plain",
+        action="store_true",
+        help="Force plain human rendering in interactive mode.",
+    )
+    parser.add_argument(
+        "--locale",
+        choices=("en", "zh-CN"),
+        default="en",
+        help="Rich interactive terminal locale (default: en).",
+    )
+    parser.add_argument(
+        "--continue",
+        action="store_true",
+        dest="continue_session",
+        help="Resume the newest saved session for the selected workspace.",
+    )
     _add_context_limit_arguments(parser)
     _add_execution_budget_arguments(parser)
     subparsers = parser.add_subparsers(dest="command")
@@ -300,6 +319,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Resume a saved interactive session.",
     )
     resume_parser.add_argument("session_id")
+    # Accept presentation flags on either side of the resume subcommand.
+    resume_parser.add_argument(
+        "--plain", action="store_true", default=argparse.SUPPRESS,
+    )
+    resume_parser.add_argument(
+        "--locale", choices=("en", "zh-CN"), default=argparse.SUPPRESS,
+    )
 
     benchmark_parser = subparsers.add_parser(
         "benchmark",
@@ -344,6 +370,8 @@ def main(
 ) -> int:
     parser = build_parser()
     arguments = parser.parse_args(argv)
+    if arguments.continue_session and arguments.command is not None:
+        parser.error("--continue is only available in default interactive mode")
     factory = model_factory or _default_model_factory
     error_output = (
         error_fn
@@ -381,10 +409,17 @@ def main(
                 output_fn,
                 as_json=arguments.json_output,
             )
-        if arguments.command == "resume":
+        if arguments.command == "resume" or arguments.continue_session:
+            session_id = (
+                arguments.session_id
+                if arguments.command == "resume"
+                else _latest_workspace_session(
+                    durable_store, _resolve_workspace(arguments.workspace),
+                )
+            )
             state = _load_durable_session(
                 durable_store,
-                arguments.session_id,
+                session_id,
             )
             return _run_interactive(
                 workspace=state.workspace,
@@ -397,6 +432,8 @@ def main(
                 durable_state=state,
                 context_limits=context_limits,
                 execution_budget=execution_budget,
+                plain=arguments.plain,
+                locale=arguments.locale,
             )
         return _run_interactive(
             workspace=arguments.workspace,
@@ -408,6 +445,8 @@ def main(
             durable_store=durable_store,
             context_limits=context_limits,
             execution_budget=execution_budget,
+            plain=arguments.plain,
+            locale=arguments.locale,
         )
     except KeyboardInterrupt:
         if not jsonl_mode:
@@ -433,6 +472,8 @@ def _run_interactive(
     durable_state: DurableSession | None = None,
     context_limits: ContextLimits | None = None,
     execution_budget: ExecutionBudget | None = None,
+    plain: bool = False,
+    locale: str = "en",
 ) -> int:
     resumed = durable_state is not None
     if durable_state is None:
@@ -456,16 +497,32 @@ def _run_interactive(
 
     session_id = durable_state.session_id
     agent: Agent | None = None
-    output_fn("PureHarness")
-    if resumed:
-        output_fn(f"Resumed session {session_id}")
-    output_fn(f"Workspace: {resolved_workspace}")
-    output_fn(f"Model: {model_name}")
-    output_fn("Type /help for commands.")
+    renderer = _select_interactive_renderer(output_fn, plain=plain, locale=locale)
+    input_fn = create_interactive_input(input_fn, output_fn)
+    renderer_arguments = {}
+    if isinstance(renderer, PlainTerminalRenderer):
+        output_fn("PureHarness")
+        if resumed:
+            output_fn(f"Resumed session {session_id}")
+        output_fn(f"Workspace: {resolved_workspace}")
+        output_fn(f"Model: {model_name}")
+        output_fn(f"Session ID: {session_id}")
+        output_fn("Type /help for commands.")
+        commands = InteractiveCommands(durable_state, output_fn)
+        render_response = output_fn
+    else:
+        renderer.render_header(
+            workspace=resolved_workspace, model=model_name,
+            session_id=session_id, resumed=resumed,
+        )
+        output_fn = renderer.write
+        render_response = renderer.render_response
+        commands = InteractiveCommands(durable_state, output_fn, renderer.translate)
+        renderer_arguments = {"event_listener": renderer}
 
     while True:
         try:
-            value = input_fn("> ")
+            value = input_fn("You › ")
         except EOFError:
             _save_durable_session(durable_store, durable_state)
             output_fn("Goodbye.")
@@ -477,28 +534,12 @@ def _run_interactive(
         prompt = value.strip()
         if not prompt:
             continue
-        if prompt == "/exit":
+        command_result = commands.handle(prompt)
+        if command_result is CommandResult.EXIT:
             _save_durable_session(durable_store, durable_state)
             output_fn("Goodbye.")
             return 0
-        if prompt == "/help":
-            output_fn(
-                "Commands: /help, /status, /exit. "
-                "Any other text starts an Agent run."
-            )
-            continue
-        if prompt == "/status":
-            _render_status(
-                agent,
-                session_id=session_id,
-                workspace=resolved_workspace,
-                model_name=model_name,
-                run_records=durable_state.run_records,
-                output_fn=output_fn,
-            )
-            continue
-        if prompt.startswith("/"):
-            output_fn(f"Unknown command: {prompt}")
+        if command_result is CommandResult.HANDLED:
             continue
 
         if agent is None:
@@ -525,6 +566,7 @@ def _run_interactive(
                     ),
                     **context_arguments,
                     **budget_arguments,
+                    **renderer_arguments,
                 )
             except CLIError as exc:
                 output_fn(f"Error: {exc}")
@@ -543,7 +585,7 @@ def _run_interactive(
         except Exception as exc:
             output_fn(f"Run failed: {type(exc).__name__}: {exc}")
         else:
-            output_fn(response)
+            render_response(response)
         finally:
             record = agent.last_run_record
             if record is not None:
@@ -564,6 +606,37 @@ def _run_interactive(
                     record,
                 )
                 output_fn(f"Run record: {destination}")
+            if record is not None:
+                commands.render_evaluation(record)
+
+
+def _select_interactive_renderer(
+    output_fn: OutputFunction,
+    *,
+    plain: bool,
+    locale: str,
+):
+    if not plain and output_fn is print and sys.stdout.isatty():
+        try:
+            from pureharness.rich_terminal import RichTerminalRenderer
+        except ImportError:
+            pass
+        else:
+            return RichTerminalRenderer(locale=locale, interactive=True)
+    return PlainTerminalRenderer(output_fn)
+
+
+def _latest_workspace_session(store: DurableSessionStore, workspace: Path) -> str:
+    try:
+        matches = [
+            summary for summary in store.list_sessions()
+            if summary.workspace == workspace
+        ]
+    except SessionStoreError as exc:
+        raise CLIError(str(exc)) from exc
+    if not matches:
+        raise CLIError(f"No saved session for workspace: {workspace}")
+    return max(matches, key=lambda summary: summary.updated_at).session_id
 
 
 def _create_durable_store() -> DurableSessionStore:
@@ -858,40 +931,6 @@ def _create_agent(
 
 def _stderr_output(value: str) -> None:
     print(value, file=sys.stderr)
-
-
-def _render_status(
-    agent: Agent | None,
-    *,
-    session_id: str,
-    workspace: Path,
-    model_name: str,
-    run_records: Sequence[RunRecord],
-    output_fn: OutputFunction,
-) -> None:
-    record = (
-        agent.last_run_record
-        if agent is not None and agent.last_run_record is not None
-        else (run_records[-1] if run_records else None)
-    )
-    output_fn(f"Session ID: {session_id}")
-    output_fn(f"Workspace: {workspace}")
-    output_fn(f"Model: {model_name}")
-    output_fn(f"Runs in session: {len(run_records)}")
-    output_fn(
-        "Last run ID: "
-        f"{record.run_id if record is not None else '(none)'}"
-    )
-    output_fn(
-        "Last end reason: "
-        f"{record.end_reason if record is not None else '(none)'}"
-    )
-    if record is not None:
-        output_fn(f"Last tool calls: {record.tool_call_count}")
-        output_fn(
-            "Last estimated context tokens: "
-            f"{record.sum_estimated_history_tokens}"
-        )
 
 
 def _write_run_record(path: Path, record: RunRecord) -> None:

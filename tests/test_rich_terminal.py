@@ -265,3 +265,22 @@ def test_broken_renderer_does_not_stop_other_observers():
         isinstance(error, RuntimeError)
         for error in agent.listener_errors
     )
+
+
+@pytest.mark.parametrize("locale, label", [
+    ("en", "Verification evidence: exit_nonzero"),
+    ("zh-CN", "验证执行证据：exit_nonzero"),
+])
+def test_verification_rendering_uses_structured_evidence_only(locale, label):
+    output = StringIO()
+    renderer = RichTerminalRenderer(
+        locale=locale,
+        console=Console(file=output, force_terminal=False, width=120),
+    )
+    renderer(AgentEvent(type="coding_evidence_snapshot", data={
+        "last_verification_outcome": "exit_nonzero",
+        "last_verification_exit_code": 1,
+    }))
+    assert label in output.getvalue()
+    assert "exit_code=1" in output.getvalue()
+    assert "task failed" not in output.getvalue().lower()

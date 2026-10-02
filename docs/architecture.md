@@ -2,7 +2,7 @@
 
 This document separates the implementation that exists today from the intended
 architecture. Sections marked **Current** describe repository behavior through
-the M21.4B verification-aware-completion milestone. Sections marked **Target**
+the M23 interactive-CLI milestone. Sections marked **Target**
 describe direction, not implemented APIs.
 
 ## 1. Project positioning
@@ -53,6 +53,34 @@ External benchmark -> fresh Agent workspace -> trusted verifier -> Experiment
 The installed `pureharness` command is a thin composition layer around these
 components. CLI input, terminal rendering, benchmark selection, and provider
 construction do not enter the Agent kernel.
+
+M23 integrates post-run evaluation into human presentation through this
+one-way dependency flow:
+
+```text
+CLI / presentation
+        |
+        v
+Agent Runtime
+        |
+        v
+RunRecord (finalized)
+        |
+        v
+Evaluation Layer
+        + Metrics
+        + Diagnosis
+        + Report
+        + Recovery Signal
+        |
+        v
+human presentation
+```
+
+CLI presentation reads evaluation; evaluation never controls Agent execution.
+RecoverySignal remains advisory, and protocol completion is not trusted task
+correctness. Machine JSONL output has a separate listener and remains separate
+from Rich human rendering.
 
 ### Agent
 
@@ -880,15 +908,52 @@ pureharness inspect PATH    read-only RunRecord inspection
 pureharness benchmark       BenchmarkRunner + ExperimentRunner
 pureharness sessions        discover durable sessions, newest first
 pureharness resume ID       restore a logical Session, then await input
+pureharness --continue      resume newest session for the resolved workspace
 ```
 
-Interactive `/help`, `/status`, and `/exit` are CLI concerns. Structured Agent
+Interactive `/help`, `/status`, `/session`, `/runs`, `/eval`, and `/exit` are CLI concerns. Structured Agent
 events feed a terminal renderer, and the renderer never controls execution. A
 Session spans interactive turns and process restarts, while each turn has a
 distinct RunRecord. Resume is passive until a new ordinary message lazily
 creates the provider and Agent with the loaded Session. It invokes no historical
 model or tool work. Ctrl+D exits cleanly; Ctrl+C cancels prompt input or marks
 the active run interrupted before returning to the prompt.
+
+`cli.py` remains the composition root. The small `InteractiveCommands` adapter
+dispatches slash commands against the current `DurableSession` and renders
+read-only views. `/status` keeps identity, latest Run status and existing context
+usage; `/session` presents factual metadata and counts; `/runs` lists the latest
+10 records. These commands do not create a provider or Agent. After a finalized
+interactive Run is saved, compact evaluation calls
+`trajectory_from_run_record()`, `EvaluationReportBuilder`, and `RecoveryAdvisor`.
+`/eval` uses the same path for a detailed view of the latest record, including
+historical v1 records loaded on resume. It neither duplicates M22 rules nor
+persists derived evaluation in Session/RunRecord. The UI labels the internal
+`task_success_score` as Completion and states its protocol-only meaning.
+
+Default interactive output selects the existing `RichTerminalRenderer` only
+when Rich is installed, stdout is a TTY, and no custom output callable was
+supplied. `--plain` forces `PlainTerminalRenderer`; redirected and injected
+output also retain deterministic plain text. `--locale en|zh-CN` reuses the
+Rich renderer's localization, defaulting to English. Its interactive mode
+adds a compact startup header and assistant separators, uses Run-completion
+wording, and presents structured verification evidence without interpreting
+command output or judging correctness. No full-screen application or streaming
+model protocol is introduced.
+
+The optional `PromptToolkitInput` adapter is selected only for builtin input
+and output with both stdin and stdout attached to terminals. It keeps history
+within the process, supplies slash completion and terminal editing, and binds
+Enter to submit and Alt+Enter to newline. Approval input remains an ordinary
+one-time prompt and is excluded from task history. Missing optional dependencies,
+pipes, and injected callables preserve the original input/output boundary.
+
+`--continue` resolves the selected workspace, filters existing durable session
+summaries by exact persisted workspace equality, and chooses the most recently
+updated match. It then uses the same load and passive interactive resume path
+as explicit `resume ID`, preserving the saved model and workspace. No match is
+a friendly CLI error, not a new session. Neither path replays historical tools
+or reopens approvals, and no persistence schema changes are needed.
 
 Interactive Agent construction injects `TerminalApprovalHandler` using the
 REPL's input/output adapters. It is called only after `REQUIRE_APPROVAL`.
@@ -1584,6 +1649,9 @@ for where and how a command runs.
 - **M16 — Observability & Machine Interface:** implemented; expose occurrence-
   time runtime events as versioned JSONL and provide JSON views of RunRecord
   evidence and durable session summaries without coupling runtime to the CLI.
+- **M23 — Interactive CLI Productization:** implemented; integrate optional Rich
+  human rendering, deterministic post-run M22 evaluation, read-only interactive
+  commands, workspace-scoped continue, and optional terminal input editing.
 
 Future work may address concurrent session writers, session migration or
 branching, workspace relocation, and stronger cancellation of synchronous

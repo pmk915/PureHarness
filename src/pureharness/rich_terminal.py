@@ -51,6 +51,13 @@ _TEXT = {
         "agent_interrupted": "! Agent interrupted",
         "agent_failed": "✗ Agent failed",
         "steps": "steps",
+        "run_completed": "✓ Run completed",
+        "verification": "Verification evidence",
+        "context_window_exceeded": "! Provider context window exceeded",
+        "context_recovering": "↻ Rebuilding smaller context",
+        "completion_recheck_requested": "↻ Completion recheck requested",
+        "completion_recheck_skipped": "! Completion recheck skipped",
+        "execution_budget_exhausted": "! Execution budget exhausted",
     },
     "zh-CN": {
         "title": "PureHarness",
@@ -93,6 +100,60 @@ _TEXT = {
         "agent_interrupted": "! Agent 执行已中断",
         "agent_failed": "✗ Agent 执行失败",
         "steps": "步骤",
+        "run_completed": "✓ Run 执行完成",
+        "verification": "验证执行证据",
+        "context_window_exceeded": "! 提供方上下文窗口超限",
+        "context_recovering": "↻ 正在重建更小的上下文",
+        "completion_recheck_requested": "↻ 请求完成复查",
+        "completion_recheck_skipped": "! 跳过完成复查",
+        "execution_budget_exhausted": "! 执行预算耗尽",
+        "Workspace": "工作区",
+        "Model": "模型",
+        "Session ID": "会话 ID",
+        "Resumed": "已恢复",
+        "Type /help for commands.": "输入 /help 查看命令。",
+        "Assistant": "助手",
+        "Interactive commands": "交互命令",
+        "Show interactive commands": "显示交互命令",
+        "Show current harness/run status": "显示当前 harness/Run 状态",
+        "Show durable session information": "显示持久会话信息",
+        "Show recent Runs in this session": "显示本会话最近的 Runs",
+        "Evaluate the latest Run": "评估最近的 Run",
+        "Exit PureHarness": "退出 PureHarness",
+        "Any other text starts an Agent run.": "其他文本将启动一个 Agent Run。",
+        "Unknown command": "未知命令",
+        "Runs in session": "会话中的 Runs",
+        "Last run ID": "最近 Run ID",
+        "Last end reason": "最近结束原因",
+        "Last tool calls": "最近工具调用数",
+        "Last estimated context tokens": "最近估算上下文 tokens",
+        "Created (UTC)": "创建时间 (UTC)",
+        "Updated (UTC)": "更新时间 (UTC)",
+        "History items": "历史记录项",
+        "No finalized Runs in this session yet.": "本会话尚无已结束的 Run。",
+        "No finalized Run to evaluate yet.": "尚无已结束的 Run 可供评估。",
+        "RUN ID\tEND REASON\tSTEPS\tTOOLS": "RUN ID\t结束原因\t步骤\t工具",
+        "Run evaluation": "Run 执行评估",
+        "Execution evaluation": "执行评估",
+        "Run": "Run",
+        "ID": "ID",
+        "End reason": "结束原因",
+        "Steps": "步骤",
+        "Tool calls": "工具调用",
+        "Tool result errors": "工具错误结果",
+        "Metrics": "指标",
+        "Completion": "协议完成度",
+        "Step efficiency": "步骤效率",
+        "Tool reliability": "工具可靠性",
+        "Diagnosis": "诊断",
+        "Type": "类型",
+        "Confidence": "置信度",
+        "Reason": "原因",
+        "Recovery (advisory only)": "恢复建议（仅供参考）",
+        "Action": "操作建议",
+        "Completion describes protocol execution, not verified task correctness.": (
+            "完成度描述协议执行状态，不代表已验证任务正确性。"
+        ),
     },
 }
 
@@ -104,6 +165,8 @@ class RichTerminalRenderer:
         self,
         locale: str = "en",
         console: Console | None = None,
+        *,
+        interactive: bool = False,
     ):
         if locale not in _TEXT:
             supported = ", ".join(_TEXT)
@@ -114,13 +177,47 @@ class RichTerminalRenderer:
 
         self.locale = locale
         self.console = console or Console()
+        self.interactive = interactive
+
+    def translate(self, value: str) -> str:
+        return _TEXT[self.locale].get(value, value)
+
+    def write(self, value: str) -> None:
+        self._print(value)
+
+    def render_header(
+        self,
+        *,
+        workspace: object,
+        model: str,
+        session_id: str,
+        resumed: bool,
+    ) -> None:
+        self.console.print("PureHarness", style="bold", markup=False)
+        for label, value in (
+            ("Workspace", workspace),
+            ("Model", model),
+            ("Session ID", session_id),
+        ):
+            self._print(f"  {self.translate(label)}: {value}")
+        if resumed:
+            self._print(f"  {self.translate('Resumed')}: {session_id}")
+        self._print(self.translate("Type /help for commands."))
+
+    def render_response(self, response: str) -> None:
+        self._print("")
+        self._print(self.translate("Assistant"))
+        self.console.rule()
+        self._print(response)
+        self.console.rule()
 
     def __call__(self, event: AgentEvent) -> None:
         text = _TEXT[self.locale]
         data = event.data
 
         if event.type == "agent_started":
-            self._print(text["title"])
+            if not self.interactive:
+                self._print(text["title"])
 
         elif event.type == "context_build_started":
             self._print(text["context_build_started"])
@@ -270,7 +367,9 @@ class RichTerminalRenderer:
             self._print(text["model_failed"])
 
         elif event.type == "agent_completed":
-            self._print(text["agent_completed"])
+            self._print(text[
+                "run_completed" if self.interactive else "agent_completed"
+            ])
             self._print(
                 f"  {text['steps']}"
                 f"{text['separator']}"
@@ -286,6 +385,23 @@ class RichTerminalRenderer:
 
         elif event.type == "agent_interrupted":
             self._print(text["agent_interrupted"])
+
+        elif event.type == "coding_evidence_snapshot":
+            if data.get("last_verification_outcome") is not None:
+                self._print(
+                    f"  {text['verification']}{text['separator']}"
+                    f"{data['last_verification_outcome']} "
+                    f"(exit_code={data.get('last_verification_exit_code')})"
+                )
+
+        elif event.type in {
+            "context_window_exceeded",
+            "context_recovering",
+            "completion_recheck_requested",
+            "completion_recheck_skipped",
+            "execution_budget_exhausted",
+        }:
+            self._print(text[event.type])
 
     def _print(self, value: str) -> None:
         self.console.print(

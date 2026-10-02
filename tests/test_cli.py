@@ -123,7 +123,10 @@ def test_interactive_session_is_multi_turn_and_supports_commands(tmp_path):
         for item in model.contexts[1]
     ) == 2
     rendered = "\n".join(output)
-    assert "Commands: /help, /status, /exit" in rendered
+    assert "Interactive commands" in rendered
+    assert "/session" in rendered
+    assert "/runs" in rendered
+    assert "/eval" in rendered
     assert "response-1" in rendered
     assert "response-2" in rendered
     assert "Runs in session: 1" in rendered
@@ -171,7 +174,11 @@ def test_interactive_help_and_exit_do_not_create_model(tmp_path):
     )
 
     assert exit_code == 0
-    assert any("Commands: /help, /status, /exit" in line for line in output)
+    assert "Interactive commands" in output
+    assert all(
+        any(command in line for line in output)
+        for command in ("/help", "/status", "/session", "/runs", "/eval", "/exit")
+    )
     assert output[-1] == "Goodbye."
 
 
