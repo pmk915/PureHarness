@@ -40,10 +40,13 @@ class InteractiveCommands:
         state: DurableSession,
         output: Callable[[str], None],
         translate: Callable[[str], str] = lambda value: value,
+        *,
+        compact: bool = False,
     ) -> None:
         self.state = state
         self.output = output
         self.translate = translate
+        self.compact = compact
         self._handlers = {
             "/help": self.help,
             "/status": self.status,
@@ -124,6 +127,17 @@ class InteractiveCommands:
         report = EvaluationReportBuilder().build(trajectory_from_run_record(record))
         recovery = RecoveryAdvisor().advise(report.diagnosis)
         self.output("")
+        if self.compact and not detailed:
+            self.output(self.translate("Run"))
+            self.field(
+                "Protocol completion",
+                f"{report.metrics.task_success_score:.3f}",
+                indent=True,
+            )
+            self.field("Diagnosis", report.diagnosis.failure_type.value, indent=True)
+            if recovery.action is not RecoveryAction.NONE:
+                self.field("Recovery (advisory only)", recovery.action.value, indent=True)
+            return
         self.output(self.translate(
             "Execution evaluation" if detailed else "Run evaluation"
         ))

@@ -238,6 +238,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Force plain human rendering in interactive mode.",
     )
     parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Show detailed Rich human events in interactive mode.",
+    )
+    parser.add_argument(
         "--locale",
         choices=("en", "zh-CN"),
         default="en",
@@ -324,6 +329,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--plain", action="store_true", default=argparse.SUPPRESS,
     )
     resume_parser.add_argument(
+        "--verbose", action="store_true", default=argparse.SUPPRESS,
+    )
+    resume_parser.add_argument(
         "--locale", choices=("en", "zh-CN"), default=argparse.SUPPRESS,
     )
 
@@ -370,6 +378,8 @@ def main(
 ) -> int:
     parser = build_parser()
     arguments = parser.parse_args(argv)
+    if arguments.plain and arguments.verbose:
+        parser.error("--plain and --verbose cannot be used together")
     if arguments.continue_session and arguments.command is not None:
         parser.error("--continue is only available in default interactive mode")
     factory = model_factory or _default_model_factory
@@ -433,6 +443,7 @@ def main(
                 context_limits=context_limits,
                 execution_budget=execution_budget,
                 plain=arguments.plain,
+                verbose=arguments.verbose,
                 locale=arguments.locale,
             )
         return _run_interactive(
@@ -446,6 +457,7 @@ def main(
             context_limits=context_limits,
             execution_budget=execution_budget,
             plain=arguments.plain,
+            verbose=arguments.verbose,
             locale=arguments.locale,
         )
     except KeyboardInterrupt:
@@ -473,6 +485,7 @@ def _run_interactive(
     context_limits: ContextLimits | None = None,
     execution_budget: ExecutionBudget | None = None,
     plain: bool = False,
+    verbose: bool = False,
     locale: str = "en",
 ) -> int:
     resumed = durable_state is not None
@@ -497,7 +510,9 @@ def _run_interactive(
 
     session_id = durable_state.session_id
     agent: Agent | None = None
-    renderer = _select_interactive_renderer(output_fn, plain=plain, locale=locale)
+    renderer = _select_interactive_renderer(
+        output_fn, plain=plain, verbose=verbose, locale=locale,
+    )
     input_fn = create_interactive_input(input_fn, output_fn)
     renderer_arguments = {}
     if isinstance(renderer, PlainTerminalRenderer):
@@ -517,7 +532,10 @@ def _run_interactive(
         )
         output_fn = renderer.write
         render_response = renderer.render_response
-        commands = InteractiveCommands(durable_state, output_fn, renderer.translate)
+        commands = InteractiveCommands(
+            durable_state, output_fn, renderer.translate,
+            compact=renderer.detail_level == "compact",
+        )
         renderer_arguments = {"event_listener": renderer}
 
     while True:
@@ -615,6 +633,7 @@ def _select_interactive_renderer(
     *,
     plain: bool,
     locale: str,
+    verbose: bool = False,
 ):
     if not plain and output_fn is print and sys.stdout.isatty():
         try:
@@ -622,7 +641,10 @@ def _select_interactive_renderer(
         except ImportError:
             pass
         else:
-            return RichTerminalRenderer(locale=locale, interactive=True)
+            return RichTerminalRenderer(
+                locale=locale, interactive=True,
+                detail_level="verbose" if verbose else "compact",
+            )
     return PlainTerminalRenderer(output_fn)
 
 

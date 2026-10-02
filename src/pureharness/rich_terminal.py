@@ -1,3 +1,9 @@
+import json
+import shlex
+
+from dataclasses import dataclass
+from typing import Literal
+
 try:
     from rich.console import Console
 except ModuleNotFoundError as exc:
@@ -6,7 +12,7 @@ except ModuleNotFoundError as exc:
         "Install them with: pip install 'pureharness[cli]'"
     ) from exc
 
-from pureharness.events import AgentEvent
+from pureharness.events import AgentEvent, AgentEventData
 
 
 _TEXT = {
@@ -58,6 +64,23 @@ _TEXT = {
         "completion_recheck_requested": "↻ Completion recheck requested",
         "completion_recheck_skipped": "! Completion recheck skipped",
         "execution_budget_exhausted": "! Execution budget exhausted",
+        "compact_inspect": "Inspected {target}",
+        "compact_workspace": "workspace",
+        "compact_read": "Read {target}",
+        "compact_write": "Wrote {target}",
+        "compact_update": "Updated {target}",
+        "compact_run": "Run {target}",
+        "compact_verification_passed": "✓ Verification passed",
+        "compact_verification_failed": "✗ Verification failed",
+        "compact_verification_error": "✗ Verification could not complete",
+        "compact_exit": "exit",
+        "compact_policy_denied": "✗ Policy denied",
+        "compact_approval_required": "! Approval required",
+        "compact_precondition_failed": "✗ Workspace precondition failed",
+        "compact_tool_errors": "✗ Tool error observations",
+        "compact_run_failed": "✗ Run failed",
+        "compact_step_count": "{count} steps",
+        "compact_tool_count": "{count} tool calls",
     },
     "zh-CN": {
         "title": "PureHarness",
@@ -107,6 +130,23 @@ _TEXT = {
         "completion_recheck_requested": "↻ 请求完成复查",
         "completion_recheck_skipped": "! 跳过完成复查",
         "execution_budget_exhausted": "! 执行预算耗尽",
+        "compact_inspect": "已查看 {target}",
+        "compact_workspace": "工作区",
+        "compact_read": "已读取 {target}",
+        "compact_write": "已写入 {target}",
+        "compact_update": "已更新 {target}",
+        "compact_run": "执行 {target}",
+        "compact_verification_passed": "✓ 验证通过",
+        "compact_verification_failed": "✗ 验证失败",
+        "compact_verification_error": "✗ 验证未能完成",
+        "compact_exit": "退出码",
+        "compact_policy_denied": "✗ 策略拒绝",
+        "compact_approval_required": "! 需要批准",
+        "compact_precondition_failed": "✗ 工作区前置条件未满足",
+        "compact_tool_errors": "✗ 工具错误记录",
+        "compact_run_failed": "✗ Run 执行失败",
+        "compact_step_count": "{count} 步骤",
+        "compact_tool_count": "{count} 工具调用",
         "Workspace": "工作区",
         "Model": "模型",
         "Session ID": "会话 ID",
@@ -143,6 +183,7 @@ _TEXT = {
         "Tool result errors": "工具错误结果",
         "Metrics": "指标",
         "Completion": "协议完成度",
+        "Protocol completion": "协议完成度",
         "Step efficiency": "步骤效率",
         "Tool reliability": "工具可靠性",
         "Diagnosis": "诊断",
@@ -158,6 +199,34 @@ _TEXT = {
 }
 
 
+# Explicit compact hierarchy: routine diagnostics are hidden; tool actions and
+# verification are progress; approval and terminal events are transitions;
+# failures/recovery stay visible. The verbose event path below is unchanged.
+_COMPACT_DIAGNOSTICS = frozenset({
+    "context_build_started", "context_built", "model_started",
+    "completion_recheck_requested", "completion_recheck_skipped",
+    "workspace_mutated",
+})
+_COMPACT_ALERTS = frozenset({
+    "context_build_failed", "context_window_exceeded", "context_recovering",
+    "model_failed", "execution_budget_exhausted", "agent_interrupted",
+})
+_FILE_ACTIONS = {
+    "list_files": "compact_inspect",
+    "read_file": "compact_read",
+    "read_file_range": "compact_read",
+    "write_file": "compact_write",
+    "apply_patch": "compact_update",
+}
+
+
+@dataclass(frozen=True)
+class _ToolDisplay:
+    identity: tuple[int | None, str, str | None]
+    action: str
+    command: bool
+
+
 class RichTerminalRenderer:
     """Render Agent events without controlling Agent execution."""
 
@@ -167,6 +236,7 @@ class RichTerminalRenderer:
         console: Console | None = None,
         *,
         interactive: bool = False,
+        detail_level: Literal["compact", "verbose"] = "verbose",
     ):
         if locale not in _TEXT:
             supported = ", ".join(_TEXT)
@@ -174,10 +244,22 @@ class RichTerminalRenderer:
                 f"Unsupported locale: {locale}. "
                 f"Supported locales: {supported}"
             )
+        if detail_level not in {"compact", "verbose"}:
+            raise ValueError(f"Unsupported detail level: {detail_level}")
 
         self.locale = locale
         self.console = console or Console()
         self.interactive = interactive
+        self.detail_level = detail_level
+        self._reset_compact_state()
+
+    def _reset_compact_state(self) -> None:
+        self._run_id: str | None = None
+        self._active_tool: _ToolDisplay | None = None
+        self._tool_call_count: int | None = None
+        self._verification_attempts = 0
+        self._last_verification: tuple[object, ...] | None = None
+        self._visible_tool_errors = 0
 
     def translate(self, value: str) -> str:
         return _TEXT[self.locale].get(value, value)
@@ -212,6 +294,9 @@ class RichTerminalRenderer:
         self.console.rule()
 
     def __call__(self, event: AgentEvent) -> None:
+        if self.detail_level == "compact":
+            self._render_compact(event)
+            return
         text = _TEXT[self.locale]
         data = event.data
 
@@ -403,9 +488,167 @@ class RichTerminalRenderer:
         }:
             self._print(text[event.type])
 
+    def _render_compact(self, event: AgentEvent) -> None:
+        if event.type == "agent_started" or (
+            event.run_id is not None and event.run_id != self._run_id
+        ):
+            self._reset_compact_state()
+            self._run_id = event.run_id
+        text = _TEXT[self.locale]
+        data = event.data
+        if event.type in _COMPACT_DIAGNOSTICS:
+            return
+        if event.type == "agent_started":
+            if not self.interactive:
+                self._print(text["title"])
+        elif event.type == "model_completed":
+            # Match RunRecord's returned-call count, not accepted dispatches.
+            if "tool_call_count" in data:
+                self._tool_call_count = (
+                    (self._tool_call_count or 0) + data["tool_call_count"]
+                )
+        elif event.type == "tool_policy_evaluated":
+            if data["decision"] == "deny":
+                self._visible_tool_errors += 1
+                self._print(
+                    f"{text['compact_policy_denied']} · {_single_line(data['name'])}"
+                )
+            elif data["decision"] == "require_approval":
+                self._print(
+                    f"{text['compact_approval_required']} · {_single_line(data['name'])}"
+                )
+        elif event.type in {"approval_requested", "approval_granted", "approval_denied"}:
+            if event.type == "approval_denied":
+                self._visible_tool_errors += 1
+            self._print(f"{text[event.type]} · {_single_line(data['name'])}")
+        elif event.type == "workspace_precondition_failed":
+            self._visible_tool_errors += 1
+            self._print(
+                f"{text['compact_precondition_failed']} · {_single_line(data['name'])}"
+                f" · {_single_line(data['path'])} · {_single_line(data['reason'])}"
+            )
+        elif event.type == "tool_started":
+            self._active_tool = self._tool_display(event)
+            if self._active_tool.command:
+                self._print(f"● {self._active_tool.action}")
+        elif event.type == "tool_completed":
+            display = self._active_tool
+            if display is None or display.identity != _tool_identity(event):
+                display = _ToolDisplay(
+                    _tool_identity(event), _single_line(data["name"]), False,
+                )
+            else:
+                self._active_tool = None
+            if data["is_error"]:
+                self._visible_tool_errors += 1
+                self._print(f"{text['tool_failed']} · {display.action}")
+            elif not display.command:
+                self._print(f"✓ {display.action}")
+            # A successful command ToolResult alone says nothing about its exit
+            # code. Verification outcomes come only from structured evidence.
+        elif event.type == "coding_evidence_snapshot":
+            self._render_new_verification(data)
+        elif event.type == "progress_snapshot":
+            # Schema/exposure rejection may produce an error result without a
+            # tool_completed, policy or precondition event. Surface the factual
+            # count without guessing which tool/command failed from output text.
+            errors = data.get("failed_tool_results", 0)
+            if errors > self._visible_tool_errors:
+                self._print(
+                    f"{text['compact_tool_errors']} · {errors - self._visible_tool_errors}"
+                )
+                self._visible_tool_errors = errors
+        elif event.type == "model_retrying":
+            self._print(f"{text['model_retrying']} · {data['attempt']}/{data['max_attempts']}")
+        elif event.type in _COMPACT_ALERTS:
+            self._print(text[event.type])
+            self._active_tool = None
+        elif event.type == "agent_failed":
+            self._print(f"{text['compact_run_failed']} · {_single_line(data['reason'])}")
+            self._active_tool = None
+        elif event.type == "agent_completed":
+            parts = [text["run_completed"]]
+            if "step_count" in data:
+                parts.append(text["compact_step_count"].format(count=data["step_count"]))
+            if self._tool_call_count is not None:
+                parts.append(text["compact_tool_count"].format(count=self._tool_call_count))
+            self._print(" · ".join(parts))
+            self._active_tool = None
+
+    def _tool_display(self, event: AgentEvent) -> _ToolDisplay:
+        data = event.data
+        name = data["name"]
+        preview = data.get("arguments_preview", {})
+        text = _TEXT[self.locale]
+        if name in _FILE_ACTIONS:
+            target = preview.get("path", "")
+            if name == "list_files" and target in {"", "."}:
+                target = text["compact_workspace"]
+            action = (
+                text[_FILE_ACTIONS[name]].format(target=_single_line(target))
+                if target else _single_line(name)
+            )
+        elif name == "run_command":
+            action = text["compact_run"].format(
+                target=_command_preview(preview.get("argv", "run_command"))
+            )
+        else:
+            action = _single_line(name)
+        return _ToolDisplay(_tool_identity(event), action, name in {"run_command", "start_process"})
+
+    def _render_new_verification(self, data: AgentEventData) -> None:
+        outcome = data.get("last_verification_outcome")
+        if outcome not in {"exit_zero", "exit_nonzero", "tool_error"}:
+            return
+        identity = (
+            data.get("last_verification_step"), outcome,
+            data.get("last_verification_exit_code"),
+        )
+        attempts = data.get("verification_attempts")
+        if type(attempts) is int:
+            if attempts <= self._verification_attempts:
+                return
+            self._verification_attempts = attempts
+        elif identity == self._last_verification:
+            return
+        self._last_verification = identity
+        text = _TEXT[self.locale]
+        key = {
+            "exit_zero": "compact_verification_passed",
+            "exit_nonzero": "compact_verification_failed",
+            "tool_error": "compact_verification_error",
+        }[outcome]
+        message = text[key]
+        exit_code = data.get("last_verification_exit_code")
+        if outcome == "exit_nonzero" and type(exit_code) is int:
+            message += f" · {text['compact_exit']} {exit_code}"
+        self._print(message)
+
     def _print(self, value: str) -> None:
         self.console.print(
             value,
             markup=False,
             highlight=False,
         )
+
+
+def _tool_identity(event: AgentEvent) -> tuple[int | None, str, str | None]:
+    return event.data.get("step"), event.data["name"], event.data.get("call_id")
+
+
+def _single_line(value: str) -> str:
+    # Keep meaningful spaces in paths/argv intact; escape line-breaking controls.
+    value = value.replace("\r", r"\r").replace("\n", r"\n").replace("\t", r"\t")
+    return value if len(value) <= 120 else value[:119] + "…"
+
+
+def _command_preview(value: str) -> str:
+    # Decode only complete JSON from the bounded, redacted preview. Truncated
+    # or redacted JSON stays literal; never consult raw argv or parse a shell.
+    try:
+        argv = json.loads(value)
+    except (ValueError, TypeError):
+        return _single_line(value)
+    if isinstance(argv, list) and all(isinstance(arg, str) for arg in argv):
+        return _single_line(shlex.join(argv))
+    return _single_line(value)

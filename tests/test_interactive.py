@@ -1,5 +1,6 @@
 import builtins
 import json
+import sys
 
 from datetime import datetime, timedelta, timezone
 from io import StringIO
@@ -339,23 +340,26 @@ def test_resume_accepts_presentation_options_on_either_side(argv):
     assert arguments.locale == "zh-CN"
 
 
-def test_rich_selection_for_interactive_terminal(monkeypatch):
+@pytest.mark.parametrize("verbose, detail_level", [(False, "compact"), (True, "verbose")])
+def test_rich_selection_for_interactive_terminal(monkeypatch, verbose, detail_level):
     rich = pytest.importorskip("pureharness.rich_terminal")
     monkeypatch.setattr(cli.sys.stdout, "isatty", lambda: True)
-    renderer = cli._select_interactive_renderer(print, plain=False, locale="zh-CN")
+    renderer = cli._select_interactive_renderer(print, plain=False, locale="zh-CN", verbose=verbose)
     assert isinstance(renderer, rich.RichTerminalRenderer)
     assert renderer.locale == "zh-CN"
     assert renderer.interactive
+    assert renderer.detail_level == detail_level
 
 
 @pytest.mark.parametrize("plain, terminal, injected", [
     (True, True, False), (False, False, False), (False, True, True),
 ])
-def test_plain_fallback_for_flags_redirects_and_injected_output(monkeypatch, plain, terminal, injected):
+@pytest.mark.parametrize("verbose", [False, True])
+def test_plain_fallback_for_flags_redirects_and_injected_output(monkeypatch, plain, terminal, injected, verbose):
     monkeypatch.setattr(cli.sys.stdout, "isatty", lambda: terminal)
     output = (lambda value: None) if injected else print
     assert isinstance(
-        cli._select_interactive_renderer(output, plain=plain, locale="zh-CN"),
+        cli._select_interactive_renderer(output, plain=plain, locale="zh-CN", verbose=verbose),
         cli.PlainTerminalRenderer,
     )
 
@@ -399,7 +403,7 @@ def test_real_cli_rich_header_events_response_and_chinese_evaluation(environment
         Message(role="assistant", content="[literal] response"),
     ])
     assert cli.main(
-        ["--workspace", str(workspace), "--locale", "zh-CN"],
+        ["--workspace", str(workspace), "--locale", "zh-CN", "--verbose"],
         model_factory=lambda name: model,
         input_fn=_input(["inspect workspace", "/eval", "/exit"]),
     ) == 0
@@ -439,7 +443,7 @@ def test_jsonl_ignores_interactive_presentation_even_on_tty(environment, monkeyp
     monkeypatch.setattr(cli.sys.stdout, "isatty", lambda: True)
     monkeypatch.setattr(cli, "_select_interactive_renderer", lambda *a, **k: pytest.fail("human UI in JSONL"))
     assert cli.main(
-        ["--locale", "zh-CN", "run", "hello", "--workspace", str(workspace), "--output", "jsonl"],
+        ["--verbose", "--locale", "zh-CN", "run", "hello", "--workspace", str(workspace), "--output", "jsonl"],
         model_factory=lambda name: ScriptedModel([Message(role="assistant", content="response")]),
         input_fn=lambda prompt: pytest.fail("no input in JSONL"),
     ) == 0
@@ -450,3 +454,124 @@ def test_jsonl_ignores_interactive_presentation_even_on_tty(environment, monkeyp
     assert "Run evaluation" not in captured.out
     assert "response" not in captured.out
     assert captured.err == ""
+
+
+@pytest.mark.parametrize("argv", [
+    ["--plain", "--verbose"],
+    ["--verbose", "resume", "id", "--plain"],
+    ["--plain", "resume", "id", "--verbose"],
+    ["resume", "id", "--verbose", "--plain"],
+])
+def test_conflicting_presentation_flags_fail_before_session_or_model(argv, monkeypatch, capsys):
+    monkeypatch.setattr(cli, "_create_durable_store", lambda: pytest.fail("must reject before persistence"))
+    with pytest.raises(SystemExit) as error:
+        cli.main(argv, model_factory=_no_model)
+    assert error.value.code == 2
+    assert "--plain and --verbose cannot be used together" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("mode", ["resume_before", "resume_after", "continue"])
+def test_verbose_resume_and_continue_are_passive(environment, monkeypatch, mode):
+    workspace, store = environment
+    state = _seed(store, workspace, "saved", datetime.now(timezone.utc), with_run=True)
+    selected = []
+    original = cli._select_interactive_renderer
+
+    def capture(*args, **kwargs):
+        selected.append(kwargs["verbose"])
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(cli, "_select_interactive_renderer", capture)
+    monkeypatch.setattr(cli, "_create_agent", lambda *a, **k: pytest.fail("passive resume"))
+    argv = {
+        "resume_before": ["--verbose", "resume", "saved"],
+        "resume_after": ["resume", "saved", "--verbose"],
+        "continue": ["--workspace", str(workspace), "--continue", "--verbose"],
+    }[mode]
+    output = []
+    assert cli.main(argv, model_factory=_no_model, input_fn=_input(["/eval", "/exit"]), output_fn=output.append) == 0
+    assert selected == [True]
+    assert "Execution evaluation" in output
+    assert store.load("saved") == state
+
+
+@pytest.mark.parametrize("locale, inspected, completion, evaluation", [
+    ("en", "Inspected workspace", "Run completed · 2 steps · 1 tool calls", "Protocol completion: 1.000"),
+    ("zh-CN", "已查看 工作区", "Run 执行完成 · 2 步骤 · 1 工具调用", "协议完成度: 1.000"),
+])
+def test_real_cli_default_compact_and_detailed_eval(environment, monkeypatch, locale, inspected, completion, evaluation):
+    rich = pytest.importorskip("pureharness.rich_terminal")
+    from rich.console import Console
+
+    workspace, _ = environment
+    output = StringIO()
+    monkeypatch.setattr(rich, "Console", lambda: Console(file=output, force_terminal=False, color_system=None, width=160))
+    monkeypatch.setattr(cli.sys.stdout, "isatty", lambda: True)
+    model = ScriptedModel([
+        [ToolCall(name="list_files", arguments={})],
+        Message(role="assistant", content="[literal] response"),
+    ])
+    assert cli.main(
+        ["--workspace", str(workspace), "--locale", locale],
+        model_factory=lambda name: model,
+        input_fn=_input(["inspect", "/eval", "/exit"]),
+    ) == 0
+    text = output.getvalue()
+    automatic, detailed = text.split("Execution evaluation" if locale == "en" else "执行评估")
+    assert inspected in automatic
+    assert completion in automatic
+    assert evaluation in automatic
+    assert "[literal] response" in automatic
+    for label in ("Building context", "正在构建上下文", "Requesting model", "正在请求模型", "Tool policy", "工具策略", "Step efficiency", "步骤效率", "Tool reliability", "工具可靠性", "Recovery (advisory only)", "恢复建议（仅供参考）"):
+        assert label not in automatic
+    assert "Step efficiency" in detailed if locale == "en" else "步骤效率" in detailed
+    assert "Tool reliability" in detailed if locale == "en" else "工具可靠性" in detailed
+    assert "End reason" in detailed if locale == "en" else "结束原因" in detailed
+    assert "Recovery" in detailed if locale == "en" else "恢复建议" in detailed
+    assert "not verified task correctness" in detailed if locale == "en" else "不代表已验证任务正确性" in detailed
+
+
+def test_real_compact_cli_failed_verification_edit_then_pass_is_shown_once(environment, monkeypatch):
+    rich = pytest.importorskip("pureharness.rich_terminal")
+    from rich.console import Console
+
+    workspace, store = environment
+    (workspace / "calc.py").write_text("value = 1\n", encoding="utf-8")
+    output = StringIO()
+    monkeypatch.setattr(rich, "Console", lambda: Console(file=output, force_terminal=False, color_system=None, width=160))
+    monkeypatch.setattr(cli.sys.stdout, "isatty", lambda: True)
+    agents = []
+    original = cli._create_agent
+
+    def capture(*args, **kwargs):
+        agent = original(*args, **kwargs)
+        agents.append(agent)
+        return agent
+
+    monkeypatch.setattr(cli, "_create_agent", capture)
+    model = ScriptedModel([
+        [ToolCall(name="read_file", arguments={"path": "calc.py"})],
+        [ToolCall(name="run_command", arguments={"argv": [sys.executable, "-c", "raise SystemExit(1)"], "purpose": "verification"})],
+        [ToolCall(name="apply_patch", arguments={"path": "calc.py", "old_text": "value = 1", "new_text": "value = 2"})],
+        [ToolCall(name="run_command", arguments={"argv": [sys.executable, "-c", "raise SystemExit(0)"], "purpose": "verification"})],
+        Message(role="assistant", content="done"),
+    ])
+    assert cli.main(
+        ["--workspace", str(workspace), "--locale", "zh-CN"],
+        model_factory=lambda name: model, input_fn=_input(["edit and verify", "/exit"]),
+    ) == 0
+    text = output.getvalue()
+    assert text.count("验证失败 · 退出码 1") == 1
+    assert text.count("✓ 验证通过") == 1
+    assert text.index("已读取 calc.py") < text.index("验证失败") < text.index("已更新 calc.py") < text.index("验证通过")
+    assert "Run 执行完成 · 5 步骤 · 4 工具调用" in text
+    assert "正在构建上下文" not in text
+    assert agents[0].listener_errors == []
+    evidence = [event for event in agents[0].events if event.type == "coding_evidence_snapshot"]
+    assert len(evidence) > 2
+    assert evidence[-1].data["verification_attempts"] == 2
+    record = store.load(store.list_sessions()[0].session_id).run_records[0]
+    assert record.end_reason == "completed"
+    assert record.tool_result_error_count == 0  # nonzero exit is not a tool execution error
+    assert record.model_call_count == len(record.model_invocations) == 5
+    assert (workspace / "calc.py").read_text(encoding="utf-8") == "value = 2\n"

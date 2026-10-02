@@ -66,15 +66,23 @@ cd /path/to/workspace
 
 One interactive conversation keeps one Session across multiple `Agent.run()`
 calls and process restarts. With the `cli` extra installed, real terminal output
-uses the existing Rich event renderer, a compact workspace/model/session header,
+uses compact Rich event presentation, a workspace/model/session header,
 and a separated assistant response. Redirected output and injected output
 callables use deterministic plain text. Choose presentation explicitly with:
 
 ```bash
-pureharness --plain
+pureharness                         # compact Rich interactive presentation
+pureharness --verbose               # detailed human observability
+pureharness --plain                 # deterministic plain presentation
 pureharness --locale en
 pureharness --locale zh-CN
 ```
+
+Compact display emphasizes file actions, commands, new verification outcomes,
+approvals, failures, and recovery. It changes presentation only: runtime events
+and persisted evidence remain complete. `--verbose` restores detailed context,
+model, policy, and evidence output; it is not debug logging and does not force
+Rich on redirected/injected output. `--plain --verbose` is rejected.
 
 The default locale is `en`; plain output remains English. The optional
 prompt-toolkit input adapter provides the `You ›` prompt, in-process history
@@ -124,19 +132,20 @@ workspace equals the resolved selected workspace. It reports an error when no
 matching session exists, rather than starting a new one. Explicit resume uses
 the saved workspace and model. Rich presentation flags can also follow resume:
 `pureharness resume <session-id> --locale zh-CN --plain`.
+`--verbose` works before or after `resume`, and with `--continue`.
 All slash commands remain available without an API key, including `/eval` on
 the latest persisted Run immediately after resume.
 
-After each finalized interactive Run, the CLI displays a compact M22 evaluation:
+After each finalized Run, compact Rich displays a minimal M22 evaluation:
 
 ```text
-Run evaluation
-  Completion: 1.000
-  Step efficiency: 0.167
-  Tool reliability: 1.000
+Run
+  Protocol completion: 1.000
   Diagnosis: none
 ```
 
+Verbose and plain modes retain the existing automatic metrics block, including
+step efficiency and tool reliability.
 `/eval` adds Run ID, end reason, steps, tool counts, diagnosis confidence/reason,
 and a RecoverySignal. Recovery actions are suggestions only; they never retry a
 tool or alter a prompt. Completion means protocol execution completed, not

@@ -941,6 +941,21 @@ wording, and presents structured verification evidence without interpreting
 command output or judging correctness. No full-screen application or streaming
 model protocol is introduced.
 
+The CLI explicitly selects `detail_level="compact"` by default; `--verbose`
+selects the existing detailed human event path. Direct renderer construction
+still defaults to verbose. Compact presentation hides routine context/model
+diagnostics, ALLOW decisions and completion-recheck details, while retaining
+semantic tool actions, exceptional events and new verification outcomes. Small
+per-Run renderer state pairs synchronous tool events by step/name/call ID and
+deduplicates cumulative verification snapshots by attempt count (or structured
+verification identity when that count is absent). Only the latest outcome in
+each snapshot is available; it does not reconstruct intermediate attempts.
+Compact automatic evaluation shows protocol completion and diagnosis; `/eval`
+remains detailed, and verbose/plain automatic evaluation stays unchanged.
+`--verbose` works on either side of `resume` and with `--continue`, never forces
+Rich into redirected/injected output, and conflicts with `--plain`. These choices
+do not filter runtime events, change persisted evidence or alter JSONL output.
+
 The optional `PromptToolkitInput` adapter is selected only for builtin input
 and output with both stdin and stdout attached to terminals. It keeps history
 within the process, supplies slash completion and terminal editing, and binds
