@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "id": "multi_file",
-  "prompt": "Repair final_total. Inspect the related modules rather than hard-coding the expected value.",
+  "prompt": "Repair final_total according to SPEC.md. Inspect pricing.py and the related configuration in settings.py rather than hard-coding a rate or total.",
   "verification_argv": ["python3", "{trusted_verifier}"],
   "trusted_verifier": "verifier/verify.py",
   "selective_tool_names": ["list_files", "search_text", "read_file", "apply_patch", "run_command"],

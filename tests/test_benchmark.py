@@ -1,4 +1,6 @@
 import json
+import shutil
+import subprocess
 import sys
 
 from dataclasses import FrozenInstanceError, replace
@@ -889,3 +891,296 @@ def test_finalized_benchmark_values_are_frozen(tmp_path):
 
     with pytest.raises(FrozenInstanceError):
         result.task_success = False
+
+
+# Known repairs live only in tests; canonical Agent-visible fixtures stay broken.
+_CURATED_REPAIRS = {
+    "simple_fix": (
+        "calculator.py",
+        "def add(left: int, right: int) -> int:\n"
+        "    return sum((left, right))\n",
+    ),
+    "exposure_sensitive": (
+        "heading.py",
+        "def render_heading(value: str) -> str:\n"
+        "    return value.strip().upper()\n",
+    ),
+    "multi_file": (
+        "pricing.py",
+        "import settings\n\n"
+        "def final_total(prices: list[float]) -> float:\n"
+        "    return sum(prices) * (1 + settings.TAX_RATE)\n",
+    ),
+    "large_output": (
+        "analyzer.py",
+        "def severity(reading: float) -> str:\n"
+        "    return ('critical' if reading >= 90 else\n"
+        "            'warning' if reading >= 70 else 'normal')\n",
+    ),
+    "long_horizon": (
+        "pipeline.py",
+        "def parse_numbers(text: str) -> list[int]:\n"
+        "    return [int(part.strip()) for part in text.split(',')]\n\n"
+        "def average(values: list[int]) -> float:\n"
+        "    return sum(values) / len(values)\n\n"
+        "def text_average(text: str) -> float:\n"
+        "    return average(parse_numbers(text))\n",
+    ),
+}
+
+
+def _curated_task(task_id):
+    return BenchmarkTask.from_directory(Path("benchmarks/tasks") / task_id)
+
+
+def _fixture_bytes(task):
+    return {
+        file.relative_to(task.fixture_path): file.read_bytes()
+        for file in task.fixture_path.rglob("*") if file.is_file()
+    }
+
+
+def _copied_fixture(task, tmp_path):
+    return Path(shutil.copytree(
+        task.fixture_path, tmp_path / "workspace",
+        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+    ))
+
+
+def _fixture_program(workspace, script):
+    # Avoid stale bytecode between staged, same-second edits; never execute a
+    # local check against the canonical fixture or inherit provider credentials.
+    return subprocess.run(
+        [sys.executable, "-B", str(script.resolve())],
+        cwd=workspace, capture_output=True, text=True, timeout=5,
+        env={"PYTHONDONTWRITEBYTECODE": "1"},
+    )
+
+
+@pytest.mark.parametrize("task_id", _CURATED_REPAIRS)
+def test_curated_fixtures_fail_hidden_oracle_without_mutating_canonical_inputs(task_id):
+    task = _curated_task(task_id)
+    before = _fixture_bytes(task)
+    trusted_before = task.trusted_verifier_path.read_bytes()
+    model = ScriptedModel([
+        [ToolCall(name="list_files", arguments={})],
+        Message(role="assistant", content="not repaired"),
+    ])
+    result = BenchmarkRunner(lambda task, config: model).run_case(task, _config())
+
+    assert result.agent_end_reason == "completed"
+    assert not result.task_success
+    assert result.verification_exit_code != 0
+    assert (
+        task.fixture_path.resolve()
+        not in task.trusted_verifier_path.resolve().parents
+    )
+    listing = next(
+        item.content for item in model.contexts[1]
+        if isinstance(item, ToolResult)
+    )
+    assert "verify.py" not in listing
+    assert "verifier" not in listing
+    assert str(task.trusted_verifier_path.resolve()) not in listing
+    assert _fixture_bytes(task) == before
+    assert task.trusted_verifier_path.read_bytes() == trusted_before
+
+
+@pytest.mark.parametrize("task_id", _CURATED_REPAIRS)
+def test_curated_hidden_oracles_accept_known_behavioral_repairs(task_id):
+    task = _curated_task(task_id)
+    before = _fixture_bytes(task)
+    path, corrected = _CURATED_REPAIRS[task_id]
+    original = (task.fixture_path / path).read_text(encoding="utf-8")
+    model = ScriptedModel([
+        [
+            ToolCall(name="read_file", arguments={"path": path}),
+            ToolCall(name="apply_patch", arguments={
+                "path": path, "old_text": original, "new_text": corrected,
+            }),
+        ],
+        Message(role="assistant", content="repaired"),
+    ])
+    result = BenchmarkRunner(
+        lambda task, config: model, completion_policy=None,
+    ).run_case(task, _config())
+
+    assert result.task_success
+    assert result.verification_exit_code == 0
+    assert result.run_record.tool_result_error_count == 0
+    assert _fixture_bytes(task) == before
+
+
+@pytest.mark.parametrize("task_id, terms", [
+    ("exposure_sensitive", ("whitespace", "uppercase", "render_heading")),
+    ("multi_file", ("subtotal", "surcharge", "TAX_RATE", "settings.py")),
+    ("large_output", ("critical", "warning", "normal", "70", "90", "diagnose.py")),
+    ("long_horizon", (
+        "comma", "whitespace", "negative", "parse_numbers", "average",
+        "text_average", "check.py",
+    )),
+])
+def test_curated_requirements_are_visible_and_referenced(task_id, terms):
+    task = _curated_task(task_id)
+    specification = (task.fixture_path / "SPEC.md").read_text(encoding="utf-8")
+    assert "SPEC.md" in task.prompt
+    for term in terms:
+        assert term in specification
+    assert "verifier" not in task.prompt.lower()
+
+
+def test_large_output_diagnostic_stays_large_before_and_after_repair(tmp_path):
+    task = _curated_task("large_output")
+    workspace = _copied_fixture(task, tmp_path)
+    assert "diagnose.py" in task.prompt
+    for repaired in (False, True):
+        if repaired:
+            (workspace / "analyzer.py").write_text(
+                _CURATED_REPAIRS["large_output"][1], encoding="utf-8",
+            )
+        result = _fixture_program(workspace, workspace / "diagnose.py")
+        assert result.returncode == 0  # informative diagnostic, not trusted oracle
+        rows = [
+            line for line in result.stdout.splitlines()
+            if line.startswith("sensor-")
+        ]
+        assert len(rows) == 400
+        assert len(result.stdout) > 20_000
+        observed = "observed=critical" if repaired else "observed=warning"
+        assert all(observed in row for row in rows)
+
+
+def test_long_horizon_local_feedback_exposes_two_defects_in_order(tmp_path):
+    task = _curated_task("long_horizon")
+    before = _fixture_bytes(task)
+    workspace = _copied_fixture(task, tmp_path)
+    pipeline = workspace / "pipeline.py"
+    check = workspace / "check.py"
+    assert "check.py" in task.prompt
+
+    initial = _fixture_program(workspace, check)
+    assert initial.returncode != 0
+    assert "Checking comma-separated parsing" in initial.stdout
+    assert "Checking arithmetic mean" not in initial.stdout
+
+    pipeline.write_text(
+        pipeline.read_text(encoding="utf-8").replace('split(";")', 'split(",")'),
+        encoding="utf-8",
+    )
+    parsing_fixed = _fixture_program(workspace, check)
+    assert parsing_fixed.returncode != 0
+    assert "Parsing check passed" in parsing_fixed.stdout
+    assert "Mean check failed" in parsing_fixed.stderr
+    assert _fixture_program(workspace, task.trusted_verifier_path).returncode != 0
+
+    pipeline.write_text(
+        pipeline.read_text(encoding="utf-8").replace(
+            "(len(values) + 1)", "len(values)",
+        ),
+        encoding="utf-8",
+    )
+    repaired = _fixture_program(workspace, check)
+    assert repaired.returncode == 0
+    assert "Local pipeline check passed" in repaired.stdout
+    assert _fixture_program(workspace, task.trusted_verifier_path).returncode == 0
+    assert _fixture_bytes(task) == before
+
+
+@pytest.mark.parametrize("mutation", [
+    lambda source: source.replace("int(part.strip())", "abs(int(part.strip()))"),
+    lambda source: source.replace("text.split(',')", "text.split(',')[:3]"),
+    lambda source: source.replace(
+        "sum(values) / len(values)", "sum(values) // len(values)",
+    ),
+    lambda source: source.replace("sum(values) / len(values)", "11.0"),
+], ids=["loses_negative_sign", "drops_later_values", "rounds_mean", "visible_example_only"])
+def test_long_horizon_hidden_oracle_rejects_repairs_that_only_pass_local_check(tmp_path, mutation):
+    task = _curated_task("long_horizon")
+    workspace = _copied_fixture(task, tmp_path)
+    corrected = _CURATED_REPAIRS["long_horizon"][1]
+    (workspace / "pipeline.py").write_text(mutation(corrected), encoding="utf-8")
+    assert _fixture_program(workspace, workspace / "check.py").returncode == 0
+    assert _fixture_program(workspace, task.trusted_verifier_path).returncode != 0
+
+
+@pytest.mark.parametrize("task_id, incorrect", [
+    ("exposure_sensitive", "def render_heading(value):\n    return 'MINI HARNESS'\n"),
+    ("multi_file", "def final_total(prices):\n    return sum(prices) * 1.08\n"),
+    ("large_output",
+     "def severity(reading):\n"
+     "    if reading == 95: return 'critical'\n"
+     "    return 'warning' if reading >= 70 else 'normal'\n"),
+    ("large_output",
+     "def severity(reading):\n"
+     "    if reading > 90: return 'critical'\n"
+     "    return 'warning' if reading >= 70 else 'normal'\n"),
+])
+def test_hardened_oracles_reject_literal_or_boundary_overfitting(tmp_path, task_id, incorrect):
+    task = _curated_task(task_id)
+    workspace = _copied_fixture(task, tmp_path)
+    path = _CURATED_REPAIRS[task_id][0]
+    (workspace / path).write_text(incorrect, encoding="utf-8")
+    assert _fixture_program(workspace, task.trusted_verifier_path).returncode != 0
+
+
+def test_curated_exposure_preserves_completion_with_lower_schema_cost():
+    task = _curated_task("exposure_sensitive")
+    assert task.selective_tool_names == ("read_file", "apply_patch", "run_command")
+    path, corrected = _CURATED_REPAIRS[task.task_id]
+    original = (task.fixture_path / path).read_text(encoding="utf-8")
+    _, _, engineered, full = default_benchmark_configs(max_steps=2)
+
+    def factory(task, config):
+        return ScriptedModel([
+            [
+                ToolCall(name="read_file", arguments={"path": path}),
+                ToolCall(name="apply_patch", arguments={
+                    "path": path, "old_text": original, "new_text": corrected,
+                }),
+            ],
+            Message(role="assistant", content="repaired"),
+        ])
+
+    runner = BenchmarkRunner(factory, completion_policy=None)
+    all_tools = runner.run_case(task, engineered)
+    selected = runner.run_case(task, full)
+    assert all_tools.task_success and selected.task_success
+    assert selected.selector_strategy == "StaticNames"
+    assert all(
+        invocation.exposed_tool_count == 3
+        for invocation in selected.run_record.model_invocations
+    )
+    assert (
+        selected.run_record.sum_estimated_tool_schema_tokens
+        < all_tools.run_record.sum_estimated_tool_schema_tokens
+    )
+
+
+def test_large_output_repair_can_succeed_while_recording_projection():
+    task = _curated_task("large_output")
+    path, corrected = _CURATED_REPAIRS[task.task_id]
+    original = (task.fixture_path / path).read_text(encoding="utf-8")
+    model = ScriptedModel([
+        [
+            ToolCall(name="read_file", arguments={"path": path}),
+            ToolCall(name="run_command", arguments={
+                "argv": [sys.executable, "-B", "diagnose.py"],
+            }),
+        ],
+        [ToolCall(name="apply_patch", arguments={
+            "path": path, "old_text": original, "new_text": corrected,
+        })],
+        [ToolCall(name="run_command", arguments={
+            "argv": [sys.executable, "-B", "diagnose.py"],
+        })],
+        Message(role="assistant", content="repaired"),
+    ])
+    result = BenchmarkRunner(lambda task, config: model).run_case(
+        task, default_benchmark_configs()[2],
+    )
+    assert result.task_success
+    assert result.run_record.tool_result_compaction_count > 0
+    assert any(
+        invocation.compacted_tool_results > 0
+        for invocation in result.run_record.model_invocations
+    )

@@ -31,8 +31,11 @@ oracle or proof that a tool is necessary.
 ## Tasks
 
 The five curated fixtures cover a short arithmetic fix, multi-file navigation,
-large verifier output, a longer two-defect repair, and a tool-exposure-sensitive
-edit. Task metadata is static JSON. Verification uses argv lists without a
+large diagnostic output, a two-defect feedback repair, and a tool-exposure-sensitive
+edit. Visible specifications and local diagnostics supply task requirements;
+separate hidden verifiers check behavior. See [VALIDITY.md](VALIDITY.md) for
+per-task contracts, deterministic controls and limits on mechanism attribution.
+Task metadata is static JSON. Verification uses argv lists without a
 shell, with a centralized 30-second timeout.
 
 The on-disk trust boundary is explicit:

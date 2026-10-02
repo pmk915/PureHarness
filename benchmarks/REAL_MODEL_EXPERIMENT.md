@@ -19,6 +19,12 @@ The frozen comparison dimensions are:
 Only the declared context/projection/TaskState/compaction/exposure configuration
 changes between comparable cases.
 
+The internal fixtures are controlled micro-benchmarks, not leaderboard evidence;
+see [VALIDITY.md](VALIDITY.md) for their visible contracts and hidden oracles.
+Retain the fixture Git revision separately: results from different prompt/oracle
+revisions must not be pooled as the same frozen experiment. A single run is a
+pilot, and task success alone does not prove the intended mechanism occurred.
+
 ## Running
 
 Real experiments are manual and require `DEEPSEEK_API_KEY`. Load it from the

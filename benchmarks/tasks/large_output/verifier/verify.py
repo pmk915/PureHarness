@@ -20,4 +20,15 @@ if severity(95) != "critical":
 
 assert severity(75) == "warning"
 assert severity(20) == "normal"
+for reading, expected in (
+    (0, "normal"),
+    (69.5, "normal"),
+    (70, "warning"),
+    (70.5, "warning"),
+    (89.5, "warning"),
+    (90, "critical"),
+    (90.5, "critical"),
+    (120, "critical"),
+):
+    assert severity(reading) == expected
 print("large_output passed")
