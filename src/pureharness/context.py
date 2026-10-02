@@ -400,7 +400,7 @@ def _group_context_units(
     for item in history:
         if isinstance(item, Message):
             if tool_items:
-                units.append(_tool_context_unit(tool_items))
+                units.extend(_tool_context_units(tool_items))
                 tool_items = []
 
             units.append(ContextUnit(items=(item,)))
@@ -408,20 +408,42 @@ def _group_context_units(
             tool_items.append(item)
 
     if tool_items:
-        units.append(_tool_context_unit(tool_items))
+        units.extend(_tool_context_units(tool_items))
 
     return units
 
 
-def _tool_context_unit(
+def _tool_context_units(
     items: Sequence[ToolCall | ToolResult],
-) -> ContextUnit:
+) -> list[ContextUnit]:
+    """Split a validated span only where all preceding calls are closed.
+
+    Flat AgentItems have no assistant-turn envelope. Independent closed pairs
+    can be selected separately; overlapping calls and their results stay in
+    one batch, in original order. Validate the whole span first so duplicate
+    IDs and legacy name/order matching retain their existing semantics.
+    """
     try:
         match_tool_interactions(items)
     except ToolHistoryError as exc:
         raise ContextCompileError(str(exc)) from exc
 
-    return ContextUnit(items=tuple(items))
+    units: list[ContextUnit] = []
+    start = 0
+    pending_calls = 0
+    for index, item in enumerate(items):
+        # The canonical matcher guarantees each result closes one earlier,
+        # distinct call; no additional call-ID matching is needed here.
+        pending_calls += 1 if isinstance(item, ToolCall) else -1
+        if pending_calls == 0:
+            units.append(ContextUnit(items=tuple(items[start:index + 1])))
+            start = index + 1
+
+    # Preserve existing support for an incomplete trailing batch. It remains
+    # indivisible and is ineligible for complete-tool trajectory compaction.
+    if start < len(items):
+        units.append(ContextUnit(items=tuple(items[start:])))
+    return units
 
 
 def _estimate_units(

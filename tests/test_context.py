@@ -76,21 +76,22 @@ class MutatingToolResultProjector:
 
 
 def _multi_tool_history() -> list[AgentItem]:
+    # An explicit multi-call batch, rather than two independently closed pairs.
     return [
         ToolCall(
             name="read_file",
             arguments={"path": "a.py"},
             call_id="call-a",
         ),
-        ToolResult(
-            name="read_file",
-            content="a",
-            call_id="call-a",
-        ),
         ToolCall(
             name="read_file",
             arguments={"path": "b.py"},
             call_id="call-b",
+        ),
+        ToolResult(
+            name="read_file",
+            content="a",
+            call_id="call-a",
         ),
         ToolResult(
             name="read_file",

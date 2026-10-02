@@ -467,11 +467,16 @@ CompiledContext.items -> Model
 ```
 
 `ContextUnit(items: tuple[AgentItem, ...])` is the atomic selection unit.
-Ordinary messages are individual units. All contiguous `ToolCall` and
-`ToolResult` items between messages form one tool-execution unit. This matches
-the current interleaved multi-tool Session layout and conservatively keeps
-adjacent tool-only model steps together when the Session has no boundary that
-can distinguish them. Results must match an earlier call in the same unit;
+Ordinary messages are individual units. Each contiguous tool-only span is
+validated with `match_tool_interactions()`, then split only where every
+preceding call has a result. Independent completed interactions therefore
+form separate units; overlapping calls and their results remain one atomic
+batch in original order. Flat AgentItems have no assistant-turn envelope, so
+the runtime's interleaved multi-call layout can retain or drop whole closed
+pairs without orphaning results. Explicit calls-before-results batches remain
+indivisible, as do trailing incomplete batches. This prevents long tool-only
+trajectories from becoming one artificially oversized newest unit. Results
+must match an earlier call in the same unit;
 missing legacy `call_id` values are matched deterministically by tool name and
 order, while clearly unmatched results fail with `ContextCompileError`.
 
