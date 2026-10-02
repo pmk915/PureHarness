@@ -31,6 +31,7 @@ _VENV_DIR = _INSTALL_DIR / "venv"
 _RUN_RECORD_NAME = "pureharness-run-record.json"
 _EVENT_LOG_NAME = "pureharness-events.jsonl"
 _EVALUATION_MAX_STEPS = 300
+_EVALUATION_HISTORY_TOKEN_BUDGET = 8_000
 _INSTALL_ATTEMPTS = 3
 _INSTALL_RETRY_DELAY_SECONDS = 1
 _COMMIT_PATTERN = re.compile(r"[0-9a-fA-F]{40}\Z")
@@ -239,6 +240,7 @@ class PureHarnessHarborAgent(BaseInstalledAgent):
                 f"--workspace {shlex.quote(workspace)} "
                 f"--model {shlex.quote(self._deepseek_model)} "
                 f"--max-steps {_EVALUATION_MAX_STEPS} "
+                f"--history-token-budget {_EVALUATION_HISTORY_TOKEN_BUDGET} "
                 f"--record {shlex.quote(str(record_path))} "
                 "--output jsonl "
                 f"| tee {shlex.quote(str(event_log_path))}"

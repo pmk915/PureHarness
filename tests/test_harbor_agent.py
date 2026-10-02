@@ -309,6 +309,7 @@ def test_run_invokes_public_cli_with_safe_arguments_and_record(tmp_path):
     assert "--workspace /workspace" in command
     assert "--model deepseek-chat" in command
     assert "--max-steps 300" in command
+    assert "--history-token-budget 8000" in command
     assert "--record /logs/agent/pureharness-run-record.json" in command
     assert "--output jsonl" in command
     assert "| tee /logs/agent/pureharness-events.jsonl" in command
@@ -317,6 +318,27 @@ def test_run_invokes_public_cli_with_safe_arguments_and_record(tmp_path):
     assert call["cwd"] == "/workspace"
     assert call["env"] == {"DEEPSEEK_API_KEY": "secret-key"}
     assert agent.extra_env == {}
+
+
+@pytest.mark.parametrize("instruction", ["summarize a directory", "repair an arithmetic function"])
+def test_evaluation_command_is_task_agnostic(tmp_path, instruction):
+    agent = make_agent(tmp_path)
+    agent.environment_logs_dir = PurePosixPath("/logs/agent")
+    environment = FakeEnvironment()
+    asyncio.run(agent.run(instruction, environment, AgentContext()))
+
+    command = str(environment.calls[0]["command"])
+    tokens = shlex.split(command)
+    executable = "/installed-agent/pureharness/venv/bin/pureharness"
+    argv = tokens[tokens.index(executable):tokens.index("|")]
+    assert argv == [
+        executable, "run", instruction,
+        "--workspace", "/workspace", "--model", "deepseek-chat",
+        "--max-steps", "300", "--history-token-budget", "8000",
+        "--record", "/logs/agent/pureharness-run-record.json", "--output", "jsonl",
+    ]
+    for hint in ("regex-log", "terminal-bench", "findall", "capturing group"):
+        assert hint not in command
 
 
 @pytest.mark.parametrize("exit_code", [0, 7], ids=["success", "failure"])

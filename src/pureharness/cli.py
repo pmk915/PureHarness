@@ -20,7 +20,12 @@ from pureharness.benchmark import (
 )
 from pureharness.coding_tools import create_coding_tools
 from pureharness.completion import default_coding_completion_policy
-from pureharness.context import ContextLimits
+from pureharness.context import (
+    ContextBudget,
+    ContextBuilder,
+    ContextLimits,
+    TokenBudgetContextBuilder,
+)
 from pureharness.deepseek_model import DeepSeekModel
 from pureharness.events import AgentEvent
 from pureharness.experiment import (
@@ -274,6 +279,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=_positive_integer,
         default=10,
         help="Maximum Agent execution steps (default: 10).",
+    )
+    run_parser.add_argument(
+        "--history-token-budget",
+        type=_positive_integer,
+        default=None,
+        help="Maximum estimated history tokens retained for one-shot model context.",
     )
     _add_context_limit_arguments(
         run_parser,
@@ -769,6 +780,10 @@ def _run_once(
         if context_limits is not None
         else {}
     )
+    if arguments.history_token_budget is not None:
+        context_arguments["context_builder"] = TokenBudgetContextBuilder(
+            ContextBudget(max_estimated_tokens=arguments.history_token_budget)
+        )
     budget_arguments = (
         {"execution_budget": execution_budget}
         if execution_budget is not None
@@ -921,6 +936,7 @@ def _create_agent(
     approval_handler: ApprovalHandler | None = None,
     event_listener: Callable[[AgentEvent], None] | None = None,
     max_steps: int = 10,
+    context_builder: ContextBuilder | None = None,
     context_limits: ContextLimits | None = None,
     execution_budget: ExecutionBudget | None = None,
 ) -> Agent:
@@ -944,6 +960,7 @@ def _create_agent(
         session_id=session_id,
         session=session,
         max_steps=max_steps,
+        context_builder=context_builder,
         context_limits=context_limits,
         execution_budget=execution_budget,
         skills=default_coding_skills(),

@@ -7,14 +7,24 @@ import pureharness.cli as cli_module
 from pureharness.agent import Agent
 from pureharness.cli import main
 from pureharness.completion import EvidenceAwareCodingCompletionPolicy
-from pureharness.context import ContextLimits
+from pureharness.context import (
+    ContextBuilder,
+    ContextLimits,
+    TokenBudgetContextBuilder,
+)
 from pureharness.experiment import load_experiment_results
-from pureharness.messages import Message, ToolCall
+from pureharness.messages import Message, ToolCall, ToolResult
 from pureharness.model import ModelError
 from pureharness.runtime import ExecutionBudget
 from pureharness.tool_executor import ToolExecutor
 from pureharness.tool_policy import PolicyDecision
+from pureharness.tool_result_projection import DeterministicToolResultProjector
+from pureharness.tool_selection import AllToolsSelector
 from pureharness.tools import Tool, ToolRegistry
+from pureharness.trajectory_compaction import (
+    DeterministicToolTrajectoryCompactor,
+    default_compactor_for_history_budget,
+)
 from pureharness.workspace_discipline import WorkspaceDiscipline
 
 
@@ -456,6 +466,131 @@ def test_one_shot_default_max_steps_remains_ten(tmp_path, monkeypatch):
 
     assert exit_code == 0
     assert created_agents[0].max_steps == 10
+    assert type(created_agents[0].context_builder) is ContextBuilder
+    assert isinstance(
+        created_agents[0].context_builder.tool_result_projector,
+        DeterministicToolResultProjector,
+    )
+    assert isinstance(
+        created_agents[0].context_builder.trajectory_compactor,
+        DeterministicToolTrajectoryCompactor,
+    )
+    assert cli_module.build_parser().parse_args(["run", "hello"]).history_token_budget is None
+
+
+def test_one_shot_history_budget_uses_existing_context_engineering_defaults(tmp_path, monkeypatch):
+    created = []
+    original = cli_module._create_agent
+
+    def capture(*args, **kwargs):
+        agent = original(*args, **kwargs)
+        created.append(agent)
+        return agent
+
+    monkeypatch.setattr(cli_module, "_create_agent", capture)
+    assert main(
+        ["run", "hello", "--workspace", str(tmp_path), "--history-token-budget", "8000"],
+        model_factory=lambda name: MultiTurnModel(), output_fn=lambda value: None,
+    ) == 0
+    agent = created[0]
+    builder = agent.context_builder
+    assert isinstance(builder, TokenBudgetContextBuilder)
+    assert builder.budget.max_estimated_tokens == 8000
+    assert isinstance(builder.tool_result_projector, DeterministicToolResultProjector)
+    assert isinstance(builder.trajectory_compactor, DeterministicToolTrajectoryCompactor)
+    expected = default_compactor_for_history_budget(8000)
+    assert builder.trajectory_compactor.compaction_trigger_tokens == expected.compaction_trigger_tokens
+    assert builder.trajectory_compactor.recent_raw_tokens == expected.recent_raw_tokens
+    assert agent.include_task_state is True
+    assert isinstance(agent.tool_selector, AllToolsSelector)
+    assert agent.active_skill_ids == ("coding-task@1",)
+    assert isinstance(agent.completion_policy, EvidenceAwareCodingCompletionPolicy)
+    assert agent.context_limits is None
+    assert agent.max_steps == 10
+
+
+def test_history_budget_with_jsonl_and_record_keeps_stdout_machine_only(tmp_path, capsys):
+    record_path = tmp_path / "record.json"
+    assert main(
+        ["run", "hello", "--workspace", str(tmp_path),
+         "--history-token-budget", "8000", "--output", "jsonl",
+         "--record", str(record_path)],
+        model_factory=lambda name: MultiTurnModel(),
+    ) == 0
+    captured = capsys.readouterr()
+    events = [json.loads(line) for line in captured.out.splitlines()]
+    assert captured.err == ""
+    assert all(event["schema_version"] == 1 for event in events)
+    assert events[0]["event"] == "agent_started"
+    assert events[-1]["event"] == "agent_completed"
+    context = next(event["payload"] for event in events if event["event"] == "context_built")
+    assert context["context_strategy"] == "TokenBudget"
+    assert context["history_token_budget"] == 8000
+    assert "response-1" not in captured.out
+    assert "Run record:" not in captured.out
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    assert record["schema_version"] == 2
+    assert record["model_invocations"][0]["context_strategy"] == "TokenBudget"
+    assert record["model_call_count"] == len(record["model_invocations"]) == 1
+
+
+def test_one_shot_tiny_history_budget_drops_old_context_not_session(tmp_path, monkeypatch):
+    (tmp_path / "note.txt").write_text("x" * 300, encoding="utf-8")
+    prompt = "inspect " + "old " * 100
+    created = []
+    original = cli_module._create_agent
+
+    def capture(*args, **kwargs):
+        agent = original(*args, **kwargs)
+        created.append(agent)
+        return agent
+
+    class ReadOnceModel:
+        def __init__(self):
+            self.contexts = []
+
+        def generate(self, messages, tools):
+            self.contexts.append(list(messages))
+            if len(self.contexts) == 1:
+                return [ToolCall(name="read_file", arguments={"path": "note.txt"}, call_id="read-1")]
+            return Message(role="assistant", content="done")
+
+    model = ReadOnceModel()
+    monkeypatch.setattr(cli_module, "_create_agent", capture)
+    assert main(
+        ["run", prompt, "--workspace", str(tmp_path), "--history-token-budget", "200"],
+        model_factory=lambda name: model, output_fn=lambda value: None,
+    ) == 0
+    assert any(isinstance(item, Message) and item.role == "user" for item in model.contexts[0])
+    assert not any(isinstance(item, Message) and item.role == "user" for item in model.contexts[1])
+    assert any(isinstance(item, ToolCall) for item in model.contexts[1])
+    assert any(isinstance(item, ToolResult) for item in model.contexts[1])
+    agent = created[0]
+    contexts = [event.data for event in agent.events if event.type == "context_built"]
+    assert contexts[-1]["dropped_units"] > 0
+    assert all(context["estimated_history_tokens"] <= 200 for context in contexts)
+    assert agent.session.items[0] == Message(role="user", content=prompt)
+    assert len(agent.session.items) == 4
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "1.5", "not-an-integer"])
+def test_one_shot_rejects_invalid_history_budget(value, capsys):
+    with pytest.raises(SystemExit) as error:
+        main(["run", "hello", "--history-token-budget", value])
+    assert error.value.code == 2
+    assert "--history-token-budget: must be a positive integer" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("argv", [
+    ["--history-token-budget=8000"],
+    ["resume", "session", "--history-token-budget", "8000"],
+    ["benchmark", "--history-token-budget", "8000"],
+])
+def test_history_budget_option_is_only_available_on_run(argv, capsys):
+    with pytest.raises(SystemExit) as error:
+        main(argv, model_factory=lambda name: pytest.fail("must not construct a model"))
+    assert error.value.code == 2
+    assert "unrecognized arguments" in capsys.readouterr().err
 
 
 def test_one_shot_explicit_max_steps_reaches_agent(tmp_path, monkeypatch):
@@ -573,6 +708,7 @@ def test_interactive_context_limits_reach_agent(tmp_path, monkeypatch):
 
     assert exit_code == 0
     assert created_agents[0].context_limits == ContextLimits(200, 50)
+    assert type(created_agents[0].context_builder) is ContextBuilder
 
 
 def test_interactive_execution_budget_reaches_agent(tmp_path, monkeypatch):
