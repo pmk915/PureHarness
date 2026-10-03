@@ -86,6 +86,10 @@ M13 adds an optional controlled real-model runner and repeated-trial evidence
 format. See [REAL_MODEL_EXPERIMENT.md](REAL_MODEL_EXPERIMENT.md). It remains
 manual, API-backed, potentially costly, and outside deterministic pytest.
 
+Third-party Harbor / Terminal-Bench evidence is separate from this controlled
+benchmark. See [external evidence receipts](external/README.md) for the offline
+extractor, task-matched Oracle health gates, and reward/runtime distinctions.
+
 From a repository checkout, the installed CLI exposes the same benchmark and
 experiment abstractions:
 
