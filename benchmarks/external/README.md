@@ -118,18 +118,57 @@ Short revisions in filenames and this table are presentation only.
 Oracle health below means recorded reward 1 and exceptions 0 for the separate
 selected Oracle trial; it does not establish agent success.
 
+<!-- external-evidence-index:start -->
 | Task | Treatment / revision | Oracle health | Reward | Runtime end reason | Steps | Receipt |
 |---|---|---|---:|---|---:|---|
 | sqlite-db-truncate | post-M24.2 / `83abbf4` | 1 / 0 | 1 | completed | 113 | [JSON](receipts/terminal-bench-2.1_sqlite-db-truncate_83abbf4.json) |
 | regex-log | post-M24.2 / `83abbf4` | 1 / 0 | 1 | completed | 10 | [JSON](receipts/terminal-bench-2.1_regex-log_83abbf4.json) |
 | make-mips-interpreter | baseline / `83abbf4` | 1 / 0 | 0 | max_steps_exceeded | 300 | [JSON](receipts/terminal-bench-2.1_make-mips-interpreter_baseline_83abbf4.json) |
 | make-mips-interpreter | bounded advisory / `afca7d2` | 1 / 0 | 0 | max_steps_exceeded | 300 | [JSON](receipts/terminal-bench-2.1_make-mips-interpreter_advisory_afca7d2.json) |
+<!-- external-evidence-index:end -->
 
 The dataset is `terminal-bench/terminal-bench-2-1`; all four recorded model
 identities are `deepseek-v4-flash` (provider `deepseek`), with Harbor `0.23.0`.
 For re-extraction, use `jobs/<external.job_name>` and explicitly supply
 `--oracle-job jobs/<oracle.job>` from each receipt, writing to a new file.
 The summaries match the [progress-gap audit](../../docs/progress_gap_audit.md).
+
+## Offline pack validation (M24.4C)
+
+```bash
+.venv/bin/python scripts/validate_external_evidence.py
+# Optional: validate another checkout or a proposed fixture pack.
+.venv/bin/python scripts/validate_external_evidence.py /path/to/external
+```
+
+The default target is this checkout's `benchmarks/external/`, independent of
+the current working directory. Validation reads the README and all recursive
+lowercase `*.json` receipt candidates in sorted order, including proposed new
+files. `.gitkeep` and non-JSON files are ignored; directory symlinks are not
+followed and paths escaping the pack are rejected. No Git or `jobs/` is needed.
+
+The reader in `external_evidence.py` checks the existing v1 dataclass shape,
+requiring explicit fields (including nullable ones) and rejecting unknown fields,
+invalid types, negative counters and non-finite numbers; ambiguous duplicate
+JSON field names are also rejected. Pack validation checks
+counter/context/advisory relations, separate Oracle identity, duplicate source
+trials/run IDs, filename SHA suffixes (a final `_` plus 7–40 hexadecimal digits),
+and conflicting shared Oracle/task facts.
+Known optional null evidence stays unavailable, not zero; a valid unhealthy
+Oracle or reward 0 with a completed runtime is not rejected.
+
+Only the table between the receipt-index markers is machine-validated, for
+complete, unique and existing receipt links. Human-written table metric cells
+are not parsed or authenticated. Success prints a deterministic receipt count;
+failure reports sorted path/invariant diagnostics on stderr with exit code 1.
+Nothing is rewritten. A malformed receipt reports its first structural error;
+other receipts, semantic relations and index errors are still checked.
+
+The workflow is: saved raw jobs -> `external_evidence_receipt.py` -> reviewed
+committed receipts -> `validate_external_evidence.py`. Extraction needs original
+artifacts; pack validation does not. Organization/internal consistency checks
+are not benchmark-correctness or Agent-quality judgments, source authentication,
+or a fresh source-hash comparison. Validation never reruns Harbor or verifiers.
 
 ## Pilot limits
 

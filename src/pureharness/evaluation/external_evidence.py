@@ -7,8 +7,11 @@ Neither stagnation nor progress-gap evidence defines task success.
 """
 
 import json
+import math
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, fields, is_dataclass
+from types import UnionType
+from typing import get_args, get_origin, get_type_hints
 
 from pureharness.evaluation.progress_gap import ProgressGapEvidence
 from pureharness.evaluation.stagnation import StagnationEvidence
@@ -187,3 +190,69 @@ class ExternalEvidenceReceipt:
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), indent=2, sort_keys=True, allow_nan=False) + "\n"
+
+    @classmethod
+    def from_dict(cls, data: object) -> "ExternalEvidenceReceipt":
+        """Read the explicit v1 shape without defaulting absent facts to zero.
+
+        Field names and types come from these same dataclasses, including the
+        existing offline evidence types. Null is valid only for nullable fields.
+        Unknown fields are rejected rather than silently discarding evidence.
+        This reader never reconstructs or accesses the original job artifacts.
+        """
+        return _decode_receipt_value(cls, data, "receipt")
+
+
+def _decode_receipt_value(expected: object, value: object, path: str):
+    """Narrow JSON decoder for the receipt's dataclasses and scalar types."""
+    if get_origin(expected) is UnionType:
+        choices = get_args(expected)
+        if value is None and type(None) in choices:
+            return None
+        expected = next(choice for choice in choices if choice is not type(None))
+    if get_origin(expected) is tuple:
+        if not isinstance(value, list):
+            raise ValueError(f"{path}: expected an array")
+        item_type, _ = get_args(expected)
+        return tuple(
+            _decode_receipt_value(item_type, item, f"{path}[{index}]")
+            for index, item in enumerate(value)
+        )
+    if is_dataclass(expected):
+        if not isinstance(value, dict):
+            raise ValueError(f"{path}: expected an object")
+        names = {field.name for field in fields(expected)}
+        missing = sorted(names - value.keys())
+        if missing:
+            raise ValueError(f"{path}.{missing[0]}: required field missing")
+        if value.keys() - names:
+            raise ValueError(f"{path}: unknown fields are not supported")
+        hints = get_type_hints(expected)
+        decoded = {
+            field.name: _decode_receipt_value(
+                hints[field.name], value[field.name], f"{path}.{field.name}",
+            )
+            for field in fields(expected)
+        }
+        try:
+            return expected(**decoded)
+        except ValueError as exc:
+            raise ValueError(f"{path}: {exc}") from exc
+    if expected is str and isinstance(value, str) and value.strip():
+        return value
+    if expected is bool and type(value) is bool:
+        return value
+    if expected is int and type(value) is int and value >= 0:
+        return value
+    if expected is float and type(value) in (int, float):
+        try:
+            result = float(value)
+        except OverflowError:
+            result = math.inf
+        if math.isfinite(result):
+            return result
+    labels = {
+        str: "non-empty text", bool: "bool", int: "non-negative integer",
+        float: "finite number",
+    }
+    raise ValueError(f"{path}: expected {labels[expected]}")
