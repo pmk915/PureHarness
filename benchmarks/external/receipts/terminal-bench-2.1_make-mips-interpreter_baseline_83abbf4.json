@@ -1,0 +1,233 @@
+{
+  "coding": {
+    "verification_attempts": 0,
+    "verification_exit_nonzero": 0,
+    "verification_exit_zero": 0,
+    "verification_tool_errors": 0,
+    "workspace_mutations": 0
+  },
+  "context": {
+    "compacted_context_count": 295,
+    "configured_history_token_budget": 8000,
+    "context_build_count": 300,
+    "final_history_tokens": 7984,
+    "maximum_history_tokens": 8000
+  },
+  "external": {
+    "dataset": "terminal-bench/terminal-bench-2-1",
+    "exception_type": "NonZeroAgentExitCodeError",
+    "harbor_version": "0.23.0",
+    "job_id": "7f10b462-c3e1-4a7a-af49-4b7c11dbd022",
+    "job_name": "2026-10-03__04-00-26",
+    "model": "deepseek-v4-flash",
+    "model_provider": "deepseek",
+    "pureharness_revision": "83abbf439875ba0054cfe8e835de2e14f66b36b4",
+    "reward": 0.0,
+    "task": "terminal-bench/make-mips-interpreter",
+    "task_checksum": "929f50bc438e551fb6c09fdc9f91ab528e266bc57a79e52c90d398738a553a72",
+    "task_ref": "sha256:41a55da0abec5d7b32a0c2321f8b18e84000ca8074ae62c6874d6ed4a3a1cd3c",
+    "trial_id": "721125e5-383c-474d-9ea9-08ada3817d5d",
+    "trial_name": "make-mips-interpreter__WSR63QE"
+  },
+  "offline_evaluation": {
+    "progress_gap": {
+      "anchor_steps": [],
+      "final": {
+        "active_steps": 300,
+        "changed_observation_count_since_anchor": 0,
+        "last_progress_anchor_step": null,
+        "last_structured_mutation_step": null,
+        "last_verification_attempt_step": null,
+        "new_action_count_since_anchor": 155,
+        "progress_evidence_complete": true,
+        "repeated_action_count_since_anchor": 292,
+        "span_start_step": 0,
+        "step": 299,
+        "steps_since_anchor": 300,
+        "steps_since_last_structured_mutation": null,
+        "steps_since_last_verification_attempt": null,
+        "tool_actions_since_anchor": 447,
+        "tool_error_count_since_anchor": 2,
+        "unchanged_repeat_count_since_anchor": 292,
+        "unknown_action_count_since_anchor": 0,
+        "verification_delta": 0,
+        "workspace_mutation_delta": 0
+      },
+      "longest_active_span": {
+        "active_steps": 300,
+        "changed_observation_count_since_anchor": 0,
+        "last_progress_anchor_step": null,
+        "last_structured_mutation_step": null,
+        "last_verification_attempt_step": null,
+        "new_action_count_since_anchor": 155,
+        "progress_evidence_complete": true,
+        "repeated_action_count_since_anchor": 292,
+        "span_start_step": 0,
+        "step": 299,
+        "steps_since_anchor": 300,
+        "steps_since_last_structured_mutation": null,
+        "steps_since_last_verification_attempt": null,
+        "tool_actions_since_anchor": 447,
+        "tool_error_count_since_anchor": 2,
+        "unchanged_repeat_count_since_anchor": 292,
+        "unknown_action_count_since_anchor": 0,
+        "verification_delta": 0,
+        "workspace_mutation_delta": 0
+      }
+    },
+    "strict_stagnation": {
+      "detected_step_count": 32,
+      "intervals": [
+        {
+          "first_detected_step": 233,
+          "first_window": {
+            "active_steps": 16,
+            "changed_result_repeat_count": 0,
+            "end_step": 233,
+            "new_action_count": 0,
+            "observed_steps": 16,
+            "repeat_ratio": 1.0,
+            "repeated_action_count": 26,
+            "start_step": 218,
+            "tool_action_count": 26,
+            "tool_error_delta": 0,
+            "unchanged_result_repeat_count": 26,
+            "unique_action_count": 6,
+            "unknown_action_count": 0,
+            "verification_delta": 0,
+            "window_size": 16,
+            "workspace_mutation_delta": 0
+          },
+          "last_detected_step": 251,
+          "last_window": {
+            "active_steps": 16,
+            "changed_result_repeat_count": 0,
+            "end_step": 251,
+            "new_action_count": 0,
+            "observed_steps": 16,
+            "repeat_ratio": 1.0,
+            "repeated_action_count": 26,
+            "start_step": 236,
+            "tool_action_count": 26,
+            "tool_error_delta": 0,
+            "unchanged_result_repeat_count": 26,
+            "unique_action_count": 6,
+            "unknown_action_count": 0,
+            "verification_delta": 0,
+            "window_size": 16,
+            "workspace_mutation_delta": 0
+          }
+        },
+        {
+          "first_detected_step": 277,
+          "first_window": {
+            "active_steps": 16,
+            "changed_result_repeat_count": 0,
+            "end_step": 277,
+            "new_action_count": 0,
+            "observed_steps": 16,
+            "repeat_ratio": 1.0,
+            "repeated_action_count": 27,
+            "start_step": 262,
+            "tool_action_count": 27,
+            "tool_error_delta": 0,
+            "unchanged_result_repeat_count": 27,
+            "unique_action_count": 6,
+            "unknown_action_count": 0,
+            "verification_delta": 0,
+            "window_size": 16,
+            "workspace_mutation_delta": 0
+          },
+          "last_detected_step": 289,
+          "last_window": {
+            "active_steps": 16,
+            "changed_result_repeat_count": 0,
+            "end_step": 289,
+            "new_action_count": 0,
+            "observed_steps": 16,
+            "repeat_ratio": 1.0,
+            "repeated_action_count": 30,
+            "start_step": 274,
+            "tool_action_count": 30,
+            "tool_error_delta": 0,
+            "unchanged_result_repeat_count": 30,
+            "unique_action_count": 9,
+            "unknown_action_count": 0,
+            "verification_delta": 0,
+            "window_size": 16,
+            "workspace_mutation_delta": 0
+          }
+        }
+      ],
+      "window_size": 16
+    }
+  },
+  "oracle": {
+    "dataset": "terminal-bench/terminal-bench-2-1",
+    "exception_type": null,
+    "exceptions": 0,
+    "job": "2026-10-03__04-13-48",
+    "job_id": "71246bcd-f627-46ad-a52b-7fd8c039a647",
+    "reward": 1.0,
+    "task": "terminal-bench/make-mips-interpreter",
+    "task_checksum": "929f50bc438e551fb6c09fdc9f91ab528e266bc57a79e52c90d398738a553a72",
+    "task_ref": "sha256:41a55da0abec5d7b32a0c2321f8b18e84000ca8074ae62c6874d6ed4a3a1cd3c",
+    "trial_id": "f29955b8-4f26-40fb-9db8-852f4c874493",
+    "trial_name": "make-mips-interpreter__wxQNCgY"
+  },
+  "progress": {
+    "max_identical_tool_action_count": 76,
+    "repeated_tool_actions": 292,
+    "unique_tool_actions": 155
+  },
+  "receipt_type": "pureharness.external_evidence",
+  "runtime": {
+    "end_reason": "max_steps_exceeded",
+    "model_call_count": 300,
+    "protocol_completed": false,
+    "run_id": "66d699ef-502c-42d6-8e99-7a1233b1146c",
+    "step_count": 300,
+    "tool_call_count": 447,
+    "tool_execution_count": 447,
+    "tool_result_compaction_count": 22,
+    "tool_result_error_count": 2,
+    "trajectory_compaction_count": 295
+  },
+  "schema_version": 1,
+  "sources": [
+    {
+      "artifact": "agent/events.jsonl",
+      "sha256": "0d3f7705cb4ddc490e741bdd31af673702bd734951ca1db482d5892b725960f7"
+    },
+    {
+      "artifact": "agent/job-lock.json",
+      "sha256": "387089cdde5ed188ba9c05bb43a23273deff50733e6d9de85e0fd180a7db4aeb"
+    },
+    {
+      "artifact": "agent/job-result.json",
+      "sha256": "d0477126662ee3a6498c95137a6db637eeaa31de46db009326afb9e8ac38e289"
+    },
+    {
+      "artifact": "agent/run-record.json",
+      "sha256": "cc7207e4b6c1945a22a691d88ee03c17e544b17e025e545e1de7090701e381d8"
+    },
+    {
+      "artifact": "agent/trial-result.json",
+      "sha256": "30414891242c67bce12e680b7c24793f36a2c80124f5d60abbc6f4a8be1b5a77"
+    },
+    {
+      "artifact": "oracle/job-result.json",
+      "sha256": "6d6c5f69b7cc04c72c2d26e0cb2ef3588c1dab4fd2147ef7fd14012b7a40436b"
+    },
+    {
+      "artifact": "oracle/trial-result.json",
+      "sha256": "b1d1d3ef1cc5ee2188b2badac2f3db2759b9116ed47103e9f47b99eb3cf78168"
+    }
+  ],
+  "stagnation_advisory": {
+    "advisory_count": 0,
+    "first_delivered_step": null,
+    "first_detected_step": null
+  },
+  "unavailable_evidence": []
+}

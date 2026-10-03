@@ -1,0 +1,156 @@
+{
+  "coding": {
+    "verification_attempts": 1,
+    "verification_exit_nonzero": 0,
+    "verification_exit_zero": 1,
+    "verification_tool_errors": 0,
+    "workspace_mutations": 2
+  },
+  "context": {
+    "compacted_context_count": 0,
+    "configured_history_token_budget": 8000,
+    "context_build_count": 10,
+    "final_history_tokens": 1822,
+    "maximum_history_tokens": 1822
+  },
+  "external": {
+    "dataset": "terminal-bench/terminal-bench-2-1",
+    "exception_type": null,
+    "harbor_version": "0.23.0",
+    "job_id": "4aaef225-ad93-4048-9c35-fb07d3dd308a",
+    "job_name": "2026-10-03__03-53-50",
+    "model": "deepseek-v4-flash",
+    "model_provider": "deepseek",
+    "pureharness_revision": "83abbf439875ba0054cfe8e835de2e14f66b36b4",
+    "reward": 1.0,
+    "task": "terminal-bench/regex-log",
+    "task_checksum": "31dc6115c061b96539a5287090ce41a7a89d3201c291b9b843bd70e416f35c39",
+    "task_ref": "sha256:802c16cfd132e6c457529cb864be5a757c1b23b6cadc57f2d01983cb0110292a",
+    "trial_id": "803c97b4-3a61-4c6a-928f-9f21ad7ba028",
+    "trial_name": "regex-log__wZHN9Lz"
+  },
+  "offline_evaluation": {
+    "progress_gap": {
+      "anchor_steps": [
+        3,
+        6,
+        7
+      ],
+      "final": {
+        "active_steps": 1,
+        "changed_observation_count_since_anchor": 0,
+        "last_progress_anchor_step": 7,
+        "last_structured_mutation_step": 6,
+        "last_verification_attempt_step": 7,
+        "new_action_count_since_anchor": 1,
+        "progress_evidence_complete": true,
+        "repeated_action_count_since_anchor": 0,
+        "span_start_step": 8,
+        "step": 9,
+        "steps_since_anchor": 2,
+        "steps_since_last_structured_mutation": 3,
+        "steps_since_last_verification_attempt": 2,
+        "tool_actions_since_anchor": 1,
+        "tool_error_count_since_anchor": 0,
+        "unchanged_repeat_count_since_anchor": 0,
+        "unknown_action_count_since_anchor": 0,
+        "verification_delta": 0,
+        "workspace_mutation_delta": 0
+      },
+      "longest_active_span": {
+        "active_steps": 3,
+        "changed_observation_count_since_anchor": 0,
+        "last_progress_anchor_step": null,
+        "last_structured_mutation_step": null,
+        "last_verification_attempt_step": null,
+        "new_action_count_since_anchor": 5,
+        "progress_evidence_complete": true,
+        "repeated_action_count_since_anchor": 0,
+        "span_start_step": 0,
+        "step": 2,
+        "steps_since_anchor": 3,
+        "steps_since_last_structured_mutation": null,
+        "steps_since_last_verification_attempt": null,
+        "tool_actions_since_anchor": 5,
+        "tool_error_count_since_anchor": 0,
+        "unchanged_repeat_count_since_anchor": 0,
+        "unknown_action_count_since_anchor": 0,
+        "verification_delta": 0,
+        "workspace_mutation_delta": 0
+      }
+    },
+    "strict_stagnation": {
+      "detected_step_count": 0,
+      "intervals": [],
+      "window_size": 16
+    }
+  },
+  "oracle": {
+    "dataset": "terminal-bench/terminal-bench-2-1",
+    "exception_type": null,
+    "exceptions": 0,
+    "job": "2026-10-03__01-12-32",
+    "job_id": "f2892c5e-d807-4f1d-aba9-74b590da2202",
+    "reward": 1.0,
+    "task": "terminal-bench/regex-log",
+    "task_checksum": "31dc6115c061b96539a5287090ce41a7a89d3201c291b9b843bd70e416f35c39",
+    "task_ref": "sha256:802c16cfd132e6c457529cb864be5a757c1b23b6cadc57f2d01983cb0110292a",
+    "trial_id": "cb08a746-1cec-4bc0-941d-8487ec460ad1",
+    "trial_name": "regex-log__UHJRC2z"
+  },
+  "progress": {
+    "max_identical_tool_action_count": 1,
+    "repeated_tool_actions": 0,
+    "unique_tool_actions": 11
+  },
+  "receipt_type": "pureharness.external_evidence",
+  "runtime": {
+    "end_reason": "completed",
+    "model_call_count": 10,
+    "protocol_completed": true,
+    "run_id": "6c187b62-8d3f-42d2-95a1-6cc80f38c29c",
+    "step_count": 10,
+    "tool_call_count": 11,
+    "tool_execution_count": 11,
+    "tool_result_compaction_count": 0,
+    "tool_result_error_count": 0,
+    "trajectory_compaction_count": 0
+  },
+  "schema_version": 1,
+  "sources": [
+    {
+      "artifact": "agent/events.jsonl",
+      "sha256": "9f490c0598d9dae7793177dfcd790978d03b3f73c5eb67e3805b2bf97388ccc9"
+    },
+    {
+      "artifact": "agent/job-lock.json",
+      "sha256": "d7c0e7bf571a3aa46dc7a5d711c2e34bf960f9aad2902fd090d6f97ca0e2d779"
+    },
+    {
+      "artifact": "agent/job-result.json",
+      "sha256": "2e3525e45df66800c30e554b7ff9fe1352f6c11c99accc7dee1dd412da72d691"
+    },
+    {
+      "artifact": "agent/run-record.json",
+      "sha256": "389bca9a75f514437b593e69d7051c2c74dc4923e2d8ee930335992344cb0583"
+    },
+    {
+      "artifact": "agent/trial-result.json",
+      "sha256": "41105a1406df521d0a3cbde27fb6847a8b1786af153618c4028ea68dd4696638"
+    },
+    {
+      "artifact": "oracle/job-result.json",
+      "sha256": "89b4e542767e31f375e635a18af1f7525a84add21a8078eb836b685c73a2824e"
+    },
+    {
+      "artifact": "oracle/trial-result.json",
+      "sha256": "f7dc82f73d48ebe0e2f3459a95ee2ceb1cfba3e40edaa6653f25f3b75e223c79"
+    }
+  ],
+  "stagnation_advisory": {
+    "advisory_count": 0,
+    "first_delivered_step": null,
+    "first_detected_step": null
+  },
+  "unavailable_evidence": []
+}

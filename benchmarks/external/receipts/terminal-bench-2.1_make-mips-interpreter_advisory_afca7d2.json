@@ -1,0 +1,235 @@
+{
+  "coding": {
+    "verification_attempts": 0,
+    "verification_exit_nonzero": 0,
+    "verification_exit_zero": 0,
+    "verification_tool_errors": 0,
+    "workspace_mutations": 1
+  },
+  "context": {
+    "compacted_context_count": 286,
+    "configured_history_token_budget": 8000,
+    "context_build_count": 300,
+    "final_history_tokens": 7993,
+    "maximum_history_tokens": 8000
+  },
+  "external": {
+    "dataset": "terminal-bench/terminal-bench-2-1",
+    "exception_type": "NonZeroAgentExitCodeError",
+    "harbor_version": "0.23.0",
+    "job_id": "06e4127e-02a4-4f10-bd7d-3774ab9000b9",
+    "job_name": "2026-10-03__05-20-32",
+    "model": "deepseek-v4-flash",
+    "model_provider": "deepseek",
+    "pureharness_revision": "afca7d2e23caa8097da9eccff537217cb6c78b03",
+    "reward": 0.0,
+    "task": "terminal-bench/make-mips-interpreter",
+    "task_checksum": "929f50bc438e551fb6c09fdc9f91ab528e266bc57a79e52c90d398738a553a72",
+    "task_ref": "sha256:41a55da0abec5d7b32a0c2321f8b18e84000ca8074ae62c6874d6ed4a3a1cd3c",
+    "trial_id": "1f20531d-cfe7-47b1-9159-caaa9203af39",
+    "trial_name": "make-mips-interpreter__jSVkhJi"
+  },
+  "offline_evaluation": {
+    "progress_gap": {
+      "anchor_steps": [
+        136
+      ],
+      "final": {
+        "active_steps": 163,
+        "changed_observation_count_since_anchor": 1,
+        "last_progress_anchor_step": 136,
+        "last_structured_mutation_step": 136,
+        "last_verification_attempt_step": null,
+        "new_action_count_since_anchor": 119,
+        "progress_evidence_complete": true,
+        "repeated_action_count_since_anchor": 98,
+        "span_start_step": 137,
+        "step": 299,
+        "steps_since_anchor": 163,
+        "steps_since_last_structured_mutation": 163,
+        "steps_since_last_verification_attempt": null,
+        "tool_actions_since_anchor": 217,
+        "tool_error_count_since_anchor": 1,
+        "unchanged_repeat_count_since_anchor": 97,
+        "unknown_action_count_since_anchor": 0,
+        "verification_delta": 0,
+        "workspace_mutation_delta": 0
+      },
+      "longest_active_span": {
+        "active_steps": 163,
+        "changed_observation_count_since_anchor": 1,
+        "last_progress_anchor_step": 136,
+        "last_structured_mutation_step": 136,
+        "last_verification_attempt_step": null,
+        "new_action_count_since_anchor": 119,
+        "progress_evidence_complete": true,
+        "repeated_action_count_since_anchor": 98,
+        "span_start_step": 137,
+        "step": 299,
+        "steps_since_anchor": 163,
+        "steps_since_last_structured_mutation": 163,
+        "steps_since_last_verification_attempt": null,
+        "tool_actions_since_anchor": 217,
+        "tool_error_count_since_anchor": 1,
+        "unchanged_repeat_count_since_anchor": 97,
+        "unknown_action_count_since_anchor": 0,
+        "verification_delta": 0,
+        "workspace_mutation_delta": 0
+      }
+    },
+    "strict_stagnation": {
+      "detected_step_count": 5,
+      "intervals": [
+        {
+          "first_detected_step": 90,
+          "first_window": {
+            "active_steps": 16,
+            "changed_result_repeat_count": 0,
+            "end_step": 90,
+            "new_action_count": 0,
+            "observed_steps": 16,
+            "repeat_ratio": 1.0,
+            "repeated_action_count": 26,
+            "start_step": 75,
+            "tool_action_count": 26,
+            "tool_error_delta": 0,
+            "unchanged_result_repeat_count": 26,
+            "unique_action_count": 11,
+            "unknown_action_count": 0,
+            "verification_delta": 0,
+            "window_size": 16,
+            "workspace_mutation_delta": 0
+          },
+          "last_detected_step": 92,
+          "last_window": {
+            "active_steps": 16,
+            "changed_result_repeat_count": 0,
+            "end_step": 92,
+            "new_action_count": 0,
+            "observed_steps": 16,
+            "repeat_ratio": 1.0,
+            "repeated_action_count": 25,
+            "start_step": 77,
+            "tool_action_count": 25,
+            "tool_error_delta": 0,
+            "unchanged_result_repeat_count": 25,
+            "unique_action_count": 11,
+            "unknown_action_count": 0,
+            "verification_delta": 0,
+            "window_size": 16,
+            "workspace_mutation_delta": 0
+          }
+        },
+        {
+          "first_detected_step": 113,
+          "first_window": {
+            "active_steps": 16,
+            "changed_result_repeat_count": 0,
+            "end_step": 113,
+            "new_action_count": 0,
+            "observed_steps": 16,
+            "repeat_ratio": 1.0,
+            "repeated_action_count": 24,
+            "start_step": 98,
+            "tool_action_count": 24,
+            "tool_error_delta": 0,
+            "unchanged_result_repeat_count": 24,
+            "unique_action_count": 4,
+            "unknown_action_count": 0,
+            "verification_delta": 0,
+            "window_size": 16,
+            "workspace_mutation_delta": 0
+          },
+          "last_detected_step": 114,
+          "last_window": {
+            "active_steps": 16,
+            "changed_result_repeat_count": 0,
+            "end_step": 114,
+            "new_action_count": 0,
+            "observed_steps": 16,
+            "repeat_ratio": 1.0,
+            "repeated_action_count": 23,
+            "start_step": 99,
+            "tool_action_count": 23,
+            "tool_error_delta": 0,
+            "unchanged_result_repeat_count": 23,
+            "unique_action_count": 4,
+            "unknown_action_count": 0,
+            "verification_delta": 0,
+            "window_size": 16,
+            "workspace_mutation_delta": 0
+          }
+        }
+      ],
+      "window_size": 16
+    }
+  },
+  "oracle": {
+    "dataset": "terminal-bench/terminal-bench-2-1",
+    "exception_type": null,
+    "exceptions": 0,
+    "job": "2026-10-03__04-13-48",
+    "job_id": "71246bcd-f627-46ad-a52b-7fd8c039a647",
+    "reward": 1.0,
+    "task": "terminal-bench/make-mips-interpreter",
+    "task_checksum": "929f50bc438e551fb6c09fdc9f91ab528e266bc57a79e52c90d398738a553a72",
+    "task_ref": "sha256:41a55da0abec5d7b32a0c2321f8b18e84000ca8074ae62c6874d6ed4a3a1cd3c",
+    "trial_id": "f29955b8-4f26-40fb-9db8-852f4c874493",
+    "trial_name": "make-mips-interpreter__wxQNCgY"
+  },
+  "progress": {
+    "max_identical_tool_action_count": 68,
+    "repeated_tool_actions": 204,
+    "unique_tool_actions": 195
+  },
+  "receipt_type": "pureharness.external_evidence",
+  "runtime": {
+    "end_reason": "max_steps_exceeded",
+    "model_call_count": 300,
+    "protocol_completed": false,
+    "run_id": "be3ae0bf-561c-4ae9-8066-8fea0f52424c",
+    "step_count": 300,
+    "tool_call_count": 399,
+    "tool_execution_count": 398,
+    "tool_result_compaction_count": 5,
+    "tool_result_error_count": 3,
+    "trajectory_compaction_count": 286
+  },
+  "schema_version": 1,
+  "sources": [
+    {
+      "artifact": "agent/events.jsonl",
+      "sha256": "12c2d41528ca26db13bd9e8da95ad7dbf413436bee610cf6549b1d5750978e80"
+    },
+    {
+      "artifact": "agent/job-lock.json",
+      "sha256": "0a975ddcfc7a29e4e5e0a8bd96c379d6baf9d42462d65be788efbf93b8edc75b"
+    },
+    {
+      "artifact": "agent/job-result.json",
+      "sha256": "536cb82c4d630ce070fbdb5d1478ca9028ec8fb24496c63a5f978eb7afb3e4eb"
+    },
+    {
+      "artifact": "agent/run-record.json",
+      "sha256": "3d8c3d7cb13797abe57c67d269142657fabb4a353da5c549832b50c4cadb5c6d"
+    },
+    {
+      "artifact": "agent/trial-result.json",
+      "sha256": "700aa5b83bc5533f673edb69a62968dd63dac3613807c7cec91fb1afbe32e655"
+    },
+    {
+      "artifact": "oracle/job-result.json",
+      "sha256": "6d6c5f69b7cc04c72c2d26e0cb2ef3588c1dab4fd2147ef7fd14012b7a40436b"
+    },
+    {
+      "artifact": "oracle/trial-result.json",
+      "sha256": "b1d1d3ef1cc5ee2188b2badac2f3db2759b9116ed47103e9f47b99eb3cf78168"
+    }
+  ],
+  "stagnation_advisory": {
+    "advisory_count": 1,
+    "first_delivered_step": 91,
+    "first_detected_step": 90
+  },
+  "unavailable_evidence": []
+}

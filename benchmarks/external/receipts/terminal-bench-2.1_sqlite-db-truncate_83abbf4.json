@@ -1,0 +1,190 @@
+{
+  "coding": {
+    "verification_attempts": 31,
+    "verification_exit_nonzero": 9,
+    "verification_exit_zero": 22,
+    "verification_tool_errors": 0,
+    "workspace_mutations": 8
+  },
+  "context": {
+    "compacted_context_count": 96,
+    "configured_history_token_budget": 8000,
+    "context_build_count": 113,
+    "final_history_tokens": 7998,
+    "maximum_history_tokens": 8000
+  },
+  "external": {
+    "dataset": "terminal-bench/terminal-bench-2-1",
+    "exception_type": null,
+    "harbor_version": "0.23.0",
+    "job_id": "a9b9da27-df21-4a6f-b576-6320f7b30e48",
+    "job_name": "2026-10-03__03-40-43",
+    "model": "deepseek-v4-flash",
+    "model_provider": "deepseek",
+    "pureharness_revision": "83abbf439875ba0054cfe8e835de2e14f66b36b4",
+    "reward": 1.0,
+    "task": "terminal-bench/sqlite-db-truncate",
+    "task_checksum": "673cdff46735ca0b8d83c6c82c0a4e252149d31629e80da9d8439a05d771351c",
+    "task_ref": "sha256:956f038b479cc3b9b493553b57a60a8ff4154526386c3914c0b99e93e1ab6e87",
+    "trial_id": "adc0ddb4-5fc8-4bc8-9f09-375414689014",
+    "trial_name": "sqlite-db-truncate__Y44bw68"
+  },
+  "offline_evaluation": {
+    "progress_gap": {
+      "anchor_steps": [
+        28,
+        29,
+        39,
+        40,
+        41,
+        50,
+        59,
+        60,
+        61,
+        62,
+        75,
+        76,
+        77,
+        78,
+        79,
+        80,
+        81,
+        83,
+        84,
+        85,
+        86,
+        87,
+        88,
+        89,
+        90,
+        91,
+        93,
+        94,
+        95,
+        96,
+        103,
+        104,
+        106,
+        107,
+        109,
+        110,
+        111
+      ],
+      "final": {
+        "active_steps": 0,
+        "changed_observation_count_since_anchor": 0,
+        "last_progress_anchor_step": 111,
+        "last_structured_mutation_step": 109,
+        "last_verification_attempt_step": 111,
+        "new_action_count_since_anchor": 0,
+        "progress_evidence_complete": true,
+        "repeated_action_count_since_anchor": 0,
+        "span_start_step": 112,
+        "step": 112,
+        "steps_since_anchor": 1,
+        "steps_since_last_structured_mutation": 3,
+        "steps_since_last_verification_attempt": 1,
+        "tool_actions_since_anchor": 0,
+        "tool_error_count_since_anchor": 0,
+        "unchanged_repeat_count_since_anchor": 0,
+        "unknown_action_count_since_anchor": 0,
+        "verification_delta": 0,
+        "workspace_mutation_delta": 0
+      },
+      "longest_active_span": {
+        "active_steps": 28,
+        "changed_observation_count_since_anchor": 0,
+        "last_progress_anchor_step": null,
+        "last_structured_mutation_step": null,
+        "last_verification_attempt_step": null,
+        "new_action_count_since_anchor": 29,
+        "progress_evidence_complete": true,
+        "repeated_action_count_since_anchor": 0,
+        "span_start_step": 0,
+        "step": 27,
+        "steps_since_anchor": 28,
+        "steps_since_last_structured_mutation": null,
+        "steps_since_last_verification_attempt": null,
+        "tool_actions_since_anchor": 29,
+        "tool_error_count_since_anchor": 2,
+        "unchanged_repeat_count_since_anchor": 0,
+        "unknown_action_count_since_anchor": 0,
+        "verification_delta": 0,
+        "workspace_mutation_delta": 0
+      }
+    },
+    "strict_stagnation": {
+      "detected_step_count": 0,
+      "intervals": [],
+      "window_size": 16
+    }
+  },
+  "oracle": {
+    "dataset": "terminal-bench/terminal-bench-2-1",
+    "exception_type": null,
+    "exceptions": 0,
+    "job": "2026-10-03__02-43-37",
+    "job_id": "d7a7128b-ac35-4751-940a-b89cf4a519ce",
+    "reward": 1.0,
+    "task": "terminal-bench/sqlite-db-truncate",
+    "task_checksum": "673cdff46735ca0b8d83c6c82c0a4e252149d31629e80da9d8439a05d771351c",
+    "task_ref": "sha256:956f038b479cc3b9b493553b57a60a8ff4154526386c3914c0b99e93e1ab6e87",
+    "trial_id": "2631402b-a97c-4464-a7e5-8bcad5397523",
+    "trial_name": "sqlite-db-truncate__evfdEL7"
+  },
+  "progress": {
+    "max_identical_tool_action_count": 11,
+    "repeated_tool_actions": 17,
+    "unique_tool_actions": 99
+  },
+  "receipt_type": "pureharness.external_evidence",
+  "runtime": {
+    "end_reason": "completed",
+    "model_call_count": 113,
+    "protocol_completed": true,
+    "run_id": "7d3d02c4-834b-4f1e-9f70-60ccd03102df",
+    "step_count": 113,
+    "tool_call_count": 116,
+    "tool_execution_count": 116,
+    "tool_result_compaction_count": 4,
+    "tool_result_error_count": 2,
+    "trajectory_compaction_count": 96
+  },
+  "schema_version": 1,
+  "sources": [
+    {
+      "artifact": "agent/events.jsonl",
+      "sha256": "e4813f1cb23b48223c111001a04584dccbbd0d908224c1127e18e98cefad22b2"
+    },
+    {
+      "artifact": "agent/job-lock.json",
+      "sha256": "5d41ee846a86c2f1f0741a17380404e9597a9cc43be158e32fa6ae5e67bf6e9d"
+    },
+    {
+      "artifact": "agent/job-result.json",
+      "sha256": "7c10ca2552a51d363a61bc03ec256868eddd4f81f2d86f74cc56b521760c990b"
+    },
+    {
+      "artifact": "agent/run-record.json",
+      "sha256": "cd83bc08488554328580a68461b51ddf38f2dd00b6bb038455e3d187a447a36e"
+    },
+    {
+      "artifact": "agent/trial-result.json",
+      "sha256": "646ba48c3ea4332ab8c4aa63241164b1e871668acd2dfdf91c0c736cc3dfd9ad"
+    },
+    {
+      "artifact": "oracle/job-result.json",
+      "sha256": "da2da3b2a3c593baf23d1686d976d6eeab6d55c3e1883f3e90d617519bde9c22"
+    },
+    {
+      "artifact": "oracle/trial-result.json",
+      "sha256": "0cbb7a9f4300e1fc552af9d6fcf9b08fb090b5fe56b038d9dbe6a93d387f66c7"
+    }
+  ],
+  "stagnation_advisory": {
+    "advisory_count": 0,
+    "first_delivered_step": null,
+    "first_detected_step": null
+  },
+  "unavailable_evidence": []
+}

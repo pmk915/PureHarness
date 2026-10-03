@@ -3,8 +3,8 @@
 Third-party Harbor / Terminal-Bench results complement the small controlled
 PureHarness benchmark. This directory contains reproducible, bounded summaries,
 not raw benchmark data, task fixtures, or copies of Harbor jobs. M24.4A defines
-the format and validates temporary receipts; reviewed receipt backfill is a
-separate M24.4B step. `receipts/` is intentionally empty for this milestone.
+the format and offline extractor; M24.4B backfills the four verified pilot
+receipts indexed below. No benchmark execution is part of the backfill.
 
 ## Offline extraction
 
@@ -106,26 +106,41 @@ Record unhealthy gates faithfully; consumers must review them before interpretin
 agent results. A healthy Oracle gate is a prerequisite for benchmark validity,
 not evidence that the agent succeeded.
 
-## Pilot validation and limits
+## Verified receipt index (M24.4B)
 
-M24.4A extracted the four existing pilots offline into temporary files:
+Each receipt was generated with an explicit task-matched `--oracle-job`,
+independently re-extracted to a temporary directory, and compared byte-for-byte.
+SHA-256 inventories of all files in the seven source jobs matched before and
+after extraction. Job/trial IDs, dataset, task ref/checksum, model and full
+recorded PureHarness revision were checked against the source artifacts.
+Short revisions in filenames and this table are presentation only.
 
-| Trial | Reward | Runtime end / steps | Tool calls / executions | Mutations / verification | Advisory | Longest active gap |
-|---|---:|---|---|---|---|---:|
-| SQLite `Y44bw68` | 1 | completed / 113 | 116 / 116 | 8 / 31 | 0 | 28 |
-| Regex `wZHN9Lz` | 1 | completed / 10 | 11 / 11 | 2 / 1 | 0 | 3 |
-| MIPS baseline `WSR63QE` | 0 | max_steps_exceeded / 300 | 447 / 447 | 0 / 0 | 0 | 300 |
-| MIPS advisory `jSVkhJi` | 0 | max_steps_exceeded / 300 | 399 / 398 | 1 / 0 | 1, detected 90 / delivered 91 | 163 |
+Oracle health below means recorded reward 1 and exceptions 0 for the separate
+selected Oracle trial; it does not establish agent success.
 
-All three separately supplied Oracle gates have reward 1 and exceptions 0.
+| Task | Treatment / revision | Oracle health | Reward | Runtime end reason | Steps | Receipt |
+|---|---|---|---:|---|---:|---|
+| sqlite-db-truncate | post-M24.2 / `83abbf4` | 1 / 0 | 1 | completed | 113 | [JSON](receipts/terminal-bench-2.1_sqlite-db-truncate_83abbf4.json) |
+| regex-log | post-M24.2 / `83abbf4` | 1 / 0 | 1 | completed | 10 | [JSON](receipts/terminal-bench-2.1_regex-log_83abbf4.json) |
+| make-mips-interpreter | baseline / `83abbf4` | 1 / 0 | 0 | max_steps_exceeded | 300 | [JSON](receipts/terminal-bench-2.1_make-mips-interpreter_baseline_83abbf4.json) |
+| make-mips-interpreter | bounded advisory / `afca7d2` | 1 / 0 | 0 | max_steps_exceeded | 300 | [JSON](receipts/terminal-bench-2.1_make-mips-interpreter_advisory_afca7d2.json) |
+
+The dataset is `terminal-bench/terminal-bench-2-1`; all four recorded model
+identities are `deepseek-v4-flash` (provider `deepseek`), with Harbor `0.23.0`.
+For re-extraction, use `jobs/<external.job_name>` and explicitly supply
+`--oracle-job jobs/<oracle.job>` from each receipt, writing to a new file.
 The summaries match the [progress-gap audit](../../docs/progress_gap_audit.md).
+
+## Pilot limits
+
 These are n=1 pilots, not statistical evidence of causal advisory improvement
 or a leaderboard. Task revisions/checksums, model, runtime revision, missing
 evidence and Oracle health matter when comparing receipts. Hashes establish
 artifact identity, not authenticity or benchmark validity. Full history is
 read transiently for offline evaluation; receipts contain only bounded summaries.
 
-After review, M24.4B can backfill selected receipts with task-matched Oracle
-references, compare byte-identical re-extraction and source hashes, and publish
-only allowlisted summaries. Do not add large `jobs/` trees or execute benchmarks
-as part of that backfill.
+The backfill contains only allowlisted summaries, not prompts, raw tool output,
+environment values, task contents or verifier logs. A runtime max-steps end
+reason is not a verifier-failure diagnosis; mutation and stagnation evidence
+are not task-success judgments. Do not add large `jobs/` trees or execute
+benchmarks as part of receipt maintenance.
