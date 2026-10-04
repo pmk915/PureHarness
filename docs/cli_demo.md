@@ -117,9 +117,10 @@ print(json.dumps(coding[-1]["payload"], indent=2, sort_keys=True))
 PY
 ```
 
-For an unmodified fixture, the expected trajectory has five model requests,
-four tools, one structured mutation, one marked verification attempt with exit
-zero, and `end_reason="completed"`. These are reproducible behavioral checks,
+For an unmodified fixture, the verified demo has five logical steps / five model
+requests, four tool calls, one structured mutation, one marked verification
+attempt with exit zero, and `end_reason="completed"`. Its separate machine-mode
+run produced 45 JSONL events. These are demo-specific behavioral checks,
 not a universal quality score or external success claim. Run IDs, session IDs,
 timestamps, absolute workspace/interpreter paths, durations, and token estimates
 may differ; do not expect byte-identical evidence or terminal recordings.
@@ -130,8 +131,19 @@ repair an unexpected state or serve another task.
 
 ## Real capture instructions
 
-No screenshot or GIF has been captured or committed yet. The
-[asset directory](assets/README.md) tracks the intended files and review rules.
+Two real, manually captured terminal screenshots are now available:
+
+- [Compact CLI](assets/cli-compact.png): the concise human-facing UX, including
+  task input, reads, update, verification, completion, and RunRecord location.
+- [Verbose CLI](assets/cli-verbose.png): an early runtime-observability excerpt
+  showing context accounting, model requests, exposed-tool/schema-token
+  metadata, policy decisions, and tool execution—not final completion.
+
+Both show `offline-scripted-demo`; they demonstrate real execution/rendering,
+not autonomous LLM task-solving. The [asset notes](assets/README.md) record the
+privacy review and provenance limits. No GIF is available; the two PNGs are
+sufficient for the current landing page and easier to inspect than animation.
+The instructions below remain available for future real captures.
 Capture the **actual terminal**; never reconstruct UI text, substitute outcomes,
 or describe a scripted-model capture as a real-model benchmark.
 

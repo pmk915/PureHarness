@@ -14,6 +14,14 @@
 这是一个实验性系统项目，不是另一个聊天 UI、SaaS 产品、
 LangChain/LangGraph 替代品，也不宣称具有最先进的基准性能。
 
+仓库演示使用**离线脚本模型**，走真实的 PureHarness 执行、工具、验证、渲染和持久化路径。
+这是 UI／运行时演示，不是自主 LLM 任务求解性能的证据。
+
+<p><a href="docs/assets/cli-compact.png"><img src="docs/assets/cli-compact.png" alt="真实离线脚本 CLI 演示：任务输入、文件读取、补丁、验证通过、运行完成和 RunRecord 路径" width="900"></a></p>
+
+紧凑 CLI：读取 → 修改 → 验证 → 完成。
+[复现演示](docs/cli_demo.md)。
+
 ## 为什么做 PureHarness
 
 长时间运行的 Agent 需要的不只是模型循环：会话状态应能跨重启保留，
@@ -80,8 +88,12 @@ cd /path/to/workspace
 `/exit`。只有模型响应采用脚本：现有 CLI 和工具真实执行读取、补丁与本地验证，
 并将 RunRecord 写入新建的临时目录。安装完成后不需要 API key 或网络。
 [演示指南](docs/cli_demo.md) 包含 plain/JSONL 模式、精确产物位置和终端录制流程。
-[可视化素材](docs/assets/README.md) 等待真实采集，目前没有截图或 GIF。
+[素材说明](docs/assets/README.md) 包含两张真实截图及隐私审查；GIF 保持可选，目前未采集。
 这展示的是执行过程，不是 LLM 推理能力或基准性能。
+
+已验证的脚本演示事实：**5 个逻辑步骤、4 次工具调用、1 次结构化工作区修改、
+1 次成功验证**；单独的机器模式运行产生 **45 条 JSONL 事件**。
+这些是演示执行事实，不是基准性能指标。
 
 安装 CLI extra 并使用真实终端时，默认紧凑 Rich 界面会展示工作区、模型和会话信息，
 相关文件与命令活动、验证结果、失败，以及单独呈现的助手回答。
@@ -99,6 +111,18 @@ pureharness --locale zh-CN
 重定向输出也会回退到纯文本。
 默认语言为英语；中文本地化适用于 Rich 呈现，纯文本输出仍为英语。
 `--plain --verbose` 组合会被拒绝。
+
+Verbose 模式展示上下文构建、历史与上下文计量、模型调用、暴露工具数量和估算的
+schema token、工具策略决策及工具执行。下面的真实截图展示早期连续的模型／工具循环，
+不包含最终完成；上面的 compact 图展示完整流程。
+这里使用同一离线脚本模型，不是在线 LLM 提供方。
+
+<details>
+<summary>Verbose 运行时可观测性——真实截图</summary>
+
+<p><a href="docs/assets/cli-verbose.png"><img src="docs/assets/cli-verbose.png" alt="真实 verbose 离线脚本 CLI 演示：上下文计量、模型请求、暴露工具元数据、策略决策及文件读取循环" width="850"></a></p>
+
+</details>
 
 在可丢弃的工作区尝试一个小任务，然后检查会话：
 

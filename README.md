@@ -15,6 +15,16 @@ are the primary workload—not the definition of the runtime kernel.
 This is an experimental systems project, not another chat UI, a SaaS product,
 a LangChain/LangGraph replacement, or a claim of state-of-the-art performance.
 
+The repository demo uses an **offline scripted model** to exercise real
+PureHarness execution, tools, verification, rendering, and persistence.
+It is a UI/runtime demonstration, not evidence of autonomous LLM task-solving
+performance.
+
+<p><a href="docs/assets/cli-compact.png"><img src="docs/assets/cli-compact.png" alt="Real offline scripted CLI demo: task input, file reads, patch, verification passed, completed run, and RunRecord path" width="900"></a></p>
+
+Compact CLI: read → patch → verify → completed.
+[Reproduce the demo](docs/cli_demo.md).
+
 ## Why PureHarness
 
 Long-running agents need more than a model loop: conversation state must
@@ -89,9 +99,15 @@ Run these separately. At the prompt, enter
 real reads, a patch, and local verification, and write RunRecords in a fresh
 temporary directory. No API key or network is needed after installation.
 The [demo guide](docs/cli_demo.md) covers plain/JSONL modes, exact artifact
-locations, and terminal recording. [Visual assets](docs/assets/README.md) await
-real capture; no screenshot or GIF is currently included. This demonstrates
-execution, not LLM reasoning or benchmark performance.
+locations, and terminal recording. The [asset notes](docs/assets/README.md)
+cover the two real screenshots and privacy review; a GIF remains optional and
+uncaptured. This demonstrates execution, not LLM reasoning or benchmark
+performance.
+
+Verified scripted-demo facts: **5 logical steps, 4 tool calls, 1 structured
+workspace mutation, and 1 successful verification**; the separate machine-mode
+run produced **45 JSONL events**. These are demo execution facts, not benchmark
+performance metrics.
 
 With the CLI extra and a real terminal, the default compact Rich display shows
 the workspace/model/session header, relevant file and command activity,
@@ -110,6 +126,19 @@ pureharness --locale zh-CN
 plain text. Redirected output also falls back to plain text.
 The default locale is English; Chinese localization applies to Rich rendering,
 while plain output remains English. `--plain --verbose` is rejected.
+
+Verbose mode exposes context construction, history/context accounting, model
+invocation, exposed-tool counts and estimated schema tokens, tool policy
+decisions, and tool execution. The real capture below shows early repeated
+model/tool cycles, not final completion; the compact image above shows the full
+flow. It uses the same offline scripted model, not a live LLM provider.
+
+<details>
+<summary>Verbose runtime observability — real screenshot</summary>
+
+<p><a href="docs/assets/cli-verbose.png"><img src="docs/assets/cli-verbose.png" alt="Real verbose offline scripted CLI demo showing context accounting, model requests, exposed-tool metadata, policy decisions, and file-read cycles" width="850"></a></p>
+
+</details>
 
 Try a small task in a disposable workspace, then inspect the session:
 
