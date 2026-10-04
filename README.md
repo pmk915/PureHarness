@@ -1,50 +1,46 @@
+English | [简体中文](README.zh-CN.md)
+
 # PureHarness
 
-PureHarness is a small, transparent, benchmark-driven CLI agent harness for
-studying and running reliable long-horizon, tool-using agents. It is an
-educational and experimental systems project focused on execution, durable
-conversation state, model-facing context, observable traces, replayable run
-evidence, and external task verification.
+A small, transparent execution harness for long-running, tool-using AI agents,
+built to make execution reliable and measurable.
 
-The coding agent is the main workload used to exercise the runtime. It is not
-the runtime kernel itself.
+Execution-first, benchmark-driven: preserve raw history, control tool effects,
+keep model context bounded, and inspect what actually happened. Coding tasks
+are the primary workload—not the definition of the runtime kernel.
 
-PureHarness is not a LangChain replacement, SaaS backend, multi-agent
-platform, production security boundary, or full coding-agent product. The
-project deliberately favors explicit Python components over a broad framework.
+[Get started](#quick-start) · [Interactive CLI](#interactive-cli-demo) ·
+[External evaluation evidence](benchmarks/external/README.md)
 
-## Architecture
+This is an experimental systems project, not another chat UI, a SaaS product,
+a LangChain/LangGraph replacement, or a claim of state-of-the-art performance.
 
-```text
-                    CLI
-                     |
-                     v
-                Agent Runtime
-           /          |           \
-       Context      Session       Tools
-          |            |            |
-      TaskState    Events/Trace   ToolPolicy
-                       |            |
-             Durable Session   ApprovalHandler
-                 + RunRecord       |
-                            ExecutionBackend
-                                /       \
-                               Local     Docker
+## Why PureHarness
 
-             External Benchmark + Verifier
-                          |
-                      Experiment
-```
+Long-running agents need more than a model loop: conversation state must
+survive restarts, context must remain usable, tool effects need explicit
+boundaries, and completion must be distinguished from verified task success.
+PureHarness makes these concerns small, replaceable, and inspectable rather
+than hiding them behind a broad framework.
 
-The runtime kernel depends on narrow model, context, tool, policy, and
-execution interfaces. The CLI and benchmark layers compose those interfaces;
-the kernel does not depend on either layer. See
-[the architecture document](docs/architecture.md) for the implemented
-boundaries.
+## Core capabilities
 
-## Quickstart
+- **Durable sessions:** preserve raw conversation history and per-run evidence;
+  resume without re-executing past work.
+- **Bounded context:** derive TaskState, project large tool results, and compact
+  complete old tool interactions under an estimated-token budget.
+- **Structured tool execution:** workspace-scoped coding tools, read-before-edit
+  checks, and replaceable command execution backends.
+- **Policy and human approval:** separate tool visibility, authorization,
+  one-time approval, and execution.
+- **Verification-aware completion:** bounded reconsideration using explicit
+  mutation and verification evidence—not an automatic correctness judgment.
+- **Observable execution evidence:** RunRecords, progress snapshots, strict
+  repetition evidence, and offline progress-gap analysis.
 
-PureHarness requires Python 3.11 or newer.
+## Quick Start
+
+Requires Python 3.11+. Install the optional CLI presentation dependencies:
 
 ```bash
 git clone https://github.com/pmk915/pureharness.git
@@ -55,205 +51,255 @@ export DEEPSEEK_API_KEY='your-key'
 .venv/bin/pureharness --help
 ```
 
-The interactive CLI uses DeepSeek by default. It loads an uncommitted `.env`
-file as well as the process environment. Start it in the project you want the
-agent to inspect and edit:
+The CLI uses DeepSeek by default and also loads an uncommitted `.env`.
+Ordinary task turns call the provider and may incur costs. Start with a
+disposable, trusted workspace: the default local backend is **not a sandbox**
+and inherits the host environment.
+
+Run a task, save its evidence, and inspect it without another model call:
+
+```bash
+.venv/bin/pureharness run "fix the failing test" --workspace /path/to/workspace --record run.json
+.venv/bin/pureharness inspect run.json
+```
+
+For interactive use, launch from the workspace you want to inspect and edit:
 
 ```bash
 cd /path/to/workspace
 /path/to/pureharness/.venv/bin/pureharness
 ```
 
-One interactive conversation keeps one Session across multiple `Agent.run()`
-calls and process restarts. With the `cli` extra installed, real terminal output
-uses compact Rich event presentation, a workspace/model/session header,
-and a separated assistant response. Redirected output and injected output
-callables use deterministic plain text. Choose presentation explicitly with:
+Help, inspection, session listing, passive resume, and slash commands do not
+require an API key. Installation and ordinary provider-backed turns do require
+network access.
+
+## Interactive CLI demo
+
+With the CLI extra and a real terminal, the default compact Rich display shows
+the workspace/model/session header, relevant file and command activity,
+verification outcomes, failures, and a separated assistant response.
+The commands below assume the installed executable is on your PATH:
 
 ```bash
-pureharness                         # compact Rich interactive presentation
-pureharness --verbose               # detailed human observability
-pureharness --plain                 # deterministic plain presentation
+pureharness
+pureharness --verbose
+pureharness --plain
 pureharness --locale en
 pureharness --locale zh-CN
 ```
 
-Compact display emphasizes file actions, commands, new verification outcomes,
-approvals, failures, and recovery. It changes presentation only: runtime events
-and persisted evidence remain complete. `--verbose` restores detailed context,
-model, policy, and evidence output; it is not debug logging and does not force
-Rich on redirected/injected output. `--plain --verbose` is rejected.
+`--verbose` exposes detailed human observability; `--plain` forces deterministic
+plain text. Redirected output also falls back to plain text.
+The default locale is English; Chinese localization applies to Rich rendering,
+while plain output remains English. `--plain --verbose` is rejected.
 
-The default locale is `en`; plain output remains English. The optional
-prompt-toolkit input adapter provides the `You ›` prompt, in-process history
-(Up/Down), Tab completion for slash commands, and basic terminal editing. Enter
-submits; Alt+Enter (or Escape then Enter) inserts a newline. History is kept only
-in memory, and approval responses are excluded from it. Without the optional
-dependency or terminal input/output, the CLI falls back to ordinary input.
-Custom `input_fn` / `output_fn` callables remain authoritative for embedding and
-tests. Ctrl+C cancels current input or interrupts an active Run and returns to
-the prompt; Ctrl+D exits cleanly.
+Try a small task in a disposable workspace, then inspect the session:
 
 | Command | Purpose |
-| --- | --- |
-| `/help` | Show interactive commands |
-| `/status` | Show session, workspace, model, latest Run, and context usage |
-| `/session` | Show durable identity, UTC timestamps, and history/Run counts |
-| `/runs` | Show the latest 10 RunRecords in this session |
-| `/eval` | Show execution metrics, diagnosis, and advisory recovery for the latest finalized Run |
-| `/exit` | Save and leave the session |
+|---|---|
+| `/help` | Show available commands |
+| `/status` | Show workspace, model, latest run, and context usage |
+| `/session` | Show durable identity and history/run counts |
+| `/runs` | List the latest 10 RunRecords |
+| `/eval` | Inspect execution metrics, diagnosis, and recovery guidance |
+| `/exit` | Save and leave |
 
-Sessions are stored under `~/.pureharness/sessions` by default. Set
-`PUREHARNESS_HOME` to isolate or relocate that state. To export an additional
-RunRecord per turn, pass `--record-dir PATH` before entering the session.
-
-## Commands
-
-Run a single task and optionally save its structured evidence:
-
-```bash
-pureharness run "fix the failing test" --workspace . --record run.json
-pureharness inspect run.json
-```
-
-Discover and resume durable interactive sessions:
+Optional input editing supports in-memory history and slash-command completion.
+Enter submits; Alt+Enter inserts a newline. Ctrl+C cancels input or interrupts
+the current run; Ctrl+D exits. See the [CLI architecture](docs/architecture.md)
+for input fallback, embedding, and approval details.
 
 ```bash
 pureharness sessions
 pureharness resume <session-id>
-pureharness --continue
 pureharness --workspace /path/to/workspace --continue
 ```
 
-Resume loads prior conversation state passively. It does not call the model or
-re-execute historical tools; the next ordinary user message starts a new Run.
-`--continue` selects the most recently updated durable session whose persisted
-workspace equals the resolved selected workspace. It reports an error when no
-matching session exists, rather than starting a new one. Explicit resume uses
-the saved workspace and model. Rich presentation flags can also follow resume:
-`pureharness resume <session-id> --locale zh-CN --plain`.
-`--verbose` works before or after `resume`, and with `--continue`.
-All slash commands remain available without an API key, including `/eval` on
-the latest persisted Run immediately after resume.
+Sessions default to `~/.pureharness/sessions`; `PUREHARNESS_HOME` relocates them.
+Resume restores raw history and waits for a new turn, never repeating historical
+model calls or tools. `--continue` requires a matching saved workspace.
+`--record-dir PATH` exports an additional RunRecord per interactive turn.
 
-After each finalized Run, compact Rich displays a minimal M22 evaluation:
+This section is the home for a future visual walkthrough; no screenshot or
+recorded demo is currently included. A separate
+[coding demo](examples/coding_agent_demo.py) uses a temporary workspace and
+real provider calls; it is not an offline test.
 
-```text
-Run
-  Protocol completion: 1.000
-  Diagnosis: none
+## Architecture
+
+```mermaid
+flowchart TD
+    U["User task"] --> A["Agent runtime"]
+    S["Session: raw history"] <--> A
+    A --> C["Context + TaskState"]
+    C --> M["Model invocation"]
+    M --> A
+    A --> T["Tool selection / policy / approval"]
+    T --> X["ToolExecutor + execution backend"]
+    X --> A
+    A --> R["Completion + bounded recovery"]
+    A --> E["RunRecord + live JSONL / progress evidence"]
+    E --> V["Offline evaluation + external receipts"]
+    O["External verifier outcome"] --> V
 ```
 
-Verbose and plain modes retain the existing automatic metrics block, including
-step efficiency and tool reliability.
-`/eval` adds Run ID, end reason, steps, tool counts, diagnosis confidence/reason,
-and a RecoverySignal. Recovery actions are suggestions only; they never retry a
-tool or alter a prompt. Completion means protocol execution completed, not
-verified task correctness. The deterministic M22 metrics observe RunRecord;
-trusted benchmark verification remains a separate external oracle. A completed
-Run may still contain tool errors or fail the benchmark verifier.
+The runtime coordinates narrow interfaces. Coding tools, model providers,
+terminal renderers, persistence, benchmarks, and Harbor are adapters outside
+the kernel. TaskState and context are derived views of Session, not replacement
+history. Evaluation consumes evidence without controlling execution.
+See the [architecture](docs/architecture.md) for implemented versus target
+boundaries and the [source](src/pureharness/) for the components.
 
-Use the versioned local machine interfaces when output will be consumed by a
-program:
+## Reliability mechanisms
+
+- Context selection preserves complete tool-call/result units; deterministic
+  projection and compaction leave raw Session history intact.
+- Structured edits require prior observation of existing files and recheck
+  freshness before execution. Indirect command mutations are not inferred.
+- Explicit `purpose="verification"` observations can trigger a bounded neutral
+  completion recheck. PureHarness neither automatically runs tests nor decides
+  whether the task is correct.
+- Recoverable model-output errors and provider context overflow have bounded
+  retry/rebuild paths. Interrupted, uncertain tool effects are never
+  automatically retried.
+- Strict stagnation evidence describes exact unchanged repetition. The optional
+  bounded advisory is separate; offline progress-gap evidence records activity
+  without new structured mutation/verification anchors. Neither is task failure.
+- Skills provide versioned procedural guidance, not authorization or an
+  independent source of state.
+
+Policy, approval, and isolation are different boundaries. Approval is one-time
+and fails closed without an explicit approving decision; one-shot mode has no
+interactive approval handler. Local execution is not isolated; the optional
+Docker backend is not a hardened hostile multi-tenant boundary.
+Read the [security model](docs/security.md) before exposing workspaces or secrets.
+
+## Observability
+
+`RunRecord` is finalized per-run evidence; JSONL events are live occurrence-time
+observations. `ProgressSnapshot` tracks action counts and repetition, while
+coding evidence tracks structured mutations and explicitly marked verification.
+Offline stagnation and progress-gap evaluation distinguish exact repeats,
+novel actions, and missing structured anchors without judging task correctness.
+
+Machine output is separate from the interactive display:
 
 ```bash
-pureharness run "fix the failing test" --output jsonl
+pureharness run "fix the failing test" --workspace /path/to/workspace --output jsonl
 pureharness inspect run.json --json
 pureharness sessions --json
 ```
 
-JSONL run mode writes only one JSON event per stdout line. Configuration and
-startup errors go to stderr and the process exit code remains authoritative.
-Interactive mode stays human-facing.
+JSONL mode emits only JSON events on stdout; diagnostics go to stderr.
+Observational replay never executes models or tools. Versioned external
+receipts combine bounded runtime facts with separately recorded external
+outcomes. See the [observability guide](docs/observability.md).
 
-When an injected policy returns `REQUIRE_APPROVAL`, interactive mode displays a
-redacted argument preview and asks for a one-time decision:
+## Evaluation
+
+Three complementary evidence layers keep execution and correctness separate:
+
+1. **Internal deterministic benchmarks:** isolated copied workspaces and trusted
+   verifiers compare context/tool-exposure configurations. Unit tests use
+   scripted models; real-model experiments are explicitly API-backed.
+   See the [benchmark guide](benchmarks/README.md),
+   [fixture validity audit](benchmarks/VALIDITY.md), and
+   [experiment protocol](benchmarks/REAL_MODEL_EXPERIMENT.md).
+2. **External Terminal-Bench pilots:** task-matched Oracle health gates and
+   recorded rewards remain separate from runtime end reasons.
+   See the [external evidence pack](benchmarks/external/README.md).
+3. **Failure analysis and receipts:** deterministic metrics, rule-based
+   diagnosis, reports, and recovery guidance consume trajectories offline;
+   strict stagnation and progress-gap evidence describe observed behavior.
+   See the [evaluation package](src/pureharness/evaluation/) and
+   [progress-gap audit](docs/progress_gap_audit.md).
+
+The CLI's protocol-completion metric is not verified task success. Recovery
+guidance does not execute changes. There is no universal AgentScore or aggregate
+external ranking.
+
+## Terminal-Bench external evidence
+
+Failures are part of the evidence. The committed pack includes these five
+individual pilots, all recorded with `deepseek-v4-flash`:
+
+| Task | Treatment / revision | External reward | Runtime end reason | Steps |
+|---|---|---:|---|---:|
+| sqlite-db-truncate | context-atomicity fix / `83abbf4` | 1 | completed | 113 |
+| regex-log | context-atomicity fix / `83abbf4` | 1 | completed | 10 |
+| make-mips-interpreter | baseline / `83abbf4` | 0 | max_steps_exceeded | 300 |
+| make-mips-interpreter | bounded advisory / `afca7d2` | 0 | max_steps_exceeded | 300 |
+| make-mips-interpreter | bounded advisory, repeat2 / `afca7d2` | 0 | max_steps_exceeded | 300 |
+
+The generic context-atomicity correction is covered by
+[regression tests](tests/test_context_atomicity.py); the recorded post-fix
+sqlite-db-truncate pilot completed with reward 1. The regex-log pilot also
+completed with reward 1. These outcomes do not establish a general success rate.
+
+make-mips-interpreter remained unsolved under the evaluated DeepSeek /
+300-step configuration. Advisory delivery is recorded in both advisory-enabled
+pilots, but reliable task-level improvement has not been established.
+Each receipt links to a separately recorded, task-matched Oracle trial with
+reward 1 and exceptions 0; the MIPS receipts share the same Oracle trial.
+Oracle health is not agent success.
+
+See the [receipt index and limitations](benchmarks/external/README.md) for full
+revisions, task identities/checksums, source hashes, and individual JSON receipts.
+Pack validation checks committed receipt/index consistency—not source
+authenticity or task correctness—and does not rerun Harbor.
+Runtime completion, external reward, mutation evidence, and advisory delivery
+must not be conflated. These are pilots, not a leaderboard or causal study.
+
+## Repository structure
 
 ```text
-Approval required
-Tool: run_command
-Arguments:
-  argv: ["make", "clean"]
-Approve this action? [y/N]: y
+src/pureharness/       Runtime interfaces and concrete adapters
+  evaluation/         Offline metrics, diagnosis, reports, and evidence
+tests/                Deterministic regression tests
+docs/                 Architecture, security, and observability details
+examples/             Small runnable demonstrations
+scripts/              Offline evidence extraction and validation
+benchmarks/
+  tasks/              Controlled fixtures and separate trusted verifiers
+  external/           Versioned external receipts and their index
 ```
 
-Only `y` or `yes` (case-insensitive) approves. Empty, invalid, EOF, or Ctrl+C
-input denies the action. One-shot mode has no interactive approval handler and
-therefore fails closed for approval-gated actions.
+## Design principles
 
-Run a deliberately small real-model benchmark experiment:
+- Keep the kernel small; prefer explicit Python abstractions to framework magic.
+- Session is raw source truth; TaskState, context, and summaries are derived.
+- Tool exposure is not authorization; approval is not isolation.
+- A Session spans turns; each run produces its own RunRecord.
+- Resume restores state; replay observes evidence. Neither re-executes history.
+- Interruption preserves evidence but cannot roll back uncertain tool effects.
+- Observers consume events and cannot control execution; listener failures are
+  isolated.
+- Runtime completion is not externally verified task success.
 
-```bash
-pureharness benchmark \
-  --task simple_fix \
-  --config raw_baseline \
-  --repetitions 1 \
-  --output benchmarks/results/first-run.jsonl
-```
+Concurrent session writers, branching/relocation, full-screen TUI, web services,
+multi-agent orchestration, and production security containment are not current
+capabilities.
 
-The benchmark command makes nondeterministic, potentially paid API calls. Its
-ordinary unit tests use scripted models and never require an API key. Read the
-[benchmark guide](benchmarks/README.md) and
-[real-model experiment protocol](benchmarks/REAL_MODEL_EXPERIMENT.md) before
-running the full matrix.
+## Development and contribution
 
-## Core ideas
-
-- **History is not model context.** Session keeps the raw trajectory; context
-  projection, TaskState, compaction, and token-budget selection are derived
-  model-facing views.
-- **Completed is not task success.** An Agent can finish normally while an
-  external trusted benchmark verifier still rejects its work.
-- **Replay is not re-execution.** Observational replay reads RunRecord evidence
-  without calling a model, tool, policy, or execution backend again.
-- **Resume is not replay.** Resume restores durable logical conversation state
-  and waits for a new turn; it never repeats historical model or tool work.
-- **Policy is not approval or isolation.** ToolPolicy classifies an action;
-  ApprovalHandler obtains a host decision when required; ExecutionBackend
-  decides where an approved action runs. Approval does not make code safe.
-- **Session is not Run.** A Session spans conversation turns, while every
-  `Agent.run()` produces its own RunRecord.
-- **Interrupted is not failed.** Ctrl+C finalizes the current RunRecord as
-  `interrupted`, rolls Session back to its last durable logical boundary, and
-  returns control to the prompt. An uncertain in-flight tool is never resumed
-  or automatically retried.
-- **Live events are not persisted evidence.** JSONL exposes execution while it
-  happens; RunRecord is finalized evidence; replay is a read-only ordered view
-  derived from that evidence.
-
-## Testing
+Install development dependencies and run the offline checks:
 
 ```bash
 .venv/bin/python -m pip install -e '.[cli,dev]'
 .venv/bin/python -m pytest
+.venv/bin/python scripts/validate_external_evidence.py
 ```
 
-The configured suite is offline and deterministic. Docker-specific tests skip
-when Docker is unavailable.
+The configured tests require no API key or model calls; Docker-specific tests
+skip when unavailable. Normal push/PR CI also validates the committed external
+evidence pack without `jobs/`, Harbor, Docker, or secrets.
+Follow the [contributor guide](AGENTS.md): inspect first, preserve architectural
+boundaries, add focused tests, and run the full suite plus `git diff --check`.
+Keep this English README canonical and update the Chinese mirror alongside it;
+deep technical documents remain linked rather than duplicated.
 
-For an interactive demo, start in a disposable workspace, submit a small task,
-and inspect the streamed context/model/tool events, final response, and compact
-evaluation. Then try `/status`, `/session`, `/runs`, `/eval`, `/help`, and `/exit`.
-Run `pureharness sessions`, followed by `pureharness --continue` from that same
-workspace; it should restore the session and wait for input. Repeat with
-`--plain` to check the fallback. Ordinary task turns use the configured provider
-and may incur API costs; the M23 tests cover these flows with scripted models,
-including actual prompt-toolkit input via pipes, without paid API calls.
+## License
 
-## Security and limitations
-
-The default local execution backend launches host subprocesses and is not a
-sandbox. The Docker backend adds useful isolation controls but is not a
-hardened hostile multi-tenant boundary. Do not expose untrusted workspaces or
-secrets on the assumption that ToolPolicy alone provides containment. See the
-[security model](docs/security.md) for the exact boundary and current
-limitations.
-
-PureHarness intentionally omits exact call-stack continuation, automatic retry
-of interrupted tools, concurrent writers for one session, workspace
-relocation, session branching, a full-screen TUI, web services, multi-agent
-orchestration, and a plugin framework.
-
-The machine interface is a local schema-version-1 JSON/JSONL surface, not an
-OpenTelemetry exporter, remote logging service, RPC protocol, or interactive
-machine-control API. See the [observability guide](docs/observability.md).
+No LICENSE file is currently committed. A repository license has not yet been
+specified.
