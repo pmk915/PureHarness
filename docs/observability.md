@@ -327,10 +327,18 @@ payload fields:
 | `context_window_tokens` | Explicit configured total context capacity |
 | `reserved_output_tokens` | Capacity held back for model output |
 | `usable_input_tokens` | Window minus the output reserve |
-| `estimated_request_tokens` | Final history + TaskState + exposed-schema estimate |
+| `estimated_request_tokens` | Final compiled history + applicable non-history estimates |
 | `context_pressure_detected` | Whether the normal candidate exceeded usable input |
-| `available_history_tokens` | Usable input minus TaskState and exposed schemas |
+| `available_history_tokens` | Usable input minus the applicable non-history estimates |
 | `bounded_history_applied` | Whether history was recompiled under that bound |
+
+Non-history estimates include active Skills, enabled TaskState, pending
+completion-recheck and stagnation-advisory guidance, and selected/exposed tool
+schemas. Absent or disabled components contribute zero. The configured history
+budget
+(including CLI `--history-token-budget`) bounds compiled history, not the total
+model request. With explicit context limits, the tighter configured history
+budget or `available_history_tokens` bound applies to history.
 
 These fields describe the final context accepted for the model request. Token
 values are deterministic provider-neutral estimates, not provider billing or

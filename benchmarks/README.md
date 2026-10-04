@@ -104,5 +104,8 @@ pureharness benchmark \
 The default tasks root is relative to the current working directory, so run
 this command from the repository root or pass `--tasks-root`. The harness is a
 small controlled study: five curated tasks, approximate provider-neutral token
-estimates, no provider usage accounting, no retries, no statistical analysis,
-and no claim that success generalizes beyond these fixtures.
+estimates, no provider usage accounting, no statistical analysis, and no claim
+that success generalizes beyond these fixtures. The benchmark harness does not
+automatically rerun failed cases; configured repetitions are separate trials.
+Within each case, the Agent's bounded model-request retries and context recovery
+still apply.

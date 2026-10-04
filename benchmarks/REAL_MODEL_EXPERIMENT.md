@@ -46,8 +46,10 @@ all five tasks and all four configs. Total API-backed Agent runs are:
 selected tasks × selected configs × repetitions
 ```
 
-This can incur material API cost. The runner is serial and does not retry or
-parallelize requests.
+This can incur material API cost. The runner executes cases serially and does
+not automatically rerun failed cases; configured repetitions are separate
+trials. Within each case, the Agent's bounded model-request retries and context
+recovery still apply.
 
 ## Evidence and metrics
 

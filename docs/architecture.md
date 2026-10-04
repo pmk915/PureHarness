@@ -655,9 +655,10 @@ projection statistics: projected/compacted result counts and raw/projected
 character counts. M9 additionally reports whether trajectory compaction ran,
 source-unit/action counts, original and compacted trajectory estimates, recent
 raw unit/token estimates, and the compactor strategy. These are approximate
-**historical trajectory** tokens only. Active Skills, TaskState, and tool
-definitions are measured separately; provider wrappers and provider-specific
-system instructions remain outside these estimates.
+**historical trajectory** tokens only. Active Skills, TaskState, completion
+recheck, stagnation advisory, and tool definitions are measured separately;
+provider wrappers and provider-specific system instructions remain outside
+these estimates.
 
 M10 measures selected Tool schemas separately. It serializes each complete
 model-facing function definition (`type`, `name`, `description`, and
@@ -669,24 +670,30 @@ schema estimate, and estimated savings. None of these fields is an exact
 provider input-token count.
 
 `CompiledContext.items` remains the trajectory view and does not mix in Skills,
-TaskState, or completion guidance. Immediately before a model call the Agent
-prepends each active Skill as a deterministic `Message(role="system")`, followed
-by the derived TaskState system message when enabled and then any pending
-completion-recheck system message. All are estimated separately through the
-same `TokenEstimator`; Skill estimates are reported as
+TaskState, completion guidance, or stagnation advisory. Immediately before a
+model call the Agent prepends each active Skill as a deterministic
+`Message(role="system")`, followed by the derived TaskState system message when
+enabled and then any pending
+completion-recheck system message and any pending stagnation-advisory system
+message. All are estimated separately through the same `TokenEstimator`;
+Skill estimates are reported as
 `estimated_skill_tokens`, while TaskState uses
 `estimated_task_state_tokens` and completion guidance uses
-`estimated_completion_recheck_tokens`; `estimated_history_tokens` and an
-optional history budget retain their trajectory-only meanings. The M12-introduced
-TaskState-disabled mode omits only that state message and records zero for its
-estimate without changing active Skills, Session, trajectory compilation,
+`estimated_completion_recheck_tokens`. Stagnation advisory has a separate runtime
+estimate and does not add a persisted RunRecord field. `estimated_history_tokens`
+and an optional history budget (including CLI `--history-token-budget`) retain
+their trajectory-only meanings; that budget does not bound the total model
+request. The M12-introduced TaskState-disabled mode omits only that state
+message and records zero for its estimate without changing active Skills,
+Session, trajectory compilation,
 TaskState derivation, or selector input.
 
 Tool selection does not belong to `CompiledContext`. Model request preparation
 keeps independently measurable pinned Skill, derived TaskState, optional
-completion-recheck, compiled trajectory, and selected complete Tool-schema
-components. Their sum is the known request estimate, not an exact provider
-input-token count, because provider wrappers, instructions, and tokenization
+completion-recheck, optional stagnation advisory, compiled trajectory, and
+selected complete Tool-schema components. Their sum is the known request
+estimate, not an exact provider input-token count, because provider wrappers,
+instructions, and tokenization
 remain outside these estimates.
 
 M18.4A adds optional proactive request bounds through the immutable
@@ -702,9 +709,12 @@ calculations:
 
 ```text
 usable_input_tokens = context_window_tokens - reserved_output_tokens
-known_request_tokens = history + Skills + TaskState + completion recheck + exposed tool schemas
-available_history_tokens = usable_input_tokens - Skills - TaskState - completion recheck - exposed tool schemas
+non_history_tokens = Skills + TaskState + completion recheck + stagnation advisory + exposed tool schemas
+known_request_tokens = compiled history + non_history_tokens
+available_history_tokens = usable_input_tokens - non_history_tokens
 ```
+
+All components are estimates; absent or disabled components contribute zero.
 
 If the normally compiled candidate fits, it is used unchanged. If its known
 request estimate exceeds usable input, the Agent asks the same configured
@@ -737,9 +747,9 @@ recovery_history_budget = floor(previous_estimated_history_tokens / 2)
 
 The Agent calls the same configured `ContextBuilder.compile_bounded()` against
 the raw step Session snapshot. The result must have strictly fewer estimated
-history tokens. Active Skills, TaskState, pending completion guidance, and
-exposed tools remain unchanged, and the smaller context is retried in the same
-logical step. This works whether or not explicit
+history tokens. Active Skills, TaskState, pending completion/advisory guidance,
+and exposed tools remain unchanged, and the smaller context is retried in the
+same logical step. This works whether or not explicit
 `ContextLimits` were configured because it derives the emergency budget from
 the history actually attempted rather than guessing a provider capacity.
 
