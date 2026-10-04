@@ -76,6 +76,23 @@ network access.
 
 ## Interactive CLI demo
 
+Try the reproducible **offline scripted demo** from the repository root:
+
+```bash
+.venv/bin/python examples/cli_demo.py
+.venv/bin/python examples/cli_demo.py --verbose
+```
+
+Run these separately. At the prompt, enter
+`Fix add in calculator.py and verify it with check_add.py.`, then `/eval` and
+`/exit`. Only model responses are scripted: the existing CLI and tools perform
+real reads, a patch, and local verification, and write RunRecords in a fresh
+temporary directory. No API key or network is needed after installation.
+The [demo guide](docs/cli_demo.md) covers plain/JSONL modes, exact artifact
+locations, and terminal recording. [Visual assets](docs/assets/README.md) await
+real capture; no screenshot or GIF is currently included. This demonstrates
+execution, not LLM reasoning or benchmark performance.
+
 With the CLI extra and a real terminal, the default compact Rich display shows
 the workspace/model/session header, relevant file and command activity,
 verification outcomes, failures, and a separated assistant response.
@@ -121,8 +138,7 @@ Resume restores raw history and waits for a new turn, never repeating historical
 model calls or tools. `--continue` requires a matching saved workspace.
 `--record-dir PATH` exports an additional RunRecord per interactive turn.
 
-This section is the home for a future visual walkthrough; no screenshot or
-recorded demo is currently included. A separate
+For a separate provider-backed example, the
 [coding demo](examples/coding_agent_demo.py) uses a temporary workspace and
 real provider calls; it is not an offline test.
 

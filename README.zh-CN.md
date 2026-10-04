@@ -68,6 +68,21 @@ cd /path/to/workspace
 
 ## 交互式 CLI 演示
 
+从仓库根目录体验可复现的**离线脚本演示**：
+
+```bash
+.venv/bin/python examples/cli_demo.py
+.venv/bin/python examples/cli_demo.py --verbose
+```
+
+请分别运行。在提示符处输入
+`Fix add in calculator.py and verify it with check_add.py.`，然后输入 `/eval` 和
+`/exit`。只有模型响应采用脚本：现有 CLI 和工具真实执行读取、补丁与本地验证，
+并将 RunRecord 写入新建的临时目录。安装完成后不需要 API key 或网络。
+[演示指南](docs/cli_demo.md) 包含 plain/JSONL 模式、精确产物位置和终端录制流程。
+[可视化素材](docs/assets/README.md) 等待真实采集，目前没有截图或 GIF。
+这展示的是执行过程，不是 LLM 推理能力或基准性能。
+
 安装 CLI extra 并使用真实终端时，默认紧凑 Rich 界面会展示工作区、模型和会话信息，
 相关文件与命令活动、验证结果、失败，以及单独呈现的助手回答。
 以下命令假定已安装的可执行文件位于 PATH 中：
@@ -111,8 +126,7 @@ pureharness --workspace /path/to/workspace --continue
 `--continue` 要求存在与工作区匹配的已保存会话。
 `--record-dir PATH` 可为每轮交互额外导出一份 RunRecord。
 
-本节预留给未来的可视化操作演示，目前不包含截图或录制演示。
-另有一个 [编码演示](examples/coding_agent_demo.py)，使用临时工作区并调用真实模型，
+另有一个调用模型提供方的 [编码演示](examples/coding_agent_demo.py)，使用临时工作区并调用真实模型，
 不是离线测试。
 
 ## 架构
