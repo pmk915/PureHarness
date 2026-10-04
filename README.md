@@ -380,5 +380,4 @@ deep technical documents remain linked rather than duplicated.
 
 ## License
 
-No LICENSE file is currently committed. A repository license has not yet been
-specified.
+PureHarness is licensed under the [MIT License](LICENSE).

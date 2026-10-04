@@ -336,4 +336,4 @@ Docker 或秘密。
 
 ## 许可证
 
-当前没有提交 LICENSE 文件，仓库许可证尚未明确。
+PureHarness 采用 [MIT 许可证](LICENSE)。

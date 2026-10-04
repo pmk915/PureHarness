@@ -7,6 +7,7 @@ name = "pureharness"
 version = "0.1.0"
 description = "A minimal, inspectable agent harness built from first principles."
 readme = "README.md"
+license = { file = "LICENSE" }
 requires-python = ">=3.11"
 dependencies = [
     "openai",
