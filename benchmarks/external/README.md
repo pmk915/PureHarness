@@ -3,8 +3,9 @@
 Third-party Harbor / Terminal-Bench results complement the small controlled
 PureHarness benchmark. This directory contains reproducible, bounded summaries,
 not raw benchmark data, task fixtures, or copies of Harbor jobs. M24.4A defines
-the format and offline extractor; M24.4B backfills the four verified pilot
-receipts indexed below. No benchmark execution is part of the backfill.
+the format and offline extractor; M24.4B backfilled the initial four verified
+pilot receipts. The final M24 closeout adds a second independent advisory-enabled
+MIPS pilot. No benchmark execution is part of the backfill.
 
 ## Offline extraction
 
@@ -106,13 +107,15 @@ Record unhealthy gates faithfully; consumers must review them before interpretin
 agent results. A healthy Oracle gate is a prerequisite for benchmark validity,
 not evidence that the agent succeeded.
 
-## Verified receipt index (M24.4B)
+## Verified receipt index
 
 Each receipt was generated with an explicit task-matched `--oracle-job`,
 independently re-extracted to a temporary directory, and compared byte-for-byte.
-SHA-256 inventories of all files in the seven source jobs matched before and
-after extraction. Job/trial IDs, dataset, task ref/checksum, model and full
-recorded PureHarness revision were checked against the source artifacts.
+During M24.4B, SHA-256 inventories of all files in the seven source jobs matched
+before and after extraction. The closeout repeated this integrity check for
+the new agent job and its explicitly supplied Oracle. Job/trial IDs, dataset,
+task ref/checksum, model and full recorded PureHarness revision were checked
+against the source artifacts.
 Short revisions in filenames and this table are presentation only.
 
 Oracle health below means recorded reward 1 and exceptions 0 for the separate
@@ -125,13 +128,23 @@ selected Oracle trial; it does not establish agent success.
 | regex-log | post-M24.2 / `83abbf4` | 1 / 0 | 1 | completed | 10 | [JSON](receipts/terminal-bench-2.1_regex-log_83abbf4.json) |
 | make-mips-interpreter | baseline / `83abbf4` | 1 / 0 | 0 | max_steps_exceeded | 300 | [JSON](receipts/terminal-bench-2.1_make-mips-interpreter_baseline_83abbf4.json) |
 | make-mips-interpreter | bounded advisory / `afca7d2` | 1 / 0 | 0 | max_steps_exceeded | 300 | [JSON](receipts/terminal-bench-2.1_make-mips-interpreter_advisory_afca7d2.json) |
+| make-mips-interpreter | bounded advisory, repeat2 / `afca7d2` | 1 / 0 | 0 | max_steps_exceeded | 300 | [JSON](receipts/terminal-bench-2.1_make-mips-interpreter_advisory-repeat2_afca7d2.json) |
 <!-- external-evidence-index:end -->
 
-The dataset is `terminal-bench/terminal-bench-2-1`; all four recorded model
+The dataset is `terminal-bench/terminal-bench-2-1`; all indexed recorded model
 identities are `deepseek-v4-flash` (provider `deepseek`), with Harbor `0.23.0`.
 For re-extraction, use `jobs/<external.job_name>` and explicitly supply
 `--oracle-job jobs/<oracle.job>` from each receipt, writing to a new file.
-The summaries match the [progress-gap audit](../../docs/progress_gap_audit.md).
+The initial four summaries match the
+[progress-gap audit](../../docs/progress_gap_audit.md).
+The closeout trial `make-mips-interpreter__CWgdNCX` comes from agent job
+`2026-10-04__20-21-36`, paired with Oracle job `2026-10-03__04-13-48`.
+It is a second independent advisory-enabled pilot, not a causal comparison:
+reward 0, `max_steps_exceeded`, zero structured mutations/verification attempts,
+one advisory detected at step 215 and delivered at 216, and a longest active
+progress gap of 300. Its recorded maximum/final history estimates are
+8000/7969 tokens. Runtime completion and structured anchors remain distinct
+from external task success.
 
 ## Offline pack validation (M24.4C)
 
@@ -177,8 +190,8 @@ or a fresh source-hash comparison. Validation never reruns Harbor or verifiers.
 
 ## Pilot limits
 
-These are n=1 pilots, not statistical evidence of causal advisory improvement
-or a leaderboard. Task revisions/checksums, model, runtime revision, missing
+These are individual pilot trajectories, not statistical evidence of causal
+advisory improvement or a leaderboard. Task revisions/checksums, model, runtime revision, missing
 evidence and Oracle health matter when comparing receipts. Hashes establish
 artifact identity, not authenticity or benchmark validity. Full history is
 read transiently for offline evaluation; receipts contain only bounded summaries.

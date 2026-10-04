@@ -68,7 +68,7 @@ def another(data):
 
 def test_real_committed_pack_passes_and_round_trips(capsys):
     assert validator.main([]) == 0
-    assert capsys.readouterr().out == "External evidence pack valid: 4 receipt(s)\n"
+    assert capsys.readouterr().out == "External evidence pack valid: 5 receipt(s)\n"
     for path in sorted((PACK / "receipts").glob("*.json")):
         receipt = ExternalEvidenceReceipt.from_dict(json.loads(path.read_text()))
         assert receipt.to_json() == path.read_text()
