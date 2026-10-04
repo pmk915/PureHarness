@@ -141,6 +141,11 @@ The summaries match the [progress-gap audit](../../docs/progress_gap_audit.md).
 .venv/bin/python scripts/validate_external_evidence.py /path/to/external
 ```
 
+Normal push/PR CI runs the same validator in the existing Python 3.11/3.12
+test job before pytest. It checks committed receipt/index consistency and
+fails on invalid evidence; it does not rerun Harbor, authenticate external
+sources, or judge task correctness. The first command above is the local check.
+
 The default target is this checkout's `benchmarks/external/`, independent of
 the current working directory. Validation reads the README and all recursive
 lowercase `*.json` receipt candidates in sorted order, including proposed new
