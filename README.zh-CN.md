@@ -257,6 +257,8 @@ JSONL 模式的 stdout 只包含 JSON 事件，诊断信息写入 stderr。
 CLI 的协议完成指标不是经过验证的任务成功。恢复建议不执行修改。
 没有通用 AgentScore，也没有外部综合排名。
 
+项目介绍、工程故事与基于证据的问答见 [面试指南（英文）](docs/interview_guide.md)。
+
 ## Terminal-Bench 外部证据
 
 失败也是证据的一部分。已提交证据包包含以下五次单独记录的试点，

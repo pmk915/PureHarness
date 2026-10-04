@@ -295,6 +295,9 @@ The CLI's protocol-completion metric is not verified task success. Recovery
 guidance does not execute changes. There is no universal AgentScore or aggregate
 external ranking.
 
+For project introductions, engineering stories, and evidence-grounded Q&A,
+see the [interview guide](docs/interview_guide.md).
+
 ## Terminal-Bench external evidence
 
 Failures are part of the evidence. The committed pack includes these five
