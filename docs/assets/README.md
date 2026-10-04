@@ -33,11 +33,31 @@ completion, not externally verified task success. Its trailing
 it does not mean the completed run was interrupted. Verbose is a partial
 observability view and must not be captioned as a completed trajectory.
 
-The landing pages display compact at 900 px wide (about 446 px tall) and verbose
-at 850 px wide (about 1086 px tall), both below native width. The tall verbose
+The landing pages cap compact at 800 px wide (about 397 px tall) and verbose
+at 760 px wide (about 971 px tall), both below native width. The tall verbose
 image is in a collapsed section so it does not dominate the README. Links open
 the originals; HTML display sizing does not rewrite image pixels. Two static
 PNGs are sufficient for current presentation; a GIF is not required.
+
+## README render review
+
+The English and Chinese landing pages share one top-down Mermaid diagram and
+the same image sizing. Compact presents effects, the collapsed verbose excerpt
+presents surrounding events, and architecture explains their execution source;
+the evaluation section then explains post-run analysis.
+
+Local Markdown inspection can check links, matching diagrams, code fences,
+tables, and balanced `details`/`summary` markup, but is not a GitHub render test.
+Image widths stay below a typical desktop content area, with no fixed height;
+GitHub's image scaling is expected to constrain them on narrower screens.
+Links retain full-resolution access, important for terminal text on mobile.
+Tables remain two or five columns; existing long command blocks may require
+horizontal scrolling. No custom responsive CSS or rendering dependency is added.
+
+Manual GitHub/browser acceptance remains pending: check both languages at
+desktop and narrow mobile widths, image scaling/readability, verbose expansion,
+Mermaid labels/loop routing, table/code scrolling, and navigation anchors.
+Local Markdown rendering does not execute Mermaid or reproduce GitHub styling.
 
 ## Future capture and publication
 

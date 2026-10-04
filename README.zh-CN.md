@@ -17,7 +17,7 @@ LangChain/LangGraph 替代品，也不宣称具有最先进的基准性能。
 仓库演示使用**离线脚本模型**，走真实的 PureHarness 执行、工具、验证、渲染和持久化路径。
 这是 UI／运行时演示，不是自主 LLM 任务求解性能的证据。
 
-<p><a href="docs/assets/cli-compact.png"><img src="docs/assets/cli-compact.png" alt="真实离线脚本 CLI 演示：任务输入、文件读取、补丁、验证通过、运行完成和 RunRecord 路径" width="900"></a></p>
+<p><a href="docs/assets/cli-compact.png"><img src="docs/assets/cli-compact.png" alt="真实离线脚本 CLI 演示：任务输入、文件读取、补丁、验证通过、运行完成和 RunRecord 路径" width="800"></a></p>
 
 紧凑 CLI：读取 → 修改 → 验证 → 完成。
 [复现演示](docs/cli_demo.md)。
@@ -120,7 +120,7 @@ schema token、工具策略决策及工具执行。下面的真实截图展示�
 <details>
 <summary>Verbose 运行时可观测性——真实截图</summary>
 
-<p><a href="docs/assets/cli-verbose.png"><img src="docs/assets/cli-verbose.png" alt="真实 verbose 离线脚本 CLI 演示：上下文计量、模型请求、暴露工具元数据、策略决策及文件读取循环" width="850"></a></p>
+<p><a href="docs/assets/cli-verbose.png"><img src="docs/assets/cli-verbose.png" alt="真实 verbose 离线脚本 CLI 演示：上下文计量、模型请求、暴露工具元数据、策略决策及文件读取循环" width="760"></a></p>
 
 </details>
 
@@ -155,25 +155,51 @@ pureharness --workspace /path/to/workspace --continue
 
 ## 架构
 
+Compact 展示工具效果，verbose 展示围绕这些效果发生的事件。
+两者都来自 `Agent` 持有的同步执行循环：
+
 ```mermaid
 flowchart TD
-    U["User task"] --> A["Agent runtime"]
-    S["Session: raw history"] <--> A
-    A --> C["Context + TaskState"]
-    C --> M["Model invocation"]
-    M --> A
-    A --> T["Tool selection / policy / approval"]
-    T --> X["ToolExecutor + execution backend"]
-    X --> A
-    A --> R["Completion + bounded recovery"]
-    A --> E["RunRecord + live JSONL / progress evidence"]
-    E --> V["Offline evaluation + external receipts"]
-    O["External verifier outcome"] --> V
+    U["User request"] --> S["Session: raw history"]
+    S --> C
+    subgraph A["Agent: logical steps"]
+        C["Context + TaskState"] --> T["ToolSelector"]
+        T --> M["Model request"]
+        M -->|tool calls| X["ToolExecutor"]
+        X --> R["Results + evidence"]
+        M -->|final candidate| F["Completion policy"]
+        F -->|recheck| C
+    end
+    R -->|raw history / next step| S
+    F -->|accept| D["Final RunRecord"]
+    A -.-> E["Live events"]
+    D --> V["Offline evaluation"]
+    E --> V
+    O["External outcome"] --> V
 ```
 
-运行时协调窄接口。编码工具、模型提供方、终端渲染器、持久化、基准和 Harbor
-都是内核之外的适配器。TaskState 和上下文是 Session 的派生视图，不替代原始历史。
-评估层消费证据，不控制执行。
+图中展示正常路径；虚线表示实时观测。结果在下一步之前更新原始 Session 与进展／编码证据。
+工具错误作为结果返回。
+终止性错误、耗尽限制和中断也会形成 RunRecord，这些分支未在主图展开。
+
+设计边界：
+
+- **状态：** 一个 Session 可以跨多次运行，每次运行各有自己的 RunRecord。
+  接受的消息与原始工具调用／结果对扩展 Session；TaskState 和编译后的上下文
+  是派生视图，绝不替代原始历史。
+- **工具：** ToolSelector 在模型请求**之前**选择可见 schema。
+  ToolExecutor 在调用工具前检查可选的工作区前置条件、ToolPolicy 和条件性审批。
+  命令工具委托给执行后端，文件系统工具不一定经过后端。
+  可见性、授权、审批与隔离相互独立。
+- **请求：** 有界模型重试和更小上下文恢复仍属于同一次逻辑调用；
+  完成复查请求新的逻辑步骤。RuntimeController 分类失败，Agent 推进循环。
+- **完成：** 显式 `purpose="verification"` 命令提供证据，不是自动测试。
+  配置的编码 CompletionPolicy 可以请求一次复查；接受最终回答不等于外部验证的任务成功。
+- **证据：** 发生时刻的事件可以渲染为 JSONL；RunRecord 每次运行最终形成，
+  不是事件转储。运行后评估消费这些独立输入及外部结果，不控制执行。
+  停滞事实不等于自动任务失败。
+
+编码工具、模型提供方、终端渲染器、持久化、基准和 Harbor 仍是内核之外的适配器。
 已实现与目标边界见 [架构文档](docs/architecture.md)，组件见 [源码](src/pureharness/)。
 
 ## 可靠性机制

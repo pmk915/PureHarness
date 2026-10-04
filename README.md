@@ -20,7 +20,7 @@ PureHarness execution, tools, verification, rendering, and persistence.
 It is a UI/runtime demonstration, not evidence of autonomous LLM task-solving
 performance.
 
-<p><a href="docs/assets/cli-compact.png"><img src="docs/assets/cli-compact.png" alt="Real offline scripted CLI demo: task input, file reads, patch, verification passed, completed run, and RunRecord path" width="900"></a></p>
+<p><a href="docs/assets/cli-compact.png"><img src="docs/assets/cli-compact.png" alt="Real offline scripted CLI demo: task input, file reads, patch, verification passed, completed run, and RunRecord path" width="800"></a></p>
 
 Compact CLI: read → patch → verify → completed.
 [Reproduce the demo](docs/cli_demo.md).
@@ -136,7 +136,7 @@ flow. It uses the same offline scripted model, not a live LLM provider.
 <details>
 <summary>Verbose runtime observability — real screenshot</summary>
 
-<p><a href="docs/assets/cli-verbose.png"><img src="docs/assets/cli-verbose.png" alt="Real verbose offline scripted CLI demo showing context accounting, model requests, exposed-tool metadata, policy decisions, and file-read cycles" width="850"></a></p>
+<p><a href="docs/assets/cli-verbose.png"><img src="docs/assets/cli-verbose.png" alt="Real verbose offline scripted CLI demo showing context accounting, model requests, exposed-tool metadata, policy decisions, and file-read cycles" width="760"></a></p>
 
 </details>
 
@@ -173,26 +173,57 @@ real provider calls; it is not an offline test.
 
 ## Architecture
 
+Compact shows tool effects; verbose shows their surrounding events. `Agent`
+owns the synchronous loop that produces both:
+
 ```mermaid
 flowchart TD
-    U["User task"] --> A["Agent runtime"]
-    S["Session: raw history"] <--> A
-    A --> C["Context + TaskState"]
-    C --> M["Model invocation"]
-    M --> A
-    A --> T["Tool selection / policy / approval"]
-    T --> X["ToolExecutor + execution backend"]
-    X --> A
-    A --> R["Completion + bounded recovery"]
-    A --> E["RunRecord + live JSONL / progress evidence"]
-    E --> V["Offline evaluation + external receipts"]
-    O["External verifier outcome"] --> V
+    U["User request"] --> S["Session: raw history"]
+    S --> C
+    subgraph A["Agent: logical steps"]
+        C["Context + TaskState"] --> T["ToolSelector"]
+        T --> M["Model request"]
+        M -->|tool calls| X["ToolExecutor"]
+        X --> R["Results + evidence"]
+        M -->|final candidate| F["Completion policy"]
+        F -->|recheck| C
+    end
+    R -->|raw history / next step| S
+    F -->|accept| D["Final RunRecord"]
+    A -.-> E["Live events"]
+    D --> V["Offline evaluation"]
+    E --> V
+    O["External outcome"] --> V
 ```
 
-The runtime coordinates narrow interfaces. Coding tools, model providers,
-terminal renderers, persistence, benchmarks, and Harbor are adapters outside
-the kernel. TaskState and context are derived views of Session, not replacement
-history. Evaluation consumes evidence without controlling execution.
+Normal path; the dashed arrow denotes live observations. Results update raw
+Session and progress/coding evidence before the next step. Tool errors return
+as results. Terminal errors, exhausted limits, and interruption also finalize
+a RunRecord; their branches are omitted here.
+
+Design boundaries:
+
+- **State:** a Session can span runs; each run has its own RunRecord. Accepted
+  messages and raw tool pairs extend Session; TaskState and compiled context
+  are derived views, never replacement history.
+- **Tools:** ToolSelector chooses visible schemas **before** the model request.
+  ToolExecutor checks optional workspace preconditions, ToolPolicy, and
+  conditional approval before invoking tools. Command tools delegate to an
+  execution backend; filesystem tools need not. Visibility, authorization,
+  approval, and isolation are separate.
+- **Requests:** bounded model retries and smaller-context recovery stay within
+  one logical invocation. A completion recheck requests a new logical step.
+  RuntimeController classifies failures; Agent advances the loop.
+- **Completion:** explicit `purpose="verification"` commands supply evidence,
+  not automatic testing. The configured coding CompletionPolicy may request
+  one recheck; accepted completion is not externally verified task success.
+- **Evidence:** occurrence-time events can be rendered as JSONL; a RunRecord is
+  finalized per run, not an event dump. Post-run evaluation consumes these
+  separate inputs and external outcomes without controlling execution.
+  Stagnation facts are not automatic task failure.
+
+Coding tools, model providers, terminal renderers, persistence, benchmarks,
+and Harbor remain adapters outside the kernel.
 See the [architecture](docs/architecture.md) for implemented versus target
 boundaries and the [source](src/pureharness/) for the components.
 

@@ -1,8 +1,8 @@
 # PureHarness architecture
 
 This document separates the implementation that exists today from the intended
-architecture. Sections marked **Current** describe repository behavior through
-the M23 interactive-CLI milestone. Sections marked **Target**
+architecture. Sections marked **Current** describe implemented repository
+behavior. Sections marked **Target**
 describe direction, not implemented APIs.
 
 ## 1. Project positioning
@@ -90,8 +90,8 @@ session, and iterates up to `max_steps`. Each step builds model context from a
 session snapshot and calls the model. It independently derives TaskState from
 raw history and compiles the model-facing trajectory, then places optional
 pinned Skill system messages and the derived system state view before the
-trajectory. An assistant `Message` completes the run; one or more `ToolCall`
-objects are executed before the next model step.
+trajectory. An accepted assistant `Message` completes the run; one or more
+`ToolCall` objects are executed before the next model step.
 
 Tool exceptions are converted into error `ToolResult` observations. A context
 compilation error, an unrecovered model request error, or exhaustion of the step
